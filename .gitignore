@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# User data (cartridges contain personal documents)
+cartridges/*.pkl
+cartridges/*.npy
+!cartridges/.gitkeep
+
+# Sample data (too large for repo)
+sample_data/*.pkl
+!sample_data/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Virtual environments
+venv/
+.env/
