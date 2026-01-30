@@ -1,7 +1,7 @@
 VECTOR+ LATTICE ENGINE - PROPRIETARY LICENSE
 =============================================
 
-Copyright (c) 2026 Waving Cat Learning Systems / Project You
+Copyright (c) 2026 Waving Cat Learning Systems / Project You / Andy Grossberg
 All Rights Reserved.
 
 The compiled binary files in this directory (lattice_cuda_v7.dll and any
@@ -22,7 +22,9 @@ PROHIBITED WITHOUT WRITTEN LICENSE:
 
 COMMERCIAL LICENSING:
 For commercial use, please contact:
-  Email: licensing@project-you.app
+  Email: andy@project-you.app
+  -or-
+  andy.grossberg@gmail.com
   Web: https://project-you.app/licensing
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. IN NO EVENT
