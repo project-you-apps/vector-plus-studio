@@ -1,21 +1,36 @@
-# Vector+ Studio v0.8
+# Vector+ Studio v0.81
 
-**Semantic Search with Neural Lattice Visualization**
+**Physics-Enhanced Semantic Search**
 
-Vector+ Studio is a semantic search application powered by a 16-million neuron physics simulation. Search uses fast embedding cosine similarity while the neural lattice provides real-time visualization of query and result activation patterns.
-
+Vector+ Studio is a semantic search application powered by a 16-million neuron Hopfield network. Unlike traditional vector databases, queries go through **real neural physics** - the lattice actively shapes search results through associative memory, not just cosine similarity.
 
 ![Vector+ Studio Screenshot](docs/screenshot.png)
 
-## What The Program Is Now
+## What's New in v0.81
 
-**Vector+ Studio Version version 0.8** is a test demo proving the the neuromorphic physics work and can load and compare embeddings with fidelity using cosine similarity the same as any vector database on the market. The filesizes of the pkl sample data files are similar to typical flat index files but smaller than HNSW.
+**Vector+ Studio v0.81** introduces **physics-enhanced search** - the neural lattice now actively participates in ranking, not just visualization.
+
+### Key Breakthrough: Holographic Storage
+
+The trained "brain" file is **fixed at 128MB regardless of dataset size**:
+
+| Dataset | Embeddings File | Brain File |
+|---------|-----------------|------------|
+| 10k articles | ~30 MB | **128 MB** |
+| 100k articles | ~300 MB | **128 MB** |
+| 500k articles | ~1.5 GB | **128 MB** |
+
+This is how biological memory works - patterns are stored holographically in synaptic weights, not as separate records. The same 128MB weight matrix can encode 10k or 500k patterns.
 
 ## Features
 
-- **Semantic Search**: Find documents by meaning, not just keywords
+- **Physics-Enhanced Search**: Queries go through encode → settle → decode pipeline; Hebbian weights shape results
+- **Holographic Brain Storage**: 128MB brain file stores unlimited patterns (fixed size!)
+- **Background Training**: Train on large datasets without blocking the UI
+- **Brain Persistence**: Save/load trained weights - instant remount after first training
 - **Neural Lattice Visualization**: See query and result patterns on a 4096x4096 neuron lattice
 - **Noise Tolerance**: 86%+ correlation even with 30% input corruption
+- **Full-Text Keyword Boost**: Phrase matching in document bodies, not just titles
 - **Document Ingestion**: Import PDFs, Word docs, and text files
 - **Memory Cartridges**: Save and load document collections
 
@@ -38,7 +53,7 @@ pip install -r requirements.txt
 ### Run
 
 ```bash
-streamlit run vector_plus_studio_v8.py --server.fileWatcherType none
+streamlit run vector_plus_studio_v81.py --server.fileWatcherType none
 ```
 
 Then open http://localhost:8501 in your browser.
@@ -52,15 +67,16 @@ The first search will take ~30 seconds while the embedding model (Nomic Embed v1
 ## How It Works
 
 1. **Thermometer Encoding**: Each embedding dimension maps to a 64x64 region of the lattice
-2. **Physics Simulation**: Neurons interact via facilitation, inhibition, and Hebbian learning
-3. **Signature Generation**: Each pattern creates a unique 4096-float "fingerprint"
-4. **Content-Addressable Recall**: Partial or noisy inputs recover the full pattern
+2. **Hebbian Training**: Patterns are learned into synaptic weights during cartridge mount
+3. **Physics-Enhanced Query**: Query embedding is encoded → settled (physics shapes it) → decoded back
+4. **Associative Search**: The "physics-cleaned" embedding finds semantic neighborhoods, not just exact matches
+5. **Keyword Boosting**: Full-text phrase matching re-ranks top candidates
 
 ## Project Structure
 
 ```
 vector-plus-studio/
-├── vector_plus_studio_v8.py     # Main Streamlit application
+├── vector_plus_studio_v81.py     # Main Streamlit application
 ├── multi_lattice_wrapper_v7.py  # Python wrapper for CUDA engine
 ├── thermometer_encoder_generic_64x64.py  # Encoding utilities
 ├── bin/
@@ -95,9 +111,10 @@ The Python wrapper and utilities are open source under MIT. The compiled CUDA ph
 
 ## Future Direction and Updates
 
-- The next version of this project will utilize its unique physics to perform hybrid searches. Data filesizes will also be smaller.
-- Planned upgrades include CUDA speed improvements currently underway.
+- **v0.81 (Current)**: Physics-enhanced search is now live! Queries go through real neural physics.
+- **Coming Soon**: GPU-accelerated embedding for <100ms total query time
+- **Planned**: Multi-brain support (load multiple trained domains), larger lattice sizes for higher capacity
 
 ---
 
-Built with physics, not just math.
+Built with physics, not just math. Patterns stored holographically, not as records.
