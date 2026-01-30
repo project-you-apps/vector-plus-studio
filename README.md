@@ -81,7 +81,6 @@ The Python wrapper and utilities are open source under MIT. The compiled CUDA ph
 ## Links
 
 - [Project You](https://project-you.app) - Parent project
-- [Documentation](docs/) - Technical details
 
 ---
 
