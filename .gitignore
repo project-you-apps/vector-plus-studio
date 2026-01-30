@@ -11,8 +11,7 @@ cartridges/*.pkl
 cartridges/*.npy
 !cartridges/.gitkeep
 
-# Sample data (too large for repo)
-sample_data/*.pkl
+# Sample data - allow small demo cartridges
 !sample_data/.gitkeep
 
 # IDE
