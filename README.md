@@ -1,15 +1,20 @@
-# Vector+ Studio v0.7
+# Vector+ Studio v0.8
 
-**True Content-Addressable Recall via Neural Lattice Physics**
+**Semantic Search with Neural Lattice Visualization**
 
-Vector+ Studio is a semantic search application powered by a 16-million neuron physics simulation. Unlike traditional vector databases that rely purely on embedding similarity, Vector+ uses a CUDA-accelerated lattice of spiking neurons to create noise-tolerant, content-addressable memory patterns.
+Vector+ Studio is a semantic search application powered by a 16-million neuron physics simulation. Search uses fast embedding cosine similarity while the neural lattice provides real-time visualization of query and result activation patterns.
+
 
 ![Vector+ Studio Screenshot](docs/screenshot.png)
+
+## What The Program Is Now
+
+**Vector+ Studio Version version 0.8** is a test demo proving the the neuromorphic physics work and can load and compare embeddings with fidelity using cosine similarity the same as any vector database on the market. The filesizes of the pkl sample data files are similar to typical flat index files but smaller than HNSW.
 
 ## Features
 
 - **Semantic Search**: Find documents by meaning, not just keywords
-- **Neural Lattice Physics**: 4096x4096 neuron simulation with Hebbian learning
+- **Neural Lattice Visualization**: See query and result patterns on a 4096x4096 neuron lattice
 - **Noise Tolerance**: 86%+ correlation even with 30% input corruption
 - **Document Ingestion**: Import PDFs, Word docs, and text files
 - **Memory Cartridges**: Save and load document collections
@@ -33,10 +38,16 @@ pip install -r requirements.txt
 ### Run
 
 ```bash
-streamlit run vector_plus_studio_v7.py
+streamlit run vector_plus_studio_v8.py --server.fileWatcherType none
 ```
 
 Then open http://localhost:8501 in your browser.
+
+**Note:** The `--server.fileWatcherType none` flag prevents unnecessary reloads during use.
+
+### First Search
+
+The first search will take ~30 seconds while the embedding model (Nomic Embed v1.5) downloads and loads. Subsequent searches are fast (~500ms).
 
 ## How It Works
 
@@ -49,7 +60,7 @@ Then open http://localhost:8501 in your browser.
 
 ```
 vector-plus-studio/
-├── vector_plus_studio_v7.py     # Main Streamlit application
+├── vector_plus_studio_v8.py     # Main Streamlit application
 ├── multi_lattice_wrapper_v7.py  # Python wrapper for CUDA engine
 ├── thermometer_encoder_generic_64x64.py  # Encoding utilities
 ├── bin/
@@ -81,6 +92,11 @@ The Python wrapper and utilities are open source under MIT. The compiled CUDA ph
 ## Links
 
 - [Project You](https://project-you.app) - Parent project
+
+## Future Direction and Updates
+
+- The next version of this project will utilize its unique physics to perform hybrid searches. Data filesizes will also be smaller.
+- Planned upgrades include CUDA speed improvements currently underway.
 
 ---
 
