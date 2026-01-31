@@ -358,6 +358,46 @@ class ThermometerEncoderNomic64x64:
         total = lattice.size
         return (active / total) * 100
 
+    def decode(self, lattice):
+        """
+        Decode lattice pattern back to normalized embedding [0, 1].
+
+        Reverses thermometer encoding by counting active bits in each region.
+        NOTE: Returns normalized values - original scale (min/max) is lost.
+
+        Args:
+            lattice: np.ndarray of shape (4096, 4096) or flattened
+
+        Returns:
+            np.ndarray: Shape (768,) with float values in [0, 1]
+        """
+        # Handle flattened input
+        if lattice.ndim == 1:
+            lattice = lattice.reshape(self.lattice_size, self.lattice_size)
+
+        # Binarize if needed (handle float patterns from settle)
+        binary_lattice = (lattice > 0.5).astype(np.float32)
+
+        embedding = np.zeros(self.n_dims, dtype=np.float32)
+
+        for dim_idx in range(self.n_dims):
+            start_row, start_col = self.region_positions[dim_idx]
+
+            # Extract region
+            region = binary_lattice[
+                start_row : start_row + self.region_size,
+                start_col : start_col + self.region_size,
+            ]
+
+            # Count active bits (0 to 4096)
+            active_bits = np.sum(region)
+
+            # Reverse thermometer: active_bits / 4096 → [0, 1]
+            normalized_value = active_bits / (self.region_size * self.region_size)
+            embedding[dim_idx] = normalized_value
+
+        return embedding
+
 
 # =================================================================
 # SIMPLE TEST

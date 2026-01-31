@@ -23,6 +23,8 @@ import os
 import sys
 import time
 import threading
+import hashlib
+import json
 
 try:
     import PyPDF2
@@ -86,6 +88,99 @@ def load_cartridge(path):
     return None, None
 
 
+def save_cartridge(path, embeddings, passages):
+    """Save cartridge to disk."""
+    cart = {
+        "version": "8.1",
+        "embeddings": embeddings,
+        "passages": passages,
+    }
+    with open(path, "wb") as f:
+        pickle.dump(cart, f)
+    return True
+
+
+def compute_cartridge_fingerprint(embeddings):
+    """
+    Compute a fingerprint for cartridge validation.
+    Uses count + hash of first/last embeddings for uniqueness.
+    """
+    count = len(embeddings)
+    # Hash first and last embeddings (or just first if only one)
+    first_bytes = embeddings[0].tobytes()
+    last_bytes = embeddings[-1].tobytes() if count > 1 else first_bytes
+    combined = first_bytes + last_bytes + str(count).encode()
+    fingerprint = hashlib.sha256(combined).hexdigest()[:16]
+    return {"count": count, "fingerprint": fingerprint}
+
+
+def save_brain_manifest(brain_path, embeddings):
+    """Save manifest alongside brain file for validation."""
+    manifest_path = brain_path.replace("_brain.npy", "_brain_manifest.json")
+    manifest = compute_cartridge_fingerprint(embeddings)
+    manifest["version"] = "8.1"
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f)
+    return manifest_path
+
+
+def validate_brain_manifest(brain_path, embeddings):
+    """
+    Check if brain manifest matches current cartridge.
+    Returns (valid: bool, message: str)
+    """
+    manifest_path = brain_path.replace("_brain.npy", "_brain_manifest.json")
+
+    if not os.path.exists(manifest_path):
+        # No manifest = legacy brain, allow but warn
+        return True, "Legacy brain (no manifest)"
+
+    try:
+        with open(manifest_path, "r") as f:
+            saved_manifest = json.load(f)
+
+        current = compute_cartridge_fingerprint(embeddings)
+
+        if saved_manifest["count"] != current["count"]:
+            return False, f"Brain/cartridge mismatch - cannot load (count: {saved_manifest['count']} vs {current['count']})"
+
+        if saved_manifest["fingerprint"] != current["fingerprint"]:
+            return False, "Brain/cartridge mismatch - cannot load (fingerprint changed)"
+
+        return True, "Manifest validated"
+
+    except Exception as e:
+        return False, f"Manifest error: {e}"
+
+
+def add_passage(text, embedder, encoder, ml, lock):
+    """Add a new passage: embed, train physics, append to dataset."""
+    # Embed the text
+    emb = embedder.encode(f"search_document: {text}")
+
+    # Train physics on new pattern
+    with lock:
+        pattern = encoder.encode(emb).astype(np.float32)
+        ml.imprint_pattern(pattern)
+        ml.settle(frames=TRAIN_SETTLE_FRAMES, learn=True)
+
+    return emb
+
+
+def update_passage(idx, new_text, embedder, encoder, ml, lock):
+    """Update an existing passage: re-embed and retrain."""
+    # Embed the new text
+    emb = embedder.encode(f"search_document: {new_text}")
+
+    # Train physics on updated pattern
+    with lock:
+        pattern = encoder.encode(emb).astype(np.float32)
+        ml.imprint_pattern(pattern)
+        ml.settle(frames=TRAIN_SETTLE_FRAMES, learn=True)
+
+    return emb
+
+
 # --- CSS ---
 st.markdown(
     """
@@ -130,6 +225,14 @@ if "physics_trained" not in st.session_state:
     st.session_state.physics_trained = False
 if "encoder" not in st.session_state:
     st.session_state.encoder = None
+if "cartridge_modified" not in st.session_state:
+    st.session_state.cartridge_modified = False
+if "cartridge_path" not in st.session_state:
+    st.session_state.cartridge_path = None
+if "edit_idx" not in st.session_state:
+    st.session_state.edit_idx = None
+if "exit_requested" not in st.session_state:
+    st.session_state.exit_requested = False
 
 # --- BOOT ENGINE ---
 if "engine" not in st.session_state:
@@ -210,6 +313,10 @@ def background_train_physics(embeddings, encoder, ml, lock, start_idx, brain_pat
                 actual_path = brain_path + ".npy"
                 size_mb = os.path.getsize(actual_path) / (1024 * 1024)
                 print(f"[BG Training] Brain saved: {actual_path} ({size_mb:.1f} MB)")
+
+                # Save manifest for validation
+                manifest_path = save_brain_manifest(actual_path, embeddings)
+                print(f"[BG Training] Manifest saved: {manifest_path}")
 
     except Exception as e:
         print(f"[BG Training] ERROR: {e}")
@@ -298,10 +405,13 @@ with st.sidebar:
             path = os.path.join(DATA_DIR, selected)
             emb, txt = load_cartridge(path)
             if emb is not None:
-                st.session_state.dataset = {"emb": emb, "txt": txt}
+                st.session_state.dataset = {"emb": emb, "txt": list(txt)}  # Make mutable
                 st.session_state.query = ""
                 st.session_state.deleted_ids = set()
                 st.session_state.physics_trained = False
+                st.session_state.cartridge_modified = False
+                st.session_state.cartridge_path = path
+                st.session_state.edit_idx = None
 
                 # Brain file path (same name as cartridge, but _brain.npy)
                 cart_name = os.path.splitext(selected)[0]
@@ -309,20 +419,38 @@ with st.sidebar:
                 brain_file = brain_path + ".npy"
 
                 # Check for saved brain
+                brain_loaded = False
                 if physics_enabled and os.path.exists(brain_file):
-                    with st.spinner("Loading saved brain..."):
-                        ml = st.session_state.engine
-                        with st.session_state.engine_lock:
-                            ml.load_brain(brain_file)
-                        size_mb = os.path.getsize(brain_file) / (1024 * 1024)
-                        st.session_state.physics_trained = True
-                        st.session_state.status = f"Loaded {len(txt)} | Brain: {size_mb:.1f}MB"
-                        _bg_state["progress"] = len(emb)
-                        _bg_state["total"] = len(emb)
-                        print(f"[Mount] Loaded brain: {brain_file} ({size_mb:.1f} MB)")
+                    # Validate brain matches cartridge
+                    valid, msg = validate_brain_manifest(brain_file, emb)
+
+                    if valid:
+                        with st.spinner("Loading saved brain..."):
+                            ml = st.session_state.engine
+                            with st.session_state.engine_lock:
+                                ml.load_brain(brain_file)
+                            size_mb = os.path.getsize(brain_file) / (1024 * 1024)
+                            st.session_state.physics_trained = True
+                            st.session_state.status = f"Loaded {len(txt)} | Brain: {size_mb:.1f}MB"
+                            _bg_state["progress"] = len(emb)
+                            _bg_state["total"] = len(emb)
+                            brain_loaded = True
+                            print(f"[Mount] Loaded brain: {brain_file} ({size_mb:.1f} MB)")
+                            if "Legacy" in msg:
+                                st.warning(msg)
+                    else:
+                        # Brain/cartridge mismatch - cannot use saved brain
+                        st.error(msg)
+                        print(f"[Mount] {msg}")
+                        # Delete invalid brain + manifest
+                        os.remove(brain_file)
+                        manifest_file = brain_file.replace("_brain.npy", "_brain_manifest.json")
+                        if os.path.exists(manifest_file):
+                            os.remove(manifest_file)
+                        print(f"[Mount] Deleted invalid brain files")
 
                 # Train physics on mount (initial batch, then background)
-                elif physics_enabled:
+                if physics_enabled and not brain_loaded:
                     INITIAL_BATCH = 100
                     with st.spinner(f"Training physics (first {INITIAL_BATCH})..."):
                         n_trained = train_physics(emb, max_patterns=INITIAL_BATCH)
@@ -334,7 +462,9 @@ with st.sidebar:
                     # Start background training for the rest (will save when done)
                     if len(emb) > INITIAL_BATCH:
                         start_background_training(emb, start_idx=INITIAL_BATCH, brain_path=brain_path)
-                else:
+
+                # No physics mode
+                if not physics_enabled:
                     st.session_state.status = f"Loaded {len(txt)} entries"
 
                 st.rerun()
@@ -353,8 +483,7 @@ with st.sidebar:
             if st.button("Refresh"):
                 st.rerun()
         else:
-            trained = _bg_state["progress"] or 100
-            st.success(f"Physics: Trained ({trained:,})")
+            st.success("Physics: Trained")
     else:
         st.info("Physics: Not trained")
 
@@ -386,6 +515,132 @@ with st.sidebar:
                 with open(os.path.join(DATA_DIR, f"{name}.pkl"), "wb") as f:
                     pickle.dump(cart, f)
                 st.success(f"Saved {name}.pkl")
+
+    # --- ADD PASSAGE (only when cartridge is mounted AND training complete) ---
+    if st.session_state.dataset:
+        if _bg_state["active"]:
+            st.info("⏳ CRUD disabled while training in progress")
+        else:
+            with st.expander("Add Passage"):
+                new_passage = st.text_area("New passage text", height=150, key="new_passage_text")
+                if st.button("Add") and new_passage.strip():
+                    with st.spinner("Embedding & training..."):
+                        embedder = load_embedder()
+                        new_emb = add_passage(
+                            new_passage,
+                            embedder,
+                            st.session_state.encoder,
+                            st.session_state.engine,
+                            st.session_state.engine_lock,
+                        )
+                        # Append to dataset
+                        st.session_state.dataset["emb"] = np.vstack([
+                            st.session_state.dataset["emb"],
+                            new_emb.reshape(1, -1)
+                        ])
+                        st.session_state.dataset["txt"].append(new_passage)
+                        st.session_state.cartridge_modified = True
+                    st.success(f"Added! Total: {len(st.session_state.dataset['txt'])}")
+                    st.rerun()
+
+            # --- SAVE CHANGES ---
+            if st.session_state.cartridge_modified:
+                st.warning("⚠️ Unsaved changes!")
+                if st.button("Save Cartridge", type="primary"):
+                    # Apply deletions permanently
+                    if st.session_state.deleted_ids:
+                        keep_mask = [i not in st.session_state.deleted_ids
+                                     for i in range(len(st.session_state.dataset["txt"]))]
+                        st.session_state.dataset["emb"] = st.session_state.dataset["emb"][keep_mask]
+                        st.session_state.dataset["txt"] = [
+                            t for i, t in enumerate(st.session_state.dataset["txt"])
+                            if i not in st.session_state.deleted_ids
+                        ]
+                        st.session_state.deleted_ids = set()
+
+                    # Save to disk
+                    save_cartridge(
+                        st.session_state.cartridge_path,
+                        st.session_state.dataset["emb"],
+                        st.session_state.dataset["txt"],
+                    )
+                    st.session_state.cartridge_modified = False
+
+                    # Delete old brain + manifest (needs retraining with new data)
+                    cart_name = os.path.splitext(os.path.basename(st.session_state.cartridge_path))[0]
+                    brain_file = os.path.join(DATA_DIR, f"{cart_name}_brain.npy")
+                    manifest_file = os.path.join(DATA_DIR, f"{cart_name}_brain_manifest.json")
+                    files_deleted = []
+                    if os.path.exists(brain_file):
+                        os.remove(brain_file)
+                        files_deleted.append("brain")
+                    if os.path.exists(manifest_file):
+                        os.remove(manifest_file)
+                        files_deleted.append("manifest")
+                    if files_deleted:
+                        st.info(f"Cleared {', '.join(files_deleted)} - will retrain on next mount")
+
+                    st.success(f"Saved {len(st.session_state.dataset['txt'])} passages")
+                    st.rerun()
+
+    # --- EXIT SECTION ---
+    st.divider()
+
+    if st.session_state.exit_requested:
+        # Confirmation dialog
+        st.warning("Exit Vector+ Studio?")
+
+        if st.session_state.cartridge_modified:
+            st.error("You have unsaved changes!")
+            col_save, col_discard = st.columns(2)
+            with col_save:
+                if st.button("Save & Exit", type="primary"):
+                    # Save first
+                    if st.session_state.deleted_ids:
+                        keep_mask = [i not in st.session_state.deleted_ids
+                                     for i in range(len(st.session_state.dataset["txt"]))]
+                        st.session_state.dataset["emb"] = st.session_state.dataset["emb"][keep_mask]
+                        st.session_state.dataset["txt"] = [
+                            t for i, t in enumerate(st.session_state.dataset["txt"])
+                            if i not in st.session_state.deleted_ids
+                        ]
+                    save_cartridge(
+                        st.session_state.cartridge_path,
+                        st.session_state.dataset["emb"],
+                        st.session_state.dataset["txt"],
+                    )
+                    st.success("Saved! Application ended.")
+                    st.info("You may now close this browser tab.")
+                    print("\n[EXIT] User requested exit (saved changes)")
+                    time.sleep(1)  # Let message display
+                    os._exit(0)
+            with col_discard:
+                if st.button("Discard & Exit"):
+                    st.info("Application ended. You may now close this browser tab.")
+                    print("\n[EXIT] User requested exit (discarded changes)")
+                    time.sleep(1)
+                    os._exit(0)
+
+            if st.button("Cancel"):
+                st.session_state.exit_requested = False
+                st.rerun()
+        else:
+            # No unsaved changes - simple confirm
+            col_yes, col_no = st.columns(2)
+            with col_yes:
+                if st.button("Yes, Exit", type="primary"):
+                    st.info("Application ended. You may now close this browser tab.")
+                    print("\n[EXIT] User requested exit")
+                    time.sleep(1)
+                    os._exit(0)
+            with col_no:
+                if st.button("Cancel"):
+                    st.session_state.exit_requested = False
+                    st.rerun()
+    else:
+        if st.button("Exit"):
+            st.session_state.exit_requested = True
+            st.rerun()
 
 
 # --- MAIN ---
@@ -597,22 +852,63 @@ if query and len(query) > 2:
                 title = lines[0][:100]
 
                 with st.container(border=True):
-                    # Header row
-                    hcol1, hcol2, hcol3 = st.columns([6, 1, 1])
+                    # Header row with edit/delete buttons
+                    hcol1, hcol2, hcol3, hcol4 = st.columns([5, 1, 1, 1])
                     with hcol1:
                         st.markdown(f"**{rank+1}. {title}**")
                     with hcol2:
                         st.caption(f"{score:.3f}")
                     with hcol3:
-                        if st.button("X", key=f"del_{idx}"):
-                            st.session_state.deleted_ids.add(idx)
-                            st.rerun()
+                        # Disable Edit during training
+                        if not _bg_state["active"]:
+                            if st.button("Edit", key=f"edit_{idx}"):
+                                st.session_state.edit_idx = idx
+                                st.rerun()
+                    with hcol4:
+                        # Disable Delete during training
+                        if not _bg_state["active"]:
+                            if st.button("X", key=f"del_{idx}"):
+                                st.session_state.deleted_ids.add(idx)
+                                st.session_state.cartridge_modified = True
+                                st.rerun()
 
-                    # Preview
-                    if len(lines) > 1:
-                        preview = " ".join(lines[1:3])[:200]
-                        st.caption(preview + "..." if len(preview) >= 200 else preview)
+                    # Edit mode for this passage
+                    if st.session_state.edit_idx == idx:
+                        edited_text = st.text_area(
+                            "Edit passage",
+                            value=txt,
+                            height=200,
+                            key=f"edit_area_{idx}"
+                        )
+                        ecol1, ecol2 = st.columns(2)
+                        with ecol1:
+                            if st.button("Save Edit", key=f"save_edit_{idx}"):
+                                with st.spinner("Re-embedding..."):
+                                    embedder = load_embedder()
+                                    new_emb = update_passage(
+                                        idx,
+                                        edited_text,
+                                        embedder,
+                                        st.session_state.encoder,
+                                        st.session_state.engine,
+                                        st.session_state.engine_lock,
+                                    )
+                                    # Update dataset
+                                    st.session_state.dataset["emb"][idx] = new_emb
+                                    st.session_state.dataset["txt"][idx] = edited_text
+                                    st.session_state.cartridge_modified = True
+                                    st.session_state.edit_idx = None
+                                st.rerun()
+                        with ecol2:
+                            if st.button("Cancel", key=f"cancel_edit_{idx}"):
+                                st.session_state.edit_idx = None
+                                st.rerun()
+                    else:
+                        # Preview (only show when not editing)
+                        if len(lines) > 1:
+                            preview = " ".join(lines[1:3])[:200]
+                            st.caption(preview + "..." if len(preview) >= 200 else preview)
 
-                    # Expand for full text
-                    with st.expander("Full text"):
-                        st.text(txt[:2000])
+                        # Expand for full text
+                        with st.expander("Full text"):
+                            st.text(txt[:2000])

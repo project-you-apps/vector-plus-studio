@@ -21,6 +21,13 @@ Usage:
     ml.imprint_vector(query)
     ml.settle(frames=30, learn=False)
     result = ml.recall()
+
+Training Distinct Patterns (for highly-similar inputs):
+    # When patterns share 95%+ content (boilerplate), use reset between each:
+    ml.train_distinct_patterns(embeddings, epochs=10, settle_frames=5)
+
+    # This prevents cross-contamination where residual activation from
+    # pattern A bleeds into pattern B's learning, causing merged basins.
 """
 
 import ctypes
@@ -402,6 +409,59 @@ class MultiLatticeCUDAv7:
             iterations: Number of Hebbian update passes (default: 5)
         """
         self.lib.LearnImmediate(self.engine, iterations)
+
+    def train_distinct_patterns(
+        self,
+        patterns: list,
+        epochs: int = 10,
+        settle_frames: int = 5,
+        shuffle: bool = True,
+        is_embedding: bool = True,
+        progress_callback=None,
+    ):
+        """
+        Train multiple patterns with reset between each to prevent cross-contamination.
+
+        This is essential for highly-similar patterns (e.g., 95% boilerplate with
+        small differences). Resetting between patterns forces each to carve its
+        own distinct attractor basin rather than merging into one muddy basin.
+
+        Args:
+            patterns: List of patterns (embeddings or raw lattice arrays)
+            epochs: Number of training passes through all patterns (default: 10)
+            settle_frames: Frames per pattern per epoch (default: 5)
+            shuffle: Randomize order each epoch (default: True)
+            is_embedding: If True, use imprint_vector; if False, use imprint_pattern
+            progress_callback: Optional fn(epoch, total_epochs) called after each epoch
+
+        Returns:
+            dict with training stats
+        """
+        indices = list(range(len(patterns)))
+
+        for epoch in range(epochs):
+            if shuffle:
+                np.random.shuffle(indices)
+
+            for idx in indices:
+                self.reset()  # Clean slate - prevents cross-contamination
+                if is_embedding:
+                    self.imprint_vector(patterns[idx])
+                else:
+                    self.imprint_pattern(patterns[idx])
+                self.settle(frames=settle_frames, learn=True)
+
+            if progress_callback:
+                progress_callback(epoch + 1, epochs)
+
+        # Final consolidation
+        self.settle(frames=settle_frames * 3, learn=True)
+
+        return {
+            "patterns": len(patterns),
+            "epochs": epochs,
+            "total_imprints": len(patterns) * epochs,
+        }
 
     def recall(self) -> np.ndarray:
         """
