@@ -1,4 +1,4 @@
-# Vector+ Studio v0.81
+# Vector+ Studio v0.82
 
 **Physics-Enhanced Semantic Search**
 
@@ -6,9 +6,32 @@ Vector+ Studio is a semantic search application powered by a 16-million neuron H
 
 ![Vector+ Studio Screenshot](docs/screenshot.png)
 
+## What's New in v0.82
+
+### Pure Signature Search
+
+Search using only brain signatures - **no embeddings pkl file required**. After training, the lattice captures a 4096-float L2 signature per pattern. Query by imprinting, settling, and comparing L2 cosine similarity. One brain file is all you need.
+
+### V7.2 Protected Rows
+
+Region rows can be frozen through settle physics. Metadata (hippocampus IDs, stored text) survives any number of settle frames at 100% fidelity.
+
+### V7.3 Per-Row Physics Control
+
+8 independent physics flags per row (decay, fatigue, inhibition, weights, Boltzmann, kWTA, learning, top-down). Presets: `0x00` = full physics, `0xFF` = fully protected, `0xBF` = learn-only.
+
+### Additional v0.82 Changes
+
+- Full Pattern Rerank mode via lattice pattern correlation
+- Keyword matching with stemming for flexible text search
+- Signature capture/storage (.npz) during training pipeline
+- Contiguous encoder layout option (packed edge-to-edge)
+- L2/L3/L1 hierarchy recall methods
+- Cartridge format v8.2 (backward compatible with v7.0-8.1)
+
 ## What's New in v0.81
 
-**Vector+ Studio v0.81** introduces **physics-enhanced search** - the neural lattice now actively participates in ranking, not just visualization.
+**Vector+ Studio v0.81** introduced **physics-enhanced search** - the neural lattice actively participates in ranking, not just visualization.
 
 ### Key Breakthrough: Holographic Storage
 
@@ -53,7 +76,7 @@ pip install -r requirements.txt
 ### Run
 
 ```bash
-streamlit run vector_plus_studio_v81.py --server.fileWatcherType none
+streamlit run vector_plus_studio_v82.py --server.fileWatcherType none
 ```
 
 Then open http://localhost:8501 in your browser.
@@ -76,7 +99,8 @@ The first search will take ~30 seconds while the embedding model (Nomic Embed v1
 
 ```
 vector-plus-studio/
-├── vector_plus_studio_v81.py     # Main Streamlit application
+├── vector_plus_studio_v82.py     # Main Streamlit application (current)
+├── vector_plus_studio_v81.py     # Previous version
 ├── multi_lattice_wrapper_v7.py  # Python wrapper for CUDA engine
 ├── thermometer_encoder_generic_64x64.py  # Encoding utilities
 ├── bin/
@@ -111,7 +135,8 @@ The Python wrapper and utilities are open source under MIT. The compiled CUDA ph
 
 ## Future Direction and Updates
 
-- **v0.81 (Current)**: Physics-enhanced search is now live! Queries go through real neural physics.
+- **v0.82 (Current)**: Pure signature search, protected rows, per-row physics control.
+- **v0.81**: Physics-enhanced search. Queries go through real neural physics.
 - **Coming Soon**: GPU-accelerated embedding for <100ms total query time
 - **Planned**: Multi-brain support (load multiple trained domains), larger lattice sizes for higher capacity
 

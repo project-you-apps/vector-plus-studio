@@ -40,6 +40,7 @@ import time
 # PHYSICS CONFIG STRUCT (matches lattice_v7.h)
 # ============================================================
 
+
 class PhysicsConfig(ctypes.Structure):
     _fields_ = [
         # Core dynamics
@@ -47,39 +48,32 @@ class PhysicsConfig(ctypes.Structure):
         ("fatigue_rate", ctypes.c_float),
         ("fatigue_recovery", ctypes.c_float),
         ("temperature", ctypes.c_float),
-
         # Mexican hat
         ("facilitation", ctypes.c_float),
         ("inhibition", ctypes.c_float),
         ("anti_facilitation_mult", ctypes.c_float),
-
         # Learning
         ("hebbian_rate", ctypes.c_float),
-
         # Hierarchy gains - bottom-up
         ("alpha_l4", ctypes.c_float),
         ("alpha_l3", ctypes.c_float),
         ("alpha_l2", ctypes.c_float),
         ("alpha_l1", ctypes.c_float),
-
         # Hierarchy gains - top-down
         ("beta_l4", ctypes.c_float),
         ("beta_l3", ctypes.c_float),
         ("beta_l2", ctypes.c_float),
         ("beta_l1", ctypes.c_float),
-
         # Layer persistence
         ("l3_persist", ctypes.c_float),
         ("l2_persist", ctypes.c_float),
         ("l1_persist", ctypes.c_float),
-
         # V7 Profile controls
         ("kwta_threshold", ctypes.c_float),
         ("hierarchy_depth", ctypes.c_int),
         ("temp_annealing", ctypes.c_int),
         ("hebbian_in_settle", ctypes.c_int),
         ("hybrid_topdown", ctypes.c_int),
-
         # Reserved
         ("reserved", ctypes.c_int * 2),
     ]
@@ -119,6 +113,7 @@ class PhysicsConfig(ctypes.Structure):
 # PHYSICS PROFILE ENUM
 # ============================================================
 
+
 class PhysicsProfile:
     FAST = 0
     BALANCED = 1
@@ -128,6 +123,7 @@ class PhysicsProfile:
 # ============================================================
 # MAIN WRAPPER CLASS
 # ============================================================
+
 
 class MultiLatticeCUDAv7:
     """
@@ -139,8 +135,13 @@ class MultiLatticeCUDAv7:
     - All V6 features: GPU imprint, hippocampus, signatures, brain dump
     """
 
-    def __init__(self, lattice_size: int = 4096, max_layers: int = 4, verbose: int = 1,
-                 cooldown_sec: float = 0.0):
+    def __init__(
+        self,
+        lattice_size: int = 4096,
+        max_layers: int = 4,
+        verbose: int = 1,
+        cooldown_sec: float = 0.0,
+    ):
         """
         Initialize V7 engine.
 
@@ -178,6 +179,12 @@ class MultiLatticeCUDAv7:
             raise RuntimeError("Failed to create V7 engine")
 
         self.current_profile = "balanced"
+
+        # Contrastive imprinting: subtract global mean to suppress common features
+        self.contrastive_mode = False
+        self.contrastive_alpha = 0.3  # How much of mean to subtract
+        self.global_mean_pattern = None
+        self.pattern_count = 0
 
     def _setup_function_signatures(self):
         """Define ctypes argument/return types for all API functions."""
@@ -228,6 +235,25 @@ class MultiLatticeCUDAv7:
         ]
         self.lib.Recall.restype = None
 
+        # V7.1: Hierarchy layer recall (L3=256x256, L2=64x64, L1=16x16)
+        self.lib.RecallL3.argtypes = [
+            ctypes.c_void_p,
+            np.ctypeslib.ndpointer(dtype=np.float32, flags="C_CONTIGUOUS"),
+        ]
+        self.lib.RecallL3.restype = None
+
+        self.lib.RecallL2.argtypes = [
+            ctypes.c_void_p,
+            np.ctypeslib.ndpointer(dtype=np.float32, flags="C_CONTIGUOUS"),
+        ]
+        self.lib.RecallL2.restype = None
+
+        self.lib.RecallL1.argtypes = [
+            ctypes.c_void_p,
+            np.ctypeslib.ndpointer(dtype=np.float32, flags="C_CONTIGUOUS"),
+        ]
+        self.lib.RecallL1.restype = None
+
         self.lib.EncodeHippocampus.argtypes = [
             ctypes.c_void_p,
             ctypes.c_int,
@@ -270,6 +296,26 @@ class MultiLatticeCUDAv7:
         self.lib.GetActiveCount.argtypes = [ctypes.c_void_p]
         self.lib.GetActiveCount.restype = ctypes.c_int
 
+        # V7.2: Protected rows (for hippocampus metadata)
+        self.lib.SetProtectedRows.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
+        self.lib.SetProtectedRows.restype = None
+
+        self.lib.GetProtectedRows.argtypes = [ctypes.c_void_p]
+        self.lib.GetProtectedRows.restype = ctypes.c_uint64
+
+        # V7.3: Per-row physics control
+        self.lib.SetRowPhysics.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_uint8]
+        self.lib.SetRowPhysics.restype = None
+
+        self.lib.GetRowPhysics.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        self.lib.GetRowPhysics.restype = ctypes.c_uint8
+
+        self.lib.SetAllRowPhysics.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint8)]
+        self.lib.SetAllRowPhysics.restype = None
+
+        self.lib.GetAllRowPhysics.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint8)]
+        self.lib.GetAllRowPhysics.restype = None
+
     def __del__(self):
         """Clean up GPU resources."""
         if hasattr(self, "engine") and self.engine:
@@ -303,7 +349,9 @@ class MultiLatticeCUDAv7:
 
         profile_lower = profile.lower()
         if profile_lower not in profiles:
-            raise ValueError(f"Unknown profile: {profile}. Use: fast, balanced, quality")
+            raise ValueError(
+                f"Unknown profile: {profile}. Use: fast, balanced, quality"
+            )
 
         self.lib.SetProfile(self.engine, profiles[profile_lower])
         self.current_profile = profile_lower
@@ -321,6 +369,29 @@ class MultiLatticeCUDAv7:
         }
         return self.lib.GetProfileDefaults(profiles[profile.lower()])
 
+    def set_contrastive(self, enabled: bool, alpha: float = 0.3):
+        """
+        Enable/disable contrastive imprinting.
+
+        When enabled, subtracts a running mean of all patterns before imprinting.
+        This suppresses common features (boilerplate) and emphasizes unique content.
+
+        Args:
+            enabled: True to enable contrastive mode
+            alpha: How much of the mean to subtract (0.0-1.0, default 0.3)
+        """
+        self.contrastive_mode = enabled
+        self.contrastive_alpha = alpha
+        if enabled and self.verbose:
+            print(f"Contrastive imprinting ENABLED (alpha={alpha})")
+        elif not enabled and self.verbose:
+            print("Contrastive imprinting DISABLED")
+
+    def reset_contrastive_mean(self):
+        """Reset the running mean for contrastive imprinting."""
+        self.global_mean_pattern = None
+        self.pattern_count = 0
+
     # ============================================================
     # CORE OPERATIONS
     # ============================================================
@@ -333,6 +404,43 @@ class MultiLatticeCUDAv7:
             pattern: 2D or 1D array, values > 0.5 become ON
         """
         pat_c = np.ascontiguousarray(pattern.flatten(), dtype=np.float32)
+        self.lib.ImprintPattern(self.engine, pat_c)
+
+    def imprint_pattern_contrastive(self, pattern: np.ndarray):
+        """
+        Imprint with contrastive subtraction to suppress common features.
+
+        Maintains a running mean of all imprinted patterns and subtracts
+        a fraction of it before imprinting. This emphasizes unique content
+        and suppresses boilerplate that appears across many patterns.
+
+        Must call set_contrastive(True) first, or this behaves like imprint_pattern.
+
+        Args:
+            pattern: 2D or 1D array, values > 0.5 become ON
+        """
+        pat_flat = pattern.flatten().astype(np.float32)
+
+        if self.contrastive_mode:
+            # Update running mean
+            if self.global_mean_pattern is None:
+                self.global_mean_pattern = pat_flat.copy()
+                self.pattern_count = 1
+            else:
+                # Exponential moving average
+                decay = 0.95
+                self.global_mean_pattern = (
+                    decay * self.global_mean_pattern + (1 - decay) * pat_flat
+                )
+                self.pattern_count += 1
+
+            # Subtract mean to emphasize unique features
+            pat_contrast = pat_flat - self.contrastive_alpha * self.global_mean_pattern
+            pat_contrast = np.clip(pat_contrast, 0.0, 1.0)
+            pat_c = np.ascontiguousarray(pat_contrast, dtype=np.float32)
+        else:
+            pat_c = np.ascontiguousarray(pat_flat, dtype=np.float32)
+
         self.lib.ImprintPattern(self.engine, pat_c)
 
     def imprint_vector(self, embedding: np.ndarray, normalize: str = "auto"):
@@ -370,7 +478,9 @@ class MultiLatticeCUDAv7:
                 emb = np.full_like(emb, 0.5)  # Degenerate case: constant embedding
 
             if self.verbose > 1:
-                print(f"  Normalized embedding [{val_min:.2f}, {val_max:.2f}] -> [0, 1]")
+                print(
+                    f"  Normalized embedding [{val_min:.2f}, {val_max:.2f}] -> [0, 1]"
+                )
 
         emb_c = np.ascontiguousarray(emb, dtype=np.float32)
         self.lib.ImprintNomic(self.engine, emb_c, len(emb_c))
@@ -474,6 +584,47 @@ class MultiLatticeCUDAv7:
         self.lib.Recall(self.engine, out)
         return out.reshape(self.size, self.size)
 
+    def recall_l3(self) -> np.ndarray:
+        """
+        Extract current L3 state (256x256 abstraction layer).
+
+        L3 captures mid-level abstractions from L4 via 16x16 pooling.
+
+        Returns:
+            2D array (256x256) of float activations
+        """
+        out = np.zeros(256 * 256, dtype=np.float32)
+        self.lib.RecallL3(self.engine, out)
+        return out.reshape(256, 256)
+
+    def recall_l2(self) -> np.ndarray:
+        """
+        Extract current L2 state (64x64 abstraction layer).
+
+        L2 captures high-level abstractions from L3 via 4x4 pooling.
+        Same dimensions as generate_signature() - can be used as drop-in replacement.
+
+        Returns:
+            2D array (64x64) of float activations, or flattened 4096-float vector
+        """
+        out = np.zeros(64 * 64, dtype=np.float32)
+        self.lib.RecallL2(self.engine, out)
+        return out.reshape(64, 64)
+
+    def recall_l1(self) -> np.ndarray:
+        """
+        Extract current L1 state (16x16 ultra-compact abstraction).
+
+        L1 is the highest abstraction level, capturing global patterns.
+        256 floats total - useful for fast approximate matching or hashing.
+
+        Returns:
+            2D array (16x16) of float activations
+        """
+        out = np.zeros(16 * 16, dtype=np.float32)
+        self.lib.RecallL1(self.engine, out)
+        return out.reshape(16, 16)
+
     def encode_hippocampus(self, pattern_id: int, is_deleted: bool = False):
         """
         Encode pattern ID into hippocampus region (row 63).
@@ -501,7 +652,9 @@ class MultiLatticeCUDAv7:
         self.lib.GenerateSignature(self.engine, sig)
         return sig
 
-    def scan_signatures(self, query_sig: np.ndarray, signature_db: np.ndarray) -> np.ndarray:
+    def scan_signatures(
+        self, query_sig: np.ndarray, signature_db: np.ndarray
+    ) -> np.ndarray:
         """
         Compute cosine similarity between query and database signatures.
 
@@ -563,6 +716,148 @@ class MultiLatticeCUDAv7:
             print(f"Brain restored from {filename}")
 
         return True
+
+    # ============================================================
+    # V7.2: PROTECTED ROWS (for hippocampus metadata)
+    # ============================================================
+
+    def set_protected_rows(self, rows: list):
+        """
+        Set region rows that skip lateral inhibition and kWTA enforcement.
+
+        Protected rows preserve sparse metadata patterns that would otherwise
+        be cleaned up by the physics (lateral inhibition + kWTA). This is
+        essential for storing pattern IDs or other metadata in hippocampus
+        regions.
+
+        Args:
+            rows: List of region row indices (0-63) to protect.
+                  Row 63 = bottom row = hippocampus region.
+                  Example: [63] protects only the hippocampus row.
+                  Example: [62, 63] protects last two rows.
+                  Example: [] clears all protection (normal physics everywhere).
+
+        Example:
+            ml.set_protected_rows([63])  # Protect hippocampus row
+            ml.encode_hippocampus(pattern_id)  # Now metadata survives settle
+            ml.settle(frames=20, learn=True)  # Row 63 preserved
+        """
+        mask = 0
+        for row in rows:
+            if 0 <= row <= 63:
+                mask |= (1 << row)
+            else:
+                raise ValueError(f"Row index must be 0-63, got {row}")
+        self.lib.SetProtectedRows(self.engine, mask)
+
+    def get_protected_rows(self) -> list:
+        """
+        Get list of currently protected region rows.
+
+        Returns:
+            List of row indices (0-63) that are currently protected.
+        """
+        mask = self.lib.GetProtectedRows(self.engine)
+        rows = []
+        for i in range(64):
+            if mask & (1 << i):
+                rows.append(i)
+        return rows
+
+    # ============================================================
+    # V7.3: PER-ROW PHYSICS CONTROL
+    # ============================================================
+
+    # Flag constants matching CUDA defines
+    ROW_SKIP_DECAY      = 0x01
+    ROW_SKIP_FATIGUE    = 0x02
+    ROW_SKIP_INHIBITION = 0x04
+    ROW_SKIP_WEIGHTS    = 0x08
+    ROW_SKIP_BOLTZMANN  = 0x10
+    ROW_SKIP_KWTA       = 0x20
+    ROW_SKIP_LEARNING   = 0x40
+    ROW_SKIP_TOPDOWN    = 0x80
+
+    ROW_FULLY_PROTECTED = 0xFF  # All physics skipped
+    ROW_LEARN_ONLY      = 0xBF  # All skipped EXCEPT Hebbian learning
+
+    def set_row_physics(self, row: int, flags: int):
+        """
+        Set physics flags for a single region row.
+
+        Args:
+            row: Region row index (0-63)
+            flags: Bitmask of ROW_SKIP_* flags.
+                   0x00 = full physics (normal)
+                   0xFF = fully protected (V7.2 equivalent)
+                   0xBF = learn-only (Hebbian learning active, everything else off)
+
+        Example:
+            # ROM hippocampus: fully frozen
+            ml.set_row_physics(63, ml.ROW_FULLY_PROTECTED)
+
+            # RAM hippocampus: learns associations but no competitive dynamics
+            ml.set_row_physics(62, ml.ROW_LEARN_ONLY)
+
+            # Custom: skip only kWTA and inhibition
+            ml.set_row_physics(60, ml.ROW_SKIP_KWTA | ml.ROW_SKIP_INHIBITION)
+        """
+        if not 0 <= row <= 63:
+            raise ValueError(f"Row index must be 0-63, got {row}")
+        self.lib.SetRowPhysics(self.engine, row, flags)
+
+    def get_row_physics(self, row: int) -> int:
+        """
+        Get physics flags for a single region row.
+
+        Returns:
+            Bitmask of ROW_SKIP_* flags for that row.
+        """
+        if not 0 <= row <= 63:
+            raise ValueError(f"Row index must be 0-63, got {row}")
+        return self.lib.GetRowPhysics(self.engine, row)
+
+    def set_all_row_physics(self, flags_list: list):
+        """
+        Set physics flags for all 64 rows at once.
+
+        Args:
+            flags_list: List of 64 integers (0-255), one per row.
+        """
+        if len(flags_list) != 64:
+            raise ValueError(f"Expected 64 flags, got {len(flags_list)}")
+        arr = (ctypes.c_uint8 * 64)(*flags_list)
+        self.lib.SetAllRowPhysics(self.engine, arr)
+
+    def get_all_row_physics(self) -> list:
+        """
+        Get physics flags for all 64 rows.
+
+        Returns:
+            List of 64 integers (0-255), one per row.
+        """
+        arr = (ctypes.c_uint8 * 64)()
+        self.lib.GetAllRowPhysics(self.engine, arr)
+        return list(arr)
+
+    def describe_row_physics(self, row: int) -> dict:
+        """
+        Get a human-readable description of physics flags for a row.
+
+        Returns:
+            Dict mapping component names to True (active) / False (skipped).
+        """
+        flags = self.get_row_physics(row)
+        return {
+            'energy_decay':   not bool(flags & self.ROW_SKIP_DECAY),
+            'fatigue':        not bool(flags & self.ROW_SKIP_FATIGUE),
+            'inhibition':     not bool(flags & self.ROW_SKIP_INHIBITION),
+            'weight_readout': not bool(flags & self.ROW_SKIP_WEIGHTS),
+            'boltzmann':      not bool(flags & self.ROW_SKIP_BOLTZMANN),
+            'kwta':           not bool(flags & self.ROW_SKIP_KWTA),
+            'learning':       not bool(flags & self.ROW_SKIP_LEARNING),
+            'topdown':        not bool(flags & self.ROW_SKIP_TOPDOWN),
+        }
 
     # ============================================================
     # DIAGNOSTICS
@@ -629,7 +924,9 @@ if __name__ == "__main__":
 
         print(f"Loaded {len(embeddings)} embeddings, shape: {embeddings.shape}")
         test_emb = embeddings[0].astype(np.float32)
-        print(f"Test embedding dims: {len(test_emb)}, range: [{test_emb.min():.4f}, {test_emb.max():.4f}]")
+        print(
+            f"Test embedding dims: {len(test_emb)}, range: [{test_emb.min():.4f}, {test_emb.max():.4f}]"
+        )
         if test_emb.min() < -0.1 or test_emb.max() > 1.1:
             print("  -> Will be auto-normalized to [0, 1] for thermometer encoding")
     else:

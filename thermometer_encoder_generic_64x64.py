@@ -38,6 +38,8 @@ class ThermometerEncoderNomic64x64:
         lattice_size: int = 4096,
         region_size: int = 64,
         encoding_type: str = "linear",
+        layout: str = "spread",
+        start_region_row: int = 0,
         seed: int = 42,
     ):
         """
@@ -48,12 +50,19 @@ class ThermometerEncoderNomic64x64:
             lattice_size: Lattice dimension (4096)
             region_size: Size of each region (64 for 64×64)
             encoding_type: "linear" (progressive fill)
+            layout: "spread" (scattered with gaps) or "contiguous" (packed row-major)
+            start_region_row: For contiguous layout, offset embedding to this row.
+                              Use >0 to leave room for RAM/hippocampus rows ABOVE
+                              the embedding data (needed for Hebbian adjacency since
+                              thermometer fills from top of each region).
             seed: Random seed for reproducibility
         """
         self.n_dims = n_dims
         self.lattice_size = lattice_size
         self.region_size = region_size
         self.encoding_type = encoding_type
+        self.layout = layout
+        self.start_region_row = start_region_row
         self.seed = seed
 
         np.random.seed(seed)
@@ -61,8 +70,11 @@ class ThermometerEncoderNomic64x64:
         print(f"Creating {encoding_type} thermometer lookup (64x64)...")
         self.lookup_table = self._create_linear_thermometer()
 
-        print(f"Creating layout for {n_dims} regions (64x64)...")
-        self.region_positions = self._create_region_layout()
+        print(f"Creating layout for {n_dims} regions (64x64, layout={layout})...")
+        if layout == "contiguous":
+            self.region_positions = self._create_contiguous_layout()
+        else:
+            self.region_positions = self._create_region_layout()
 
         total_bits = self._estimate_average_bits()
         total_lattice_bits = lattice_size * lattice_size
@@ -175,6 +187,60 @@ class ThermometerEncoderNomic64x64:
                 positions.append((start_row, start_col))
 
         return positions
+
+    def _create_contiguous_layout(self):
+        """
+        Create contiguous (packed) layout: regions fill row-major with no gaps.
+
+        768 dims at 64px regions = 12 rows x 64 columns.
+        Each region is exactly 64x64 pixels, packed edge-to-edge.
+
+        start_region_row offsets placement so RAM/hippocampus rows can sit
+        ABOVE the embedding data. This matters because thermometer encoding
+        fills from TOP of each region - so the top edge of the first embedding
+        row has active neurons, providing Hebbian contact with RAM rows above.
+
+        Returns:
+            List of (start_row, start_col) tuples
+        """
+        positions = []
+        regions_per_row = self.lattice_size // self.region_size  # 64
+
+        for dim_idx in range(self.n_dims):
+            region_row = self.start_region_row + dim_idx // regions_per_row
+            region_col = dim_idx % regions_per_row
+
+            start_row = region_row * self.region_size
+            start_col = region_col * self.region_size
+
+            positions.append((start_row, start_col))
+
+        return positions
+
+    def used_region_rows(self):
+        """
+        Return sorted list of region row indices that contain embedding data.
+
+        For contiguous layout with 768 dims: rows 0-11 (12 rows x 64 cols = 768).
+        For spread layout: depends on spacing.
+
+        Useful for determining which rows are free for hippocampus/RAM/text.
+        """
+        used = set()
+        for start_row, start_col in self.region_positions:
+            region_row = start_row // self.region_size
+            used.add(region_row)
+        return sorted(used)
+
+    def free_region_rows(self):
+        """
+        Return sorted list of region row indices NOT used by embedding data.
+
+        These rows are available for hippocampus, RAM, text storage, etc.
+        """
+        all_rows = set(range(self.lattice_size // self.region_size))
+        used = set(self.used_region_rows())
+        return sorted(all_rows - used)
 
     #
     # NEW HIPPOCAMPUS ENCODING METHODS
