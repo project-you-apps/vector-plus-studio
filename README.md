@@ -1,10 +1,33 @@
-# Vector+ Studio v0.82
+# Vector+ Studio v0.83
 
 **Physics-Enhanced Semantic Search**
 
-Vector+ Studio is a semantic search application powered by a 16-million neuron Hopfield network. Unlike traditional vector databases, queries go through **real neural physics** - the lattice actively shapes search results through associative memory, not just cosine similarity.
+Vector+ Studio is a semantic search application powered by a 16-million neuron Hopfield network. Unlike traditional vector databases, queries go through **real neural physics** — the lattice actively shapes search results through associative memory, not just cosine similarity.
 
 ![Vector+ Studio Screenshot](docs/screenshot.png)
+
+## What's New in v0.83
+
+### L2 Hierarchy Search
+
+Search now uses L2 hierarchy signatures (4096-dim) instead of the legacy `generate_signature()` method. L2 better preserves embedding relationships (0.54 vs 0.47 correlation) and is computed for free during physics settle — no extra pass needed.
+
+### Blended Scoring (70/30)
+
+Default search blends **70% embedding cosine + 30% L2 physics similarity**. The physics component captures associative relationships that pure cosine misses. Configurable via the search panel.
+
+### MCP Server Integration
+
+Brain cartridges can now be served to AI agents via the **Vector+ MCP Server** (Model Context Protocol). Any MCP-compatible agent (OpenClaw, Claude Code, etc.) can mount a cartridge, search it semantically, and store new memories — all through standard tool calls. See [vector-plus-mcp-server](https://github.com/project-you-apps/vector-plus-mcp-server) for details.
+
+### Additional v0.83 Changes
+
+- L2 signature method recorded in `.npz` signature files (`signature_method: "l2"`)
+- Keyword reranking with stop-word filtering and additive boost (capped at +0.12)
+- Improved signature capture during training pipeline
+- Compatible with MCP Server V3 cartridge format
+
+---
 
 ## What's New in v0.82
 
@@ -76,7 +99,7 @@ pip install -r requirements.txt
 ### Run
 
 ```bash
-streamlit run vector_plus_studio_v82.py --server.fileWatcherType none
+streamlit run vector_plus_studio_v83.py --server.fileWatcherType none
 ```
 
 Then open http://localhost:8501 in your browser.
@@ -99,8 +122,8 @@ The first search will take ~30 seconds while the embedding model (Nomic Embed v1
 
 ```
 vector-plus-studio/
-├── vector_plus_studio_v82.py     # Main Streamlit application (current)
-├── vector_plus_studio_v81.py     # Previous version
+├── vector_plus_studio_v83.py     # Main Streamlit application (current)
+├── vector_plus_studio_v82.py     # Previous version
 ├── multi_lattice_wrapper_v7.py  # Python wrapper for CUDA engine
 ├── thermometer_encoder_generic_64x64.py  # Encoding utilities
 ├── bin/
@@ -135,10 +158,11 @@ The Python wrapper and utilities are open source under MIT. The compiled CUDA ph
 
 ## Future Direction and Updates
 
-- **v0.82 (Current)**: Pure signature search, protected rows, per-row physics control.
+- **v0.83 (Current)**: L2 hierarchy search, blended 70/30 scoring, keyword reranking, MCP server integration.
+- **v0.82**: Pure signature search, protected rows, per-row physics control.
 - **v0.81**: Physics-enhanced search. Queries go through real neural physics.
-- **Coming Soon**: GPU-accelerated embedding for <100ms total query time
-- **Planned**: Multi-brain support (load multiple trained domains), larger lattice sizes for higher capacity
+- **Coming Soon**: React front end (VPS 1.0), cartridge maker CLI, hosted MCP server
+- **Planned**: Multi-brain hot-swap, INT8/binary physics engine, FPGA validation
 
 ---
 
