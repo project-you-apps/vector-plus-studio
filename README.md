@@ -18,7 +18,7 @@ Default search blends **70% embedding cosine + 30% L2 physics similarity**. The 
 
 ### MCP Server Integration
 
-Brain cartridges can now be served to AI agents via the **Vector+ MCP Server** (Model Context Protocol). Any MCP-compatible agent (OpenClaw, Claude Code, etc.) can mount a cartridge, search it semantically, and store new memories — all through standard tool calls. See [vector-plus-mcp-server](https://github.com/project-you-apps/vector-plus-mcp-server) for details.
+Brain cartridges can now be served to AI agents via **[Membot](https://github.com/project-you-apps/membot)** (Model Context Protocol). Any MCP-compatible agent (OpenClaw, Claude Code, etc.) can mount a cartridge, search it semantically, and store new memories — all through standard tool calls.
 
 ### Additional v0.83 Changes
 
