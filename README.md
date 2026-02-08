@@ -148,7 +148,7 @@ vector-plus-studio/
 | Component | License | Commercial Use |
 |-----------|---------|----------------|
 | Python code (`.py` files) | MIT | Yes |
-| CUDA Engine (`bin/*.dll`) | Proprietary | [Contact for license](mailto:licensing@project-you.app) |
+| CUDA Engine (`bin/*.dll`) | Proprietary | [Contact for license](mailto:andy@project-you.app) |
 
 The Python wrapper and utilities are open source under MIT. The compiled CUDA physics engine is free for personal, educational, and non-commercial use. Commercial use requires a separate license - see [bin/LICENSE](bin/LICENSE).
 
