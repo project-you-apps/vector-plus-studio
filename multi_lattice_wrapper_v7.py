@@ -156,14 +156,19 @@ class MultiLatticeCUDAv7:
         self.verbose = verbose
         self.cooldown_sec = cooldown_sec
 
-        # Load DLL
-        dll_name = "lattice_v7.dll"
-        dll_path = os.path.join(os.path.dirname(__file__), dll_name)
+        # Load DLL -- check same dir first, then bin/ subdirectory
+        import platform
+        dll_name = "lattice_v7.so" if platform.system() == "Linux" else "lattice_v7.dll"
+        base_dir = os.path.dirname(__file__)
+        dll_path = os.path.join(base_dir, dll_name)
+
+        if not os.path.exists(dll_path):
+            dll_path = os.path.join(base_dir, "bin", dll_name)
 
         if not os.path.exists(dll_path):
             raise FileNotFoundError(
-                f"Cannot find {dll_path}. "
-                f"Compile with: nvcc -shared -o lattice_v7.dll lattice_cuda_v7.cu -O3 -DLATTICE_EXPORTS"
+                f"Cannot find {dll_name} in {base_dir} or {base_dir}/bin/. "
+                f"Compile with: nvcc -shared -o {dll_name} lattice_cuda_v7.cu -O3 -DLATTICE_EXPORTS"
             )
 
         self.lib = ctypes.CDLL(dll_path)
