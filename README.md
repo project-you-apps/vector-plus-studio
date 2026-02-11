@@ -1,10 +1,70 @@
-# Vector+ Studio v0.83
+# Vector+ Studio v1.0
+
+**Physics-Enhanced Semantic Search -- Now with a Real Frontend**
+
+Vector+ Studio is a semantic search application powered by a 16-million neuron Hopfield network. Unlike traditional vector databases, queries go through **real neural physics** -- the lattice actively shapes search results through associative memory, not just cosine similarity.
+
+V1.0 replaces the Streamlit prototype with a production React frontend and FastAPI backend.
+
+![Vector+ Studio v1.0](docs/reed-richards-screen.png)
+
+## What's New in v1.0
+
+### React Frontend + FastAPI Backend
+
+The Streamlit UI has been replaced with a proper web application:
+
+- **React 19 + TypeScript + Tailwind CSS** -- dark neural-themed UI
+- **FastAPI backend** with async GPU operations and threading lock
+- **Zustand** state management -- lightweight, zero boilerplate
+- **Vite** dev server with hot reload
+
+### Full CRUD
+
+- **Create**: Add Passage editor (full-width workspace) + Build Cartridge from files (txt, pdf, docx)
+- **Read**: Three search modes (Smart blend, Pure Brain, Fast cosine), keyword highlighting with stemming, Top-K selector, "Must contain keywords" strict filter
+- **Update**: Edit Passage via pencil button on result cards -- saves new version, tombstones original (copy-on-write with full undo)
+- **Delete**: Trashcan with confirmation bar, soft-delete tombstoning
+- **Restore**: Recover any tombstoned pattern from the sidebar panel
+
+### Search Features
+
+- Configurable physics/cosine blend slider (Smart Search mode)
+- Keyword reranking with stop-word filtering
+- Clear button to reset search results
+- CPU/GPU mode indicator with tooltips
+
+### Cartridge Management
+
+- Mount/unmount from sidebar with size and Brain/Sigs badges
+- File picker (native OS dialog + paste-a-path fallback)
+- Cross-format support: PKL, NPY brain, NPZ signatures, membot .cart.npz
+- Explicit Save button with unsaved-changes warning on exit
+- Build new cartridges from uploaded documents
+
+### Quick Start (v1.0)
+
+```bash
+# Backend
+cd vector-plus-studio
+pip install -r api/requirements.txt
+python -m uvicorn api.main:app --port 8000
+
+# Frontend (separate terminal)
+cd frontend
+npm install
+npm run dev
+```
+
+Then open http://localhost:5173 in your browser.
+
+---
+
+# Vector+ Studio v0.83 (Legacy Streamlit UI)
 
 **Physics-Enhanced Semantic Search**
 
-Vector+ Studio is a semantic search application powered by a 16-million neuron Hopfield network. Unlike traditional vector databases, queries go through **real neural physics** — the lattice actively shapes search results through associative memory, not just cosine similarity.
-
-![Vector+ Studio Screenshot](docs/screenshot.png)
+![Vector+ Studio v0.83 Screenshot](docs/screenshot.png)
 
 ## What's New in v0.83
 
@@ -122,12 +182,23 @@ The first search will take ~30 seconds while the embedding model (Nomic Embed v1
 
 ```
 vector-plus-studio/
-├── vector_plus_studio_v83.py     # Main Streamlit application (current)
-├── vector_plus_studio_v82.py     # Previous version
-├── multi_lattice_wrapper_v7.py  # Python wrapper for CUDA engine
+├── api/                          # FastAPI backend (v1.0)
+│   ├── main.py                   # Endpoints, CORS, lifespan
+│   ├── engine.py                 # GPU singleton (MultiLatticeCUDAv7)
+│   ├── search.py                 # Search modes (smart, pure brain, fast)
+│   ├── cartridge_io.py           # Load/save/list cartridges
+│   ├── forge.py                  # File parsing + chunking
+│   └── models.py                 # Pydantic schemas
+├── frontend/                     # React + Vite + TypeScript (v1.0)
+│   └── src/
+│       ├── components/           # Header, Sidebar, SearchBar, ResultCard, etc.
+│       ├── store/appStore.ts     # Zustand state management
+│       └── api/                  # API client + types
+├── vector_plus_studio_v83.py     # Legacy Streamlit UI
+├── multi_lattice_wrapper_v7.py   # Python wrapper for CUDA engine
 ├── thermometer_encoder_generic_64x64.py  # Encoding utilities
 ├── bin/
-│   └── lattice_cuda_v7.dll      # Pre-built CUDA physics engine
+│   └── lattice_cuda_v7.dll       # Pre-built CUDA physics engine
 ├── cartridges/                   # Your saved document collections
 └── sample_data/                  # Sample datasets
 ```
@@ -158,11 +229,11 @@ The Python wrapper and utilities are open source under MIT. The compiled CUDA ph
 
 ## Future Direction and Updates
 
-- **v0.83 (Current)**: L2 hierarchy search, blended 70/30 scoring, keyword reranking, MCP server integration.
-- **v0.82**: Pure signature search, protected rows, per-row physics control.
-- **v0.81**: Physics-enhanced search. Queries go through real neural physics.
-- **Coming Soon**: React front end (VPS 1.0), cartridge maker CLI, hosted MCP server
-- **Planned**: Multi-brain hot-swap, INT8/binary physics engine, FPGA validation
+- **v1.0 (Current)**: React frontend + FastAPI backend, full CRUD, passage editor, Top-K selector, strict keyword filter
+- **v0.83**: L2 hierarchy search, blended 70/30 scoring, keyword reranking, MCP server integration
+- **v0.82**: Pure signature search, protected rows, per-row physics control
+- **v0.81**: Physics-enhanced search -- queries go through real neural physics
+- **Planned**: Edit locking via hippocampus metadata, INT8/binary physics engine, FPGA validation
 
 ---
 
