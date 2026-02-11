@@ -29,4 +29,14 @@ Thumbs.db
 
 # Virtual environments
 venv/
-.env/
+.venv/
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Node
+node_modules/
+frontend/dist/
