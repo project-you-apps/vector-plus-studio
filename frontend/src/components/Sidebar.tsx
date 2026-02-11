@@ -198,21 +198,37 @@ export default function Sidebar() {
       <div className="px-4 py-3 border-t border-slate-800">
         <h2 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Search Mode</h2>
         <div className="space-y-1">
-          {MODES.map((m) => (
-            <button
-              key={m.key}
-              onClick={() => setSearchMode(m.key)}
-              title={m.tooltip}
-              className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-all ${
-                searchMode === m.key
-                  ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
-                  : 'text-slate-400 hover:bg-slate-800/60 border border-transparent'
-              }`}
-            >
-              <div className="font-medium">{m.label}</div>
-              <div className="text-[10px] opacity-60">{m.desc}</div>
-            </button>
-          ))}
+          {MODES.map((m) => {
+            const isSmartDisabled = m.key === 'smart' && !status?.gpu_available
+            const isSmartTraining = m.key === 'smart' && status?.gpu_available && status?.training_active
+            const isSmartReady = m.key === 'smart' && status?.gpu_available && status?.physics_trained && !status?.training_active
+            let subtitle = m.desc
+            if (isSmartDisabled) subtitle = 'Requires GPU'
+            else if (isSmartTraining) subtitle = 'Training -- available soon'
+            else if (m.key === 'smart' && status?.gpu_available && !status?.physics_trained && !status?.training_active) subtitle = 'Mount a cartridge to enable'
+
+            return (
+              <button
+                key={m.key}
+                onClick={() => !isSmartDisabled && setSearchMode(m.key)}
+                title={isSmartDisabled ? 'Smart Search requires a GPU -- currently running in CPU mode' : m.tooltip}
+                className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-all ${
+                  isSmartDisabled
+                    ? 'opacity-40 cursor-not-allowed text-slate-500 border border-transparent'
+                    : searchMode === m.key
+                      ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                      : 'text-slate-400 hover:bg-slate-800/60 border border-transparent'
+                }`}
+              >
+                <div className="font-medium flex items-center gap-2">
+                  {m.label}
+                  {isSmartTraining && <Loader2 size={10} className="animate-spin text-amber-400" />}
+                  {isSmartReady && <span className="w-1.5 h-1.5 rounded-full bg-green-400" />}
+                </div>
+                <div className="text-[10px] opacity-60">{subtitle}</div>
+              </button>
+            )
+          })}
         </div>
 
         {/* Blend slider */}

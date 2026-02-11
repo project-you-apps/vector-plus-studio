@@ -58,6 +58,31 @@ npm run dev
 
 Then open http://localhost:5173 in your browser.
 
+### Training (One-Time Physics Indexing)
+
+When you first mount a cartridge, the lattice trains on every pattern -- encoding each embedding into the 4096x4096 neuron grid and learning Hebbian weights through settle cycles. This is the equivalent of building an index in a traditional vector database, except here the "index" is a 128MB neural weight matrix that stores patterns holographically.
+
+**Training is slow but you only do it once.** Times vary by dataset size and GPU:
+
+| Dataset | RTX 4080S | GTX 1060 |
+| ------- | --------- | -------- |
+| 1,000 patterns | ~30 sec | ~2 min |
+| 5,000 patterns | ~2.5 min | ~12 min |
+| 25,000 patterns | ~12 min | ~60 min |
+
+During training, the Smart Search button shows a spinner and the sidebar displays a progress bar. You can still search with Fast mode (cosine only) while training runs in the background.
+
+After training completes, **save the cartridge**. The trained brain weights are stored in a `_brain.npy` file alongside the PKL. Next time you mount the same cartridge, training is skipped entirely -- the brain loads in seconds, not minutes.
+
+The Smart Search button adapts to the current engine state:
+
+| State | Button | Subtitle |
+| ----- | ------ | -------- |
+| CPU mode (no GPU) | Grayed out, disabled | "Requires GPU" |
+| GPU + training in progress | Amber spinner | "Training -- available soon" |
+| GPU + trained and ready | Green dot | "Physics + cosine blend" |
+| GPU + no cartridge mounted | Normal | "Mount a cartridge to enable" |
+
 ---
 
 # Vector+ Studio v0.83 (Legacy Streamlit UI)
