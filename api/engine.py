@@ -177,6 +177,12 @@ class EngineManager:
         try:
             self.ml = MultiLatticeCUDAv7(lattice_size=4096, verbose=1)
             self.ml.set_profile(PHYSICS_PROFILE)
+            # Override L2 persistence for better Pure Brain discrimination.
+            # Default 0.2 lets kWTA flatten L2 within a few frames.
+            # High persistence preserves the pre-kWTA L2 signal from imprint.
+            cfg = self.ml.get_profile_defaults(PHYSICS_PROFILE)
+            cfg.l2_persist = 0.9
+            self.ml.set_physics(cfg)
             self.encoder = ThermometerEncoderNomic64x64(
                 n_dims=768, lattice_size=4096, region_size=64
             )

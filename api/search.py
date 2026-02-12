@@ -109,7 +109,7 @@ def protected_multimodal_search(q_emb: np.ndarray, embeddings: np.ndarray,
                                  keywords: list[str] | None = None) -> list[dict]:
     """
     Protected Multimodal search -- text survives settle via V7.2 protected rows.
-    Scoring: blended = alpha * cosine + (1-alpha) * physics
+    Scoring: blended = alpha * physics + (1-alpha) * cosine
     """
     ml = engine.ml
     enc = engine.combined_encoder
@@ -156,7 +156,7 @@ def protected_multimodal_search(q_emb: np.ndarray, embeddings: np.ndarray,
 
             r_norm = recovered_emb / (np.linalg.norm(recovered_emb) + 1e-9)
             physics_score = float(np.dot(q_unit, r_norm))
-            blended = alpha * cosine_scores[idx] + (1.0 - alpha) * physics_score
+            blended = alpha * physics_score + (1.0 - alpha) * cosine_scores[idx]
 
             results.append({
                 'idx': idx,

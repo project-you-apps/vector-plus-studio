@@ -621,7 +621,7 @@ def _background_train(embeddings, passages, enc, ml, start_idx,
         brain_path = os.path.join(DATA_DIR, f"{cart_name}_brain")
         os.makedirs(DATA_DIR, exist_ok=True)
         with engine.lock:
-            ml.save_brain_compact(brain_path)
+            ml.save_brain(brain_path)
         actual_path = brain_path + ".npy"
         save_brain_manifest(actual_path, embeddings)
 

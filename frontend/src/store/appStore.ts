@@ -35,6 +35,10 @@ interface AppState {
   strictMode: boolean
   setStrictMode: (strict: boolean) => void
 
+  // Exact phrase match filter
+  exactMatch: boolean
+  setExactMatch: (exact: boolean) => void
+
   // Editor -- used for both Add Passage and Edit Passage
   editorOpen: boolean
   editorText: string
@@ -82,6 +86,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   strictMode: false,
   setStrictMode: (strict) => set({ strictMode: strict }),
+
+  exactMatch: false,
+  setExactMatch: (exact) => set({ exactMatch: exact }),
 
   editorOpen: false,
   editorText: '',
@@ -148,7 +155,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       await api.mountCartridge(filename)
       await get().fetchStatus()
       await get().fetchCartridges()
-      set({ results: [], query: '', deletedPatterns: [], strictMode: false })
+      set({ results: [], query: '', deletedPatterns: [], strictMode: false, exactMatch: false })
     } catch (e) {
       console.error('Mount failed:', e)
     } finally {
@@ -180,7 +187,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  setSearchMode: (mode) => set({ searchMode: mode }),
+  setSearchMode: (mode) => {
+    set({ searchMode: mode })
+    // Auto-re-search with the new mode if there's already a query
+    const { query } = get()
+    if (query) {
+      // Small delay so the mode state updates before doSearch reads it
+      setTimeout(() => get().doSearch(query), 0)
+    }
+  },
   setBlendAlpha: (alpha) => set({ blendAlpha: alpha }),
   setTopK: (k) => set({ topK: k }),
 
