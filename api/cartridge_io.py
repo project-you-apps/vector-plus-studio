@@ -170,12 +170,12 @@ def load_signatures(sig_path: str) -> dict | None:
 
 
 def save_signatures(sig_path, signatures, titles=None, compressed_lens=None,
-                    compressed_texts=None, signature_method="l2"):
+                    compressed_texts=None, signature_method="l3"):
     save_dict = {
         'pattern_ids': np.arange(len(signatures), dtype=np.int32),
         'signatures': signatures,
         'n_patterns': len(signatures),
-        'signature_dim': signatures.shape[1] if len(signatures.shape) > 1 else 4096,
+        'signature_dim': signatures.shape[1] if len(signatures.shape) > 1 else 65536,
         'signature_method': np.array(signature_method),
     }
     if titles is not None:

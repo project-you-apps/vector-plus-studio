@@ -195,13 +195,17 @@ def pure_brain_search(q_emb: np.ndarray, top_k: int = 10,
     if signatures is None or not engine.signatures_loaded:
         return []
 
-    # Settle query to get L2 signature
+    # Settle query to get signature (L3 if available, else L2)
+    sig_dim = signatures.shape[1] if len(signatures.shape) > 1 else 4096
     with engine.lock:
         ml.reset()
         query_pattern, _ = enc.encode(q_emb, "")
         ml.imprint_pattern(query_pattern)
         ml.settle(frames=SIG_SETTLE_FRAMES, learn=False)
-        query_sig = ml.recall_l2().flatten()
+        if sig_dim >= 65536:
+            query_sig = ml.recall_l3().flatten()
+        else:
+            query_sig = ml.recall_l2().flatten()
 
     # Compare signatures
     q_sig_norm = query_sig / (np.linalg.norm(query_sig) + 1e-9)
@@ -262,7 +266,8 @@ def search(query: str, mode: str = "smart", alpha: float = 0.7,
 
     if mode == "pure_brain" and engine.signatures_loaded:
         results = pure_brain_search(q_emb, top_k, keywords)
-        mode_label = "Pure Brain (L2 signatures)"
+        sig_dim = engine.signatures.shape[1] if engine.signatures is not None and len(engine.signatures.shape) > 1 else 4096
+        mode_label = f"Pure Brain ({'L3' if sig_dim >= 65536 else 'L2'} signatures)"
 
     elif mode == "smart" and engine.physics_trained and engine.gpu_available:
         if embeddings is not None and len(compressed_lens) > 0:

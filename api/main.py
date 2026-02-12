@@ -625,9 +625,9 @@ def _background_train(embeddings, passages, enc, ml, start_idx,
         actual_path = brain_path + ".npy"
         save_brain_manifest(actual_path, embeddings)
 
-        # Capture signatures
+        # Capture L3 signatures (256x256 = 65536 floats)
         sig_path = os.path.join(DATA_DIR, f"{cart_name}_signatures.npz")
-        signatures = np.zeros((len(embeddings), 4096), dtype=np.float32)
+        signatures = np.zeros((len(embeddings), 65536), dtype=np.float32)
         compressed_texts = []
 
         for i in range(len(embeddings)):
@@ -636,7 +636,7 @@ def _background_train(embeddings, passages, enc, ml, start_idx,
                 pattern, _ = enc.encode(embeddings[i], passages[i])
                 ml.imprint_pattern(pattern)
                 ml.settle(frames=SIG_SETTLE_FRAMES, learn=False)
-                signatures[i] = ml.recall_l2().flatten()
+                signatures[i] = ml.recall_l3().flatten()
 
             compressed_bytes = enc.text_encoder.compress_text(passages[i])
             compressed_texts.append(compressed_bytes)
@@ -709,7 +709,7 @@ def _save_cartridge_sync() -> MessageResponse:
         if engine.physics_trained and engine.ml:
             brain_path = _os.path.join(DATA_DIR, f"{cart_name}_brain")
             with engine.lock:
-                engine.ml.save_brain_compact(brain_path)
+                engine.ml.save_brain(brain_path)
             actual_path = brain_path + ".npy"
             save_brain_manifest(actual_path, engine.embeddings)
             saved_parts.append("Brain saved")
@@ -836,11 +836,11 @@ def _add_passage_sync(text: str) -> MessageResponse:
             engine.ml.imprint_pattern(pattern)
             engine.ml.settle(frames=TRAIN_SETTLE_FRAMES, learn=True)
 
-            # Capture L2 signature
+            # Capture L3 signature (256x256 = 65536 floats)
             engine.ml.reset()
             engine.ml.imprint_pattern(pattern)
             engine.ml.settle(frames=SIG_SETTLE_FRAMES, learn=False)
-            new_sig = engine.ml.recall_l2().flatten()
+            new_sig = engine.ml.recall_l3().flatten()
 
         engine.compressed_lens.append(meta['compressed_len'])
 
