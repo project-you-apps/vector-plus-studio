@@ -134,12 +134,20 @@ export default function ResultCard({ result }: Props) {
         {/* Scores */}
         <div className="shrink-0 text-right">
           <div className="text-lg font-bold text-slate-200">{result.score.toFixed(3)}</div>
-          {result.cosine_score != null && result.physics_score != null && (
+          {result.cosine_score != null && result.hamming_score != null ? (
+            <div className="text-[10px] text-slate-500 space-x-2">
+              <span>C:{result.cosine_score.toFixed(3)}</span>
+              <span className="text-cyan-400">H:{result.hamming_score.toFixed(3)}</span>
+              {result.keyword_boost != null && result.keyword_boost > 0 && (
+                <span className="text-amber-400">+{result.keyword_boost.toFixed(3)}</span>
+              )}
+            </div>
+          ) : result.cosine_score != null && result.physics_score != null ? (
             <div className="text-[10px] text-slate-500 space-x-2">
               <span>C:{result.cosine_score.toFixed(3)}</span>
               <span className="text-purple-400">P:{result.physics_score.toFixed(3)}</span>
             </div>
-          )}
+          ) : null}
         </div>
 
         {/* Actions */}

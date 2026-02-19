@@ -10,7 +10,7 @@ class MountRequest(BaseModel):
 
 class SearchRequest(BaseModel):
     query: str
-    mode: str = "smart"       # "smart" | "pure_brain" | "fast"
+    mode: str = "hamming"     # "hamming" | "smart" | "pure_brain" | "fast"
     alpha: float = 0.7        # blend slider (0.0-1.0), only for "smart"
     top_k: int = 10
 
@@ -53,6 +53,8 @@ class SearchResult(BaseModel):
     score: float
     cosine_score: float | None = None
     physics_score: float | None = None
+    hamming_score: float | None = None
+    keyword_boost: float | None = None
     title: str
     preview: str
     full_text: str

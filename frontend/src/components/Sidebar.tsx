@@ -5,6 +5,7 @@ import type { SearchMode } from '../api/types'
 import * as api from '../api/client'
 
 const MODES: { key: SearchMode; label: string; desc: string; tooltip: string }[] = [
+  { key: 'hamming', label: 'Hamming Blend', desc: '70% cosine + 30% Hamming', tooltip: '70% cosine + 30% sign-zero Hamming with keyword reranking. Same as Membot production search. No GPU required.' },
   { key: 'smart', label: 'Smart Search', desc: 'Physics + cosine blend', tooltip: 'Blends neural lattice physics with cosine similarity. Use the slider to control the mix. Best overall quality. Requires GPU mode.' },
   { key: 'pure_brain', label: 'Pure Brain', desc: 'L2 signatures only', tooltip: 'Searches using only the trained neural lattice -- no embedding database needed. Finds associative relationships cosine misses.' },
   { key: 'fast', label: 'Fast', desc: 'Cosine only', tooltip: 'Standard cosine similarity on embeddings. No GPU required. Fastest but misses physics-discovered associations.' },

@@ -71,7 +71,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   cartridges: [],
   mounting: false,
 
-  searchMode: 'smart',
+  searchMode: 'hamming',
   blendAlpha: 0.7,
   topK: 10,
   query: '',

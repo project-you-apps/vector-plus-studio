@@ -14,6 +14,8 @@ export interface SearchResult {
   score: number
   cosine_score: number | null
   physics_score: number | null
+  hamming_score: number | null
+  keyword_boost: number | null
   title: string
   preview: string
   full_text: string
@@ -49,4 +51,4 @@ export interface DeletedPattern {
   preview: string
 }
 
-export type SearchMode = 'smart' | 'pure_brain' | 'fast'
+export type SearchMode = 'hamming' | 'smart' | 'pure_brain' | 'fast'

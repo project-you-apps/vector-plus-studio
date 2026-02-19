@@ -20,6 +20,8 @@ STOPWORDS = {
     "tell", "show", "find", "search",
 }
 
+HAMMING_BLEND = 0.3  # 70% cosine + 30% sign_zero Hamming
+
 
 def simple_stem(word: str) -> str:
     word = word.lower()
@@ -63,6 +65,63 @@ def _keyword_rerank(results: list[dict], keywords: list[str], passages: list[str
                 r['score'] += min(hits * 0.04, 0.12)
     results.sort(key=lambda x: x['score'], reverse=True)
     return results
+
+
+# ---------------------------------------------------------------------------
+# Cosine + Hamming blend search (ported from Membot, no GPU needed)
+# ---------------------------------------------------------------------------
+
+def hamming_blend_search(q_emb: np.ndarray, embeddings: np.ndarray,
+                         passages: list[str], top_k: int = 10,
+                         keywords: list[str] | None = None) -> list[dict]:
+    """70% cosine + 30% sign-zero Hamming + keyword reranking.
+
+    Matches Membot's production search pipeline. No GPU needed.
+    """
+    # Cosine similarity
+    e_norms = np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-9
+    q_norm = np.linalg.norm(q_emb) + 1e-9
+    cos_scores = np.dot(embeddings / e_norms, q_emb / q_norm)
+
+    # Sign-zero Hamming similarity
+    q_bin = (q_emb > 0).astype(np.uint8)
+    corpus_bin = (embeddings > 0).astype(np.uint8)
+    n_bits = corpus_bin.shape[1]  # 768
+    xor = np.bitwise_xor(q_bin, corpus_bin)
+    ham_scores = 1.0 - xor.sum(axis=1).astype(np.float32) / n_bits
+
+    # Blend: 70% cosine + 30% Hamming
+    blended = (1.0 - HAMMING_BLEND) * cos_scores + HAMMING_BLEND * ham_scores
+
+    # Keyword reranking — widen candidates, boost exact matches
+    candidate_k = min(max(top_k * 4, 20), len(blended))
+    candidate_idx = np.argsort(blended)[-candidate_k:][::-1]
+
+    results = []
+    for i in candidate_idx:
+        i = int(i)
+        if i in engine.deleted_ids:
+            continue
+        base_score = float(blended[i])
+        if base_score < 0.05:
+            continue
+        kw_boost = 0.0
+        if keywords:
+            text_lower = passages[i].lower() if i < len(passages) else ""
+            hits = sum(1 for kw in keywords if keyword_matches(kw, text_lower))
+            kw_boost = min(hits * 0.03, 0.12)
+        results.append({
+            'idx': i,
+            'score': base_score + kw_boost,
+            'cosine_score': float(cos_scores[i]),
+            'hamming_score': float(ham_scores[i]),
+            'keyword_boost': kw_boost,
+            'physics_score': None,
+            'from_lattice': False,
+        })
+
+    results.sort(key=lambda x: x['score'], reverse=True)
+    return results[:top_k]
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +323,12 @@ def search(query: str, mode: str = "smart", alpha: float = 0.7,
     passages = engine.passages
     compressed_lens = engine.compressed_lens
 
-    if mode == "pure_brain" and engine.signatures_loaded:
+    if mode == "hamming":
+        results = hamming_blend_search(q_emb, embeddings, passages, top_k, keywords)
+        kw_label = f" +kw" if keywords else ""
+        mode_label = f"Cosine+Hamming 70/30{kw_label}"
+
+    elif mode == "pure_brain" and engine.signatures_loaded:
         results = pure_brain_search(q_emb, top_k, keywords)
         sig_dim = engine.signatures.shape[1] if engine.signatures is not None and len(engine.signatures.shape) > 1 else 4096
         mode_label = f"Pure Brain ({'L3' if sig_dim >= 65536 else 'L2'} signatures)"
