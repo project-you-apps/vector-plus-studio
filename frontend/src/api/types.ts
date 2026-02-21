@@ -51,4 +51,4 @@ export interface DeletedPattern {
   preview: string
 }
 
-export type SearchMode = 'hamming' | 'smart' | 'pure_brain' | 'fast'
+export type SearchMode = 'hamming' | 'smart' | 'pure_brain' | 'fast' | 'associate'

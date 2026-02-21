@@ -33,6 +33,7 @@ Training Distinct Patterns (for highly-similar inputs):
 import ctypes
 import numpy as np
 import os
+import sys
 import time
 
 
@@ -141,9 +142,10 @@ class MultiLatticeCUDAv7:
         max_layers: int = 4,
         verbose: int = 1,
         cooldown_sec: float = 0.0,
+        dll_path: str = None,
     ):
         """
-        Initialize V7 engine.
+        Initialize V7/V8 engine.
 
         Args:
             lattice_size: Width/height of L4 lattice (default 4096)
@@ -151,26 +153,36 @@ class MultiLatticeCUDAv7:
             verbose: Print status messages (0=quiet, 1=normal)
             cooldown_sec: Sleep after heavy GPU ops (default 0 = disabled)
                           Recommended: 0.125 for bulk ingestion to prevent thermal issues
+            dll_path: Path to DLL (default: lattice_v7.dll next to this file).
+                      Pass int8/lattice_v8_int8.dll to use V8 engine.
         """
         self.size = lattice_size
         self.verbose = verbose
         self.cooldown_sec = cooldown_sec
 
-        # Load DLL -- check same dir first, then bin/ subdirectory
-        import platform
-        dll_name = "lattice_v7.so" if platform.system() == "Linux" else "lattice_v7.dll"
-        base_dir = os.path.dirname(__file__)
-        dll_path = os.path.join(base_dir, dll_name)
+        # Load DLL / shared library
+        if dll_path is None:
+            base_dir = os.path.dirname(__file__)
+            if sys.platform == "win32":
+                dll_path = os.path.join(base_dir, "lattice_v7.dll")
+            else:
+                dll_path = os.path.join(base_dir, "lattice_cuda_v7.so")
 
         if not os.path.exists(dll_path):
-            dll_path = os.path.join(base_dir, "bin", dll_name)
+            # Fallback: check bin/ subdirectory
+            dll_name = os.path.basename(dll_path)
+            bin_path = os.path.join(base_dir, "bin", dll_name)
+            if os.path.exists(bin_path):
+                dll_path = bin_path
+            else:
+                raise FileNotFoundError(
+                    f"Cannot find {dll_path}. "
+                    f"Compile the appropriate engine (.dll on Windows, .so on Linux)."
+                )
 
-        if not os.path.exists(dll_path):
-            raise FileNotFoundError(
-                f"Cannot find {dll_name} in {base_dir} or {base_dir}/bin/. "
-                f"Compile with: nvcc -shared -o {dll_name} lattice_cuda_v7.cu -O3 -DLATTICE_EXPORTS"
-            )
-
+        dll_size = os.path.getsize(dll_path)
+        print(f"[V7 Engine] DLL: {dll_path} ({dll_size:,} bytes)")
+        print(f"[V7 Engine] Wrapper: {__file__} ({os.path.getsize(__file__):,} bytes)")
         self.lib = ctypes.CDLL(dll_path)
         self._setup_function_signatures()
 
@@ -320,6 +332,113 @@ class MultiLatticeCUDAv7:
 
         self.lib.GetAllRowPhysics.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint8)]
         self.lib.GetAllRowPhysics.restype = None
+
+        # V8/V9 extensions (graceful - only available when using V8 DLL)
+        self._setup_v8_functions()
+
+    def _setup_v8_functions(self):
+        """Bind V8/V9-specific functions if available. Sets has_v8 / has_bitpacked."""
+        self.has_v8 = False
+        self.has_bitpacked = False
+
+        try:
+            # Version / capabilities
+            self.lib.GetVersionString.argtypes = [ctypes.c_void_p]
+            self.lib.GetVersionString.restype = ctypes.c_char_p
+
+            self.lib.GetCapabilities.argtypes = [ctypes.c_void_p]
+            self.lib.GetCapabilities.restype = ctypes.c_int
+
+            # U8 pattern imprint
+            self.lib.ImprintPatternU8.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint8)]
+            self.lib.ImprintPatternU8.restype = None
+
+            # L4-only settle
+            self.lib.SettleL4Only.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            self.lib.SettleL4Only.restype = None
+
+            # Batch operations
+            self.lib.AllocateBatch.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            self.lib.AllocateBatch.restype = None
+
+            self.lib.FreeBatch.argtypes = [ctypes.c_void_p]
+            self.lib.FreeBatch.restype = None
+
+            self.lib.BatchImprintU8.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint8), ctypes.c_int]
+            self.lib.BatchImprintU8.restype = None
+
+            self.lib.BatchSettle.argtypes = [
+                ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+            self.lib.BatchSettle.restype = None
+
+            self.lib.BatchSettleL4Only.argtypes = [
+                ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+            self.lib.BatchSettleL4Only.restype = None
+
+            self.lib.BatchRecallL2.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_int]
+            self.lib.BatchRecallL2.restype = None
+
+            # Pipeline (u8 patterns)
+            self.lib.PipelineProcessU8.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint8),
+                ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_float)]
+            self.lib.PipelineProcessU8.restype = None
+
+            # Pipeline (Nomic embeddings)
+            self.lib.PipelineIngestNomic.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(ctypes.c_float),
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_bool,
+                ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_float)]
+            self.lib.PipelineIngestNomic.restype = None
+
+            # Compact brain save/load
+            self.lib.SaveBrainCompact.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint8), ctypes.c_int]
+            self.lib.SaveBrainCompact.restype = ctypes.c_int
+
+            self.lib.LoadBrainCompact.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint8),
+                ctypes.c_int, ctypes.c_int]
+            self.lib.LoadBrainCompact.restype = None
+
+            self.lib.GetCompactBrainSize.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            self.lib.GetCompactBrainSize.restype = ctypes.c_int
+
+            self.has_v8 = True
+        except (AttributeError, OSError):
+            pass
+
+        if not self.has_v8:
+            return
+
+        try:
+            # V9: Bitpacked binary physics
+            self.lib.PrepareBitpacked.argtypes = [ctypes.c_void_p]
+            self.lib.PrepareBitpacked.restype = None
+
+            self.lib.FreeBitpacked.argtypes = [ctypes.c_void_p]
+            self.lib.FreeBitpacked.restype = None
+
+            self.lib.SetBitpackedParams.argtypes = [
+                ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                ctypes.c_int, ctypes.c_int]
+            self.lib.SetBitpackedParams.restype = None
+
+            self.lib.SettleBitpacked.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            self.lib.SettleBitpacked.restype = None
+
+            self.lib.PipelineSearchBitpacked.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(ctypes.c_float),
+                ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                ctypes.POINTER(ctypes.c_float)]
+            self.lib.PipelineSearchBitpacked.restype = None
+
+            self.has_bitpacked = True
+        except (AttributeError, OSError):
+            pass
 
     def __del__(self):
         """Clean up GPU resources."""
@@ -685,7 +804,7 @@ class MultiLatticeCUDAv7:
 
     def save_brain(self, filename: str):
         """
-        Save L4 state + weights to file.
+        Save L4 state + weights to file (legacy 128 MB format).
 
         For 4096x4096: 2 * 16M * 4 bytes = 134 MB
 
@@ -702,7 +821,7 @@ class MultiLatticeCUDAv7:
 
     def load_brain(self, filename: str) -> bool:
         """
-        Load L4 state + weights from file.
+        Load L4 state + weights from file (supports legacy and compact formats).
 
         Args:
             filename: Input .npy file path
@@ -714,13 +833,121 @@ class MultiLatticeCUDAv7:
             return False
 
         buffer = np.load(filename)
-        buffer = np.ascontiguousarray(buffer, dtype=np.uint32)
-        self.lib.LoadCore(self.engine, buffer)
 
-        if self.verbose:
-            print(f"Brain restored from {filename}")
+        N = self.size * self.size
+
+        # Detect format by size
+        if buffer.dtype == np.uint32 and len(buffer) == N * 2:
+            # Legacy format: state + weights (128 MB)
+            buffer = np.ascontiguousarray(buffer, dtype=np.uint32)
+            self.lib.LoadCore(self.engine, buffer)
+            if self.verbose:
+                print(f"Brain restored from {filename} (legacy 128 MB)")
+
+        elif buffer.dtype == np.uint32 and len(buffer) == N:
+            # Compact format: weights only (64 MB)
+            full = np.zeros(N * 2, dtype=np.uint32)
+            full[N:] = buffer  # Weights go in second half
+            full = np.ascontiguousarray(full)
+            self.lib.LoadCore(self.engine, full)
+            if self.verbose:
+                print(f"Brain restored from {filename} (compact 64 MB, weights-only)")
+
+        elif buffer.dtype == np.uint16:
+            # Compact uint4-quantized format (32 MB)
+            weights_u8 = self._dequantize_weights_u4(buffer)
+            full = np.zeros(N * 2, dtype=np.uint32)
+            full[N:] = weights_u8
+            full = np.ascontiguousarray(full)
+            self.lib.LoadCore(self.engine, full)
+            if self.verbose:
+                print(f"Brain restored from {filename} (quantized 32 MB)")
+
+        else:
+            # Unknown format, try legacy
+            buffer = np.ascontiguousarray(buffer, dtype=np.uint32)
+            self.lib.LoadCore(self.engine, buffer)
+            if self.verbose:
+                print(f"Brain restored from {filename} (unknown format, tried legacy)")
 
         return True
+
+    def save_brain_compact(self, filename: str, quantize: str = "none"):
+        """
+        Save only Hebbian weights (no transient state). Much smaller files.
+
+        Formats:
+            "none"  - uint8 weights, 64 MB (lossless)
+            "uint4" - 4-bit quantized, 32 MB (~1% fidelity loss)
+
+        Args:
+            filename: Output .npy file path (will add .npy if not present)
+            quantize: "none" or "uint4"
+        """
+        N = self.size * self.size
+        full_buffer = np.zeros(N * 2, dtype=np.uint32)
+        self.lib.SaveCore(self.engine, full_buffer)
+
+        # Extract weights (second half)
+        weights = full_buffer[N:].copy()
+
+        if quantize == "uint4":
+            packed = self._quantize_weights_u4(weights)
+            np.save(filename, packed)
+            size_mb = packed.nbytes / (1024 * 1024)
+        else:
+            np.save(filename, weights)
+            size_mb = weights.nbytes / (1024 * 1024)
+
+        if self.verbose:
+            print(f"Brain saved to {filename} (compact {quantize}, {size_mb:.1f} MB)")
+
+    def _quantize_weights_u4(self, weights_u32: np.ndarray) -> np.ndarray:
+        """
+        Quantize uint8 weights to uint4 (packed into uint16).
+
+        Each uint32 holds 4 × uint8 weights (N/E/S/W).
+        Quantize each uint8 (0-127) → uint4 (0-15) by >> 3.
+        Pack all 4 as uint4 into one uint16 (4 × 4 bits = 16 bits).
+
+        Result: 16M uint32 → 16M uint16 = 32 MB (was 64 MB).
+        """
+        # Unpack 4 uint8 weights from each uint32
+        w0 = (weights_u32 & 0xFF).astype(np.uint8)
+        w1 = ((weights_u32 >> 8) & 0xFF).astype(np.uint8)
+        w2 = ((weights_u32 >> 16) & 0xFF).astype(np.uint8)
+        w3 = ((weights_u32 >> 24) & 0xFF).astype(np.uint8)
+
+        # Quantize to 4-bit (0-15)
+        q0 = (w0 >> 3).astype(np.uint16)
+        q1 = (w1 >> 3).astype(np.uint16)
+        q2 = (w2 >> 3).astype(np.uint16)
+        q3 = (w3 >> 3).astype(np.uint16)
+
+        # Pack into uint16: q0 in bits 0-3, q1 in 4-7, q2 in 8-11, q3 in 12-15
+        packed = q0 | (q1 << 4) | (q2 << 8) | (q3 << 12)
+        return packed
+
+    def _dequantize_weights_u4(self, packed_u16: np.ndarray) -> np.ndarray:
+        """
+        Dequantize uint4 weights back to uint32 (4 × uint8 packed).
+
+        Reverses _quantize_weights_u4: uint4 × 8 → uint8, repack into uint32.
+        """
+        # Unpack 4-bit values
+        q0 = (packed_u16 & 0xF).astype(np.uint32)
+        q1 = ((packed_u16 >> 4) & 0xF).astype(np.uint32)
+        q2 = ((packed_u16 >> 8) & 0xF).astype(np.uint32)
+        q3 = ((packed_u16 >> 12) & 0xF).astype(np.uint32)
+
+        # Dequantize back to uint8 range (× 8)
+        w0 = q0 * 8
+        w1 = q1 * 8
+        w2 = q2 * 8
+        w3 = q3 * 8
+
+        # Repack into uint32
+        return w0 | (w1 << 8) | (w2 << 16) | (w3 << 24)
 
     # ============================================================
     # V7.2: PROTECTED ROWS (for hippocampus metadata)
@@ -885,6 +1112,309 @@ class MultiLatticeCUDAv7:
         active = self.get_active_count()
         expected = self.size * self.size * expected_density
         return active / (expected + 1e-8)
+
+    # ============================================================
+    # V8: VERSION / CAPABILITIES
+    # ============================================================
+
+    def get_version_string(self) -> str:
+        """Get engine version string (V8+ only)."""
+        if not self.has_v8:
+            return "V7 (no version API)"
+        return self.lib.GetVersionString(self.engine).decode()
+
+    def get_capabilities(self) -> dict:
+        """Get engine capabilities as dict (V8+ only)."""
+        if not self.has_v8:
+            return {"dp4a": False, "tensor": False}
+        caps = self.lib.GetCapabilities(self.engine)
+        return {"dp4a": bool(caps & 1), "tensor": bool(caps & 2)}
+
+    # ============================================================
+    # V8: L4-ONLY SETTLE
+    # ============================================================
+
+    def settle_l4_only(self, frames: int):
+        """
+        Run L4-only settle (skip hierarchy during settle, compute once at end).
+
+        23% faster than full settle. 0.9999 fidelity vs full hierarchy.
+        Requires V8 engine.
+        """
+        if not self.has_v8:
+            raise RuntimeError("settle_l4_only requires V8 engine")
+        self.lib.SettleL4Only(self.engine, frames)
+
+        if self.cooldown_sec > 0:
+            time.sleep(self.cooldown_sec)
+
+    # ============================================================
+    # V8: PIPELINE OPERATIONS
+    # ============================================================
+
+    def pipeline_ingest_nomic(
+        self,
+        embeddings: np.ndarray,
+        settle_frames: int = 2,
+        learn: bool = True,
+        pattern_ids: np.ndarray = None,
+    ) -> np.ndarray:
+        """
+        Ingest N Nomic embeddings in a single C call.
+
+        For each pattern: Reset -> ImprintNomic -> Hippocampus -> Settle -> L2.
+        Eliminates Python round-trip overhead.
+
+        Args:
+            embeddings: 2D array (N x dims), raw Nomic embeddings (auto-normalized)
+            settle_frames: Physics frames per pattern (default: 2)
+            learn: Enable Hebbian learning (default: True)
+            pattern_ids: Optional int32 array of N pattern IDs for hippocampus
+
+        Returns:
+            2D array (N x 4096) of L2 signatures
+        """
+        if not self.has_v8:
+            raise RuntimeError("pipeline_ingest_nomic requires V8 engine")
+
+        n_patterns = len(embeddings)
+        n_dims = embeddings.shape[1]
+
+        # Normalize each embedding to [0, 1]
+        normed = np.zeros_like(embeddings, dtype=np.float32)
+        for i in range(n_patterns):
+            emb = embeddings[i].astype(np.float32)
+            v_min, v_max = emb.min(), emb.max()
+            if v_max - v_min > 1e-6:
+                normed[i] = (emb - v_min) / (v_max - v_min)
+            else:
+                normed[i] = 0.5
+
+        all_emb = np.ascontiguousarray(normed.flatten(), dtype=np.float32)
+        all_emb_ptr = all_emb.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+
+        ids_ptr = None
+        if pattern_ids is not None:
+            ids_arr = np.ascontiguousarray(pattern_ids, dtype=np.int32)
+            ids_ptr = ids_arr.ctypes.data_as(ctypes.POINTER(ctypes.c_int))
+
+        l2_buf = np.zeros(n_patterns * 4096, dtype=np.float32)
+        l2_ptr = l2_buf.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+
+        self.lib.PipelineIngestNomic(
+            self.engine, all_emb_ptr, n_dims, n_patterns,
+            settle_frames, learn, ids_ptr, l2_ptr)
+
+        return l2_buf.reshape(n_patterns, 4096)
+
+    def pipeline_search_nomic(
+        self,
+        embeddings: np.ndarray,
+        settle_frames: int = 2,
+    ) -> np.ndarray:
+        """
+        Search N Nomic embeddings via full-physics pipeline (no learning).
+
+        Args:
+            embeddings: 2D array (N x dims), raw Nomic embeddings
+            settle_frames: Physics frames per query (default: 2)
+
+        Returns:
+            2D array (N x 4096) of L2 signatures
+        """
+        if not self.has_v8:
+            raise RuntimeError("pipeline_search_nomic requires V8 engine")
+
+        n_patterns = len(embeddings)
+        n_dims = embeddings.shape[1]
+
+        normed = np.zeros_like(embeddings, dtype=np.float32)
+        for i in range(n_patterns):
+            emb = embeddings[i].astype(np.float32)
+            v_min, v_max = emb.min(), emb.max()
+            if v_max - v_min > 1e-6:
+                normed[i] = (emb - v_min) / (v_max - v_min)
+            else:
+                normed[i] = 0.5
+
+        all_emb = np.ascontiguousarray(normed.flatten(), dtype=np.float32)
+        all_emb_ptr = all_emb.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+
+        l2_buf = np.zeros(n_patterns * 4096, dtype=np.float32)
+        l2_ptr = l2_buf.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+
+        self.lib.PipelineIngestNomic(
+            self.engine, all_emb_ptr, n_dims, n_patterns,
+            settle_frames, False, None, l2_ptr)
+
+        return l2_buf.reshape(n_patterns, 4096)
+
+    # ============================================================
+    # V8: BATCH OPERATIONS
+    # ============================================================
+
+    def allocate_batch(self, batch_size: int):
+        """Allocate GPU memory for batch processing."""
+        if not self.has_v8:
+            raise RuntimeError("Batch operations require V8 engine")
+        self.lib.AllocateBatch(self.engine, batch_size)
+
+    def free_batch(self):
+        """Free batch GPU memory."""
+        if not self.has_v8:
+            return
+        self.lib.FreeBatch(self.engine)
+
+    # ============================================================
+    # V8: COMPACT BRAIN SAVE/LOAD
+    # ============================================================
+
+    def save_brain_gpu_compact(self, filename: str, fmt: int = 0):
+        """
+        Save brain using GPU-side quantization (V8 only).
+
+        Formats:
+            0 = uint8 weights-only (64 MB)
+            1 = uint4 quantized (32 MB)
+            2 = uint2 aggressive (16 MB)
+
+        Args:
+            filename: Output file path
+            fmt: Quantization format (0, 1, or 2)
+        """
+        if not self.has_v8:
+            raise RuntimeError("GPU compact save requires V8 engine")
+
+        buf_size = self.lib.GetCompactBrainSize(self.engine, fmt)
+        buf = np.zeros(buf_size, dtype=np.uint8)
+        buf_ptr = buf.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
+
+        bytes_written = self.lib.SaveBrainCompact(self.engine, buf_ptr, fmt)
+        np.save(filename, buf[:bytes_written])
+
+        if self.verbose:
+            size_mb = bytes_written / (1024 * 1024)
+            print(f"Brain saved to {filename} (GPU compact fmt={fmt}, {size_mb:.1f} MB)")
+
+    def load_brain_gpu_compact(self, filename: str, fmt: int = 0) -> bool:
+        """
+        Load brain from GPU-compact format (V8 only).
+
+        Args:
+            filename: Input .npy file path
+            fmt: Quantization format that was used to save
+        """
+        if not self.has_v8:
+            raise RuntimeError("GPU compact load requires V8 engine")
+        if not os.path.exists(filename):
+            return False
+
+        buf = np.load(filename)
+        buf = np.ascontiguousarray(buf, dtype=np.uint8)
+        buf_ptr = buf.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
+
+        self.lib.LoadBrainCompact(self.engine, buf_ptr, fmt, len(buf))
+
+        if self.verbose:
+            print(f"Brain restored from {filename} (GPU compact fmt={fmt})")
+        return True
+
+    # ============================================================
+    # V9: BITPACKED BINARY PHYSICS
+    # ============================================================
+
+    def prepare_bitpacked(self):
+        """
+        Prepare bit-packed mode: allocate 12 MB buffers, extract 1-bit weights.
+
+        Must be called after learning patterns with full physics.
+        After this, use settle_bitpacked() or pipeline_search_bitpacked()
+        for 1.86x faster search with 0.915 fidelity.
+        """
+        if not self.has_bitpacked:
+            raise RuntimeError("Bitpacked requires V8 engine with V9 extensions")
+        self.lib.PrepareBitpacked(self.engine)
+
+    def free_bitpacked(self):
+        """Free bit-packed GPU buffers."""
+        if not self.has_bitpacked:
+            return
+        self.lib.FreeBitpacked(self.engine)
+
+    def set_bitpacked_params(
+        self, facil: int = 8, anti_facil: int = 2, inhib: int = 1,
+        thresh_on: int = 3, thresh_off: int = -1
+    ):
+        """
+        Set bitpacked physics parameters.
+
+        Args:
+            facil: Facilitation weight for dist-1 ON neighbors (default: 8)
+            anti_facil: Anti-facilitation penalty for dist-1 OFF neighbors (default: 2)
+            inhib: Inhibition weight for dist>=2 ON neighbors (default: 1)
+            thresh_on: Score threshold for OFF->ON transition (default: 3)
+            thresh_off: Score threshold for ON->OFF transition (default: -1)
+        """
+        if not self.has_bitpacked:
+            raise RuntimeError("Bitpacked requires V8 engine with V9 extensions")
+        self.lib.SetBitpackedParams(
+            self.engine, facil, anti_facil, inhib, thresh_on, thresh_off)
+
+    def settle_bitpacked(self, frames: int = 2):
+        """
+        Run binary physics settle (1-bit neurons, popcount Mexican hat).
+
+        1.86x faster than full physics, 0.915 fidelity.
+        Must call prepare_bitpacked() first.
+        """
+        if not self.has_bitpacked:
+            raise RuntimeError("Bitpacked requires V8 engine with V9 extensions")
+        self.lib.SettleBitpacked(self.engine, frames)
+
+    def pipeline_search_bitpacked(
+        self,
+        embeddings: np.ndarray,
+        settle_frames: int = 2,
+    ) -> np.ndarray:
+        """
+        Search N Nomic embeddings using bitpacked binary physics.
+
+        Single C call: Reset -> ImprintNomic -> bits -> binary settle -> L2.
+        1.86x faster than full-physics pipeline.
+
+        Args:
+            embeddings: 2D array (N x dims), raw Nomic embeddings
+            settle_frames: Binary physics frames per query (default: 2)
+
+        Returns:
+            2D array (N x 4096) of L2 signatures
+        """
+        if not self.has_bitpacked:
+            raise RuntimeError("Bitpacked search requires V8 engine with V9 extensions")
+
+        n_patterns = len(embeddings)
+        n_dims = embeddings.shape[1]
+
+        normed = np.zeros_like(embeddings, dtype=np.float32)
+        for i in range(n_patterns):
+            emb = embeddings[i].astype(np.float32)
+            v_min, v_max = emb.min(), emb.max()
+            if v_max - v_min > 1e-6:
+                normed[i] = (emb - v_min) / (v_max - v_min)
+            else:
+                normed[i] = 0.5
+
+        all_emb = np.ascontiguousarray(normed.flatten(), dtype=np.float32)
+        all_emb_ptr = all_emb.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+
+        l2_buf = np.zeros(n_patterns * 4096, dtype=np.float32)
+        l2_ptr = l2_buf.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+
+        self.lib.PipelineSearchBitpacked(
+            self.engine, all_emb_ptr, n_dims, n_patterns,
+            settle_frames, l2_ptr)
+
+        return l2_buf.reshape(n_patterns, 4096)
 
 
 # ============================================================

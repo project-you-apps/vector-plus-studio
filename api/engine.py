@@ -12,13 +12,14 @@ import time
 import numpy as np
 import zlib
 
-# Add parent dir so we can import the wrapper and encoder
+# Add current + parent dirs so we can import wrapper, encoder, etc.
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
+sys.path.insert(0, current_dir)
 sys.path.insert(0, parent_dir)
 
 from multi_lattice_wrapper_v7 import MultiLatticeCUDAv7
-from thermometer_encoder_generic_64x64 import ThermometerEncoderNomic64x64
+from region_fill_encoder import RegionFillEncoderNomic768
 
 # ---------------------------------------------------------------------------
 # Multimodal encoders (extracted from v83)
@@ -30,7 +31,9 @@ class TextRegionEncoder:
     def __init__(self, lattice_size=4096, region_size=64):
         self.lattice_size = lattice_size
         self.region_size = region_size
-        self.free_rows = [1, 6, 13, 20, 27, 32, 39, 46, 53, 60, 63]
+        # Region-fill uses rows 0-11 for 768 embedding dims.
+        # Text goes in rows 12+ to avoid collision.
+        self.free_rows = [15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 63]
         self.num_region_cols = 64
         self.max_bytes = len(self.free_rows) * self.num_region_cols  # 704
         self.byte_patterns = self._create_byte_patterns()
@@ -101,7 +104,7 @@ class CombinedEncoder:
     """Multimodal encoder: embedding + text in single lattice pattern."""
 
     def __init__(self):
-        self.embedding_encoder = ThermometerEncoderNomic64x64()
+        self.embedding_encoder = RegionFillEncoderNomic768()
         self.text_encoder = TextRegionEncoder()
 
     def encode(self, embedding: np.ndarray, text: str) -> tuple:
@@ -122,14 +125,71 @@ class CombinedEncoder:
 
 
 # ---------------------------------------------------------------------------
+# Training encoder (matches test_cam_poseidon.py exactly)
+# ---------------------------------------------------------------------------
+# Text rows for training exclude row 63 — hippocampus goes there instead.
+# This matches the standalone CAM test that produces ~80% sign preservation.
+TRAIN_TEXT_ROWS = [15, 20, 25, 30, 35, 40, 45, 50, 55, 60]
+
+
+class TrainingEncoder:
+    """Encode patterns for Hebbian training: region-fill + text + hippocampus.
+
+    Matches test_cam_poseidon.py pattern assembly exactly:
+    - Region-fill embedding in rows 0-11
+    - Compressed text in rows [15, 20, 25, 30, 35, 40, 45, 50, 55, 60] (no row 63)
+    - Hippocampus binary ID in row 63
+    """
+
+    def __init__(self):
+        self.embedding_encoder = RegionFillEncoderNomic768()
+        self.text_encoder = TextRegionEncoder()
+        # Override: exclude row 63 from text (hippocampus goes there)
+        self.text_encoder.free_rows = TRAIN_TEXT_ROWS
+        self.text_encoder.max_bytes = len(TRAIN_TEXT_ROWS) * 64  # 640
+
+    def encode(self, embedding: np.ndarray, text: str,
+               pattern_id: int) -> tuple[np.ndarray, dict]:
+        """Assemble training pattern: embedding + text + hippocampus."""
+        emb_layer = self.embedding_encoder.encode(embedding).astype(np.float32)
+        text_layer, compressed_len = self.text_encoder.encode_text(text)
+        hippo_layer = encode_hippocampus(pattern_id)
+        combined = np.maximum(np.maximum(emb_layer, text_layer), hippo_layer)
+        metadata = {
+            'compressed_len': compressed_len,
+            'original_text_len': len(text),
+        }
+        return combined, metadata
+
+
+def encode_hippocampus(pattern_id, lattice_size=4096):
+    """Encode pattern ID as binary bits in hippocampus row 63.
+
+    Each bit of the pattern_id fills one 64x64 region in row 63.
+    Matches test_hippocampus_survival.py encoding exactly.
+    """
+    layer = np.zeros((lattice_size, lattice_size), dtype=np.float32)
+    bin_str = format(pattern_id & 0xFFFFFFFFFFFFFFFF, "064b")
+    region_row = 63
+    for i, bit in enumerate(bin_str):
+        if bit == "1":
+            r0 = region_row * 64
+            c0 = i * 64
+            layer[r0:r0 + 64, c0:c0 + 64] = 1.0
+    return layer
+
+
+# ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
 SETTLE_FRAMES = 5
-TRAIN_SETTLE_FRAMES = 5
+TRAIN_SETTLE_FRAMES = 10  # Match standalone CAM test (was 5)
 SIG_SETTLE_FRAMES = 10
 PHYSICS_PROFILE = "quality"
-TEXT_ROWS = [1, 6, 13, 20, 27, 32, 39, 46, 53, 60, 63]
+HIPPO_ROW = 63  # Episodic index — protected from physics during settle
+# Region-fill uses rows 0-11 for embeddings. Text goes in rows 12+.
+TEXT_ROWS = [15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 63]
 
 
 # ---------------------------------------------------------------------------
@@ -142,8 +202,9 @@ class EngineManager:
     def __init__(self):
         self.lock = threading.Lock()
         self.ml: MultiLatticeCUDAv7 | None = None
-        self.encoder: ThermometerEncoderNomic64x64 | None = None
+        self.encoder: RegionFillEncoderNomic768 | None = None
         self.combined_encoder: CombinedEncoder | None = None
+        self.training_encoder: TrainingEncoder | None = None
         self.embedder = None  # SentenceTransformer (lazy)
 
         # Cartridge state
@@ -177,26 +238,23 @@ class EngineManager:
         try:
             self.ml = MultiLatticeCUDAv7(lattice_size=4096, verbose=1)
             self.ml.set_profile(PHYSICS_PROFILE)
-            # Override L2 persistence for better Pure Brain discrimination.
-            # Default 0.2 lets kWTA flatten L2 within a few frames.
-            # High persistence preserves the pre-kWTA L2 signal from imprint.
-            cfg = self.ml.get_profile_defaults(PHYSICS_PROFILE)
-            cfg.l2_persist = 0.9
-            self.ml.set_physics(cfg)
-            self.encoder = ThermometerEncoderNomic64x64(
+            self.ml.set_row_physics(HIPPO_ROW, self.ml.ROW_FULLY_PROTECTED)
+            self.encoder = RegionFillEncoderNomic768(
                 n_dims=768, lattice_size=4096, region_size=64
             )
             self.combined_encoder = CombinedEncoder()
+            self.training_encoder = TrainingEncoder()
             self.gpu_available = True
             self.engine_ready = True
             print("[Engine] CUDA engine booted successfully")
         except Exception as e:
             print(f"[Engine] CUDA failed ({e}), running CPU-only")
             self.gpu_available = False
-            self.encoder = ThermometerEncoderNomic64x64(
+            self.encoder = RegionFillEncoderNomic768(
                 n_dims=768, lattice_size=4096, region_size=64
             )
             self.combined_encoder = CombinedEncoder()
+            self.training_encoder = TrainingEncoder()
             self.engine_ready = True
 
     def load_embedder(self):

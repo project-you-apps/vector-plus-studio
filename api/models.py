@@ -10,7 +10,7 @@ class MountRequest(BaseModel):
 
 class SearchRequest(BaseModel):
     query: str
-    mode: str = "hamming"     # "hamming" | "smart" | "pure_brain" | "fast"
+    mode: str = "hamming"     # "hamming" | "smart" | "pure_brain" | "fast" | "associate"
     alpha: float = 0.7        # blend slider (0.0-1.0), only for "smart"
     top_k: int = 10
 

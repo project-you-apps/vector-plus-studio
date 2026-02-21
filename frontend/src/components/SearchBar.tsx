@@ -29,6 +29,7 @@ export default function SearchBar() {
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault() }}
           placeholder={status?.mounted_cartridge ? 'What are you looking for?' : 'Mount a cartridge first...'}
           disabled={!status?.mounted_cartridge}
           className="w-full pl-11 pr-10 py-3 bg-slate-800/60 border border-slate-700/50 rounded-xl

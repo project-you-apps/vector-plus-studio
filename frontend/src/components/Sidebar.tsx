@@ -9,6 +9,7 @@ const MODES: { key: SearchMode; label: string; desc: string; tooltip: string }[]
   { key: 'smart', label: 'Smart Search', desc: 'Physics + cosine blend', tooltip: 'Blends neural lattice physics with cosine similarity. Use the slider to control the mix. Best overall quality. Requires GPU mode.' },
   { key: 'pure_brain', label: 'Pure Brain', desc: 'L2 signatures only', tooltip: 'Searches using only the trained neural lattice -- no embedding database needed. Finds associative relationships cosine misses.' },
   { key: 'fast', label: 'Fast', desc: 'Cosine only', tooltip: 'Standard cosine similarity on embeddings. No GPU required. Fastest but misses physics-discovered associations.' },
+  { key: 'associate', label: 'Associate', desc: 'Physics-driven association', tooltip: 'Settle the query through the trained lattice and rank by what the physics surfaces. Finds cross-domain associations (e.g. earthquakes → Poseidon). Requires GPU + trained cartridge.' },
 ]
 
 export default function Sidebar() {
@@ -58,7 +59,7 @@ export default function Sidebar() {
   }
 
   return (
-    <aside className="w-72 border-r border-slate-800 bg-[#131620] flex flex-col overflow-hidden">
+    <aside className="w-72 border-r border-slate-800 bg-[var(--chrome-bg)] flex flex-col overflow-hidden">
       {/* Cartridge List */}
       <div className="p-4 max-h-72 overflow-y-auto shrink-0">
         <h2 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-3 flex items-center gap-2">
@@ -200,21 +201,33 @@ export default function Sidebar() {
         <h2 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Search Mode</h2>
         <div className="space-y-1">
           {MODES.map((m) => {
-            const isSmartDisabled = m.key === 'smart' && !status?.gpu_available
-            const isSmartTraining = m.key === 'smart' && status?.gpu_available && status?.training_active
-            const isSmartReady = m.key === 'smart' && status?.gpu_available && status?.physics_trained && !status?.training_active
+            const needsFullBrain = m.key === 'smart' || m.key === 'associate'
+            const needsSigs = m.key === 'pure_brain'
+            const stillTraining = !!status?.training_active
+            const isDisabled =
+              (needsFullBrain && !status?.gpu_available) ||
+              (needsFullBrain && status?.gpu_available && (!status?.physics_trained || stillTraining)) ||
+              (needsSigs && !status?.signatures_loaded)
+            const isTraining =
+              (needsFullBrain && status?.gpu_available && stillTraining) ||
+              (needsSigs && !status?.signatures_loaded && stillTraining)
+            const isReady =
+              (needsFullBrain && status?.physics_trained && !stillTraining) ||
+              (needsSigs && status?.signatures_loaded)
             let subtitle = m.desc
-            if (isSmartDisabled) subtitle = 'Requires GPU'
-            else if (isSmartTraining) subtitle = 'Training -- available soon'
-            else if (m.key === 'smart' && status?.gpu_available && !status?.physics_trained && !status?.training_active) subtitle = 'Mount a cartridge to enable'
+            if (needsFullBrain && !status?.gpu_available) subtitle = 'Requires GPU'
+            else if (needsSigs && !status?.signatures_loaded && stillTraining) subtitle = 'Building signatures...'
+            else if (needsSigs && !status?.signatures_loaded) subtitle = 'Signatures not available'
+            else if (needsFullBrain && stillTraining) subtitle = 'Training -- available soon'
+            else if (needsFullBrain && status?.gpu_available && !status?.physics_trained && !stillTraining) subtitle = 'Mount a cartridge to enable'
 
             return (
               <button
                 key={m.key}
-                onClick={() => !isSmartDisabled && setSearchMode(m.key)}
-                title={isSmartDisabled ? 'Smart Search requires a GPU -- currently running in CPU mode' : m.tooltip}
+                onClick={() => !isDisabled && !isTraining && setSearchMode(m.key)}
+                title={isDisabled ? (needsSigs ? `${m.label} requires built signatures` : `${m.label} requires a GPU -- currently running in CPU mode`) : m.tooltip}
                 className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-all ${
-                  isSmartDisabled
+                  isDisabled || isTraining
                     ? 'opacity-40 cursor-not-allowed text-slate-500 border border-transparent'
                     : searchMode === m.key
                       ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
@@ -223,8 +236,8 @@ export default function Sidebar() {
               >
                 <div className="font-medium flex items-center gap-2">
                   {m.label}
-                  {isSmartTraining && <Loader2 size={10} className="animate-spin text-amber-400" />}
-                  {isSmartReady && <span className="w-1.5 h-1.5 rounded-full bg-green-400" />}
+                  {isTraining && <Loader2 size={10} className="animate-spin text-amber-400" />}
+                  {isReady && <span className="w-1.5 h-1.5 rounded-full bg-green-400" />}
                 </div>
                 <div className="text-[10px] opacity-60">{subtitle}</div>
               </button>

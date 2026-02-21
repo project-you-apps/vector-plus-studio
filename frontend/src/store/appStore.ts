@@ -188,15 +188,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setSearchMode: (mode) => {
-    set({ searchMode: mode })
-    // Auto-re-search with the new mode if there's already a query
-    const { query } = get()
-    if (query) {
-      // Small delay so the mode state updates before doSearch reads it
-      setTimeout(() => get().doSearch(query), 0)
-    }
+    set({ searchMode: mode, results: [], searchModeLabel: '', searchElapsed: 0 })
   },
-  setBlendAlpha: (alpha) => set({ blendAlpha: alpha }),
+  setBlendAlpha: (alpha) => {
+    set({ blendAlpha: alpha })
+    // Debounce re-search while slider is being dragged
+    clearTimeout((window as any).__blendTimer)
+    ;(window as any).__blendTimer = setTimeout(() => {
+      const { query } = get()
+      if (query) get().doSearch(query)
+    }, 300)
+  },
   setTopK: (k) => set({ topK: k }),
 
   doSearch: async (query: string) => {

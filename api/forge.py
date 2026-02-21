@@ -23,7 +23,7 @@ def extract_text_from_file(filename: str, content: bytes) -> str | None:
     """Extract text from uploaded file bytes."""
     ext = os.path.splitext(filename)[1].lower()
 
-    if ext == ".txt":
+    if ext in (".txt", ".md"):
         return content.decode('utf-8', errors='replace')
 
     elif ext == ".pdf" and PyPDF2:

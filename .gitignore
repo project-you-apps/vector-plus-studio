@@ -6,9 +6,13 @@ __pycache__/
 dist/
 build/
 
-# User data (cartridges contain personal documents)
+# User data (cartridges contain personal documents + generated caches)
 cartridges/*.pkl
 cartridges/*.npy
+cartridges/*.npz
+cartridges/*.json
+cartridges/*.txt
+cartridges/*.jsonl
 !cartridges/.gitkeep
 
 # Sample data - allow small demo cartridges

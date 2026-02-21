@@ -3,6 +3,8 @@
 :root {
   --accent: #667eea;
   --accent-2: #764ba2;
+  --chrome-bg: #131620;
+  color-scheme: dark;
 }
 
 body {
@@ -52,3 +54,36 @@ body {
   -webkit-mask-composite: xor;
   pointer-events: none;
 }
+
+/* ─── Light theme ──────────────────────────────────────────────────────── */
+html.light {
+  color-scheme: light;
+  --chrome-bg: #ffffff;
+
+  /* Invert the slate scale — surfaces (dark → light) */
+  --color-slate-700: oklch(0.869 0.022 252.894);  /* ← slate-300 */
+  --color-slate-800: oklch(0.929 0.013 255.508);  /* ← slate-200 */
+  --color-slate-900: oklch(0.968 0.007 247.896);  /* ← slate-100 */
+
+  /* Invert the slate scale — text (light → dark) */
+  --color-slate-200: oklch(0.208 0.042 265.755);  /* ← slate-900 */
+  --color-slate-300: oklch(0.279 0.041 260.031);  /* ← slate-800 */
+  --color-slate-400: oklch(0.446 0.043 257.281);  /* ← slate-600 */
+  --color-slate-500: oklch(0.554 0.046 257.417);  /* midpoint */
+  --color-slate-600: oklch(0.704 0.04 256.788);   /* ← slate-400 */
+
+  /* Darken accent shades that would be invisible on white */
+  --color-purple-200: oklch(0.627 0.265 303.9);   /* ← purple-500 */
+  --color-purple-300: oklch(0.627 0.265 303.9);   /* ← purple-500 */
+  --color-amber-300: oklch(0.769 0.188 70.08);    /* ← amber-500 */
+  --color-red-300: oklch(0.637 0.237 25.331);     /* ← red-500 */
+}
+
+html.light body {
+  background-color: #f8fafc;
+  color: #1e293b;
+}
+
+html.light ::-webkit-scrollbar-track { background: #f1f5f9; }
+html.light ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+html.light ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }

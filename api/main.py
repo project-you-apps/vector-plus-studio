@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 
-from .engine import engine, TRAIN_SETTLE_FRAMES, SIG_SETTLE_FRAMES, TextRegionEncoder
+from .engine import engine, TRAIN_SETTLE_FRAMES, SIG_SETTLE_FRAMES, TextRegionEncoder, TrainingEncoder
 from .models import (
     MountRequest, SearchRequest, AddPassageRequest,
     CartridgeInfo, CartridgeListResponse, MountResponse,
@@ -561,19 +561,25 @@ def _mount_pkl(filename: str, cart_name: str) -> MountResponse:
 
 
 def _start_background_training(embeddings, passages, cart_name):
-    """Train physics in background thread."""
+    """Train physics in background thread.
+
+    Uses TrainingEncoder (region-fill + text + hippocampus) to match
+    test_cam_poseidon.py pattern assembly exactly.
+    """
     INITIAL_BATCH = 100
 
     # Train first batch synchronously
     ml = engine.ml
-    enc = engine.combined_encoder
+    train_enc = engine.training_encoder
+    # CombinedEncoder still needed for sig capture (text recovery)
+    sig_enc = engine.combined_encoder
     compressed_lens = []
 
     n_train = min(len(embeddings), INITIAL_BATCH)
     with engine.lock:
-        ml.reset()
         for i in range(n_train):
-            pattern, meta = enc.encode(embeddings[i], passages[i])
+            ml.reset()
+            pattern, meta = train_enc.encode(embeddings[i], passages[i], i)
             ml.imprint_pattern(pattern)
             ml.settle(frames=TRAIN_SETTLE_FRAMES, learn=True)
             compressed_lens.append(meta['compressed_len'])
@@ -588,8 +594,8 @@ def _start_background_training(embeddings, passages, cart_name):
 
         thread = threading.Thread(
             target=_background_train,
-            args=(embeddings, passages, enc, ml, INITIAL_BATCH,
-                  cart_name, list(compressed_lens)),
+            args=(embeddings, passages, train_enc, sig_enc, ml,
+                  INITIAL_BATCH, cart_name, list(compressed_lens)),
             daemon=True,
         )
         thread.start()
@@ -598,15 +604,20 @@ def _start_background_training(embeddings, passages, cart_name):
         engine.training_total = len(embeddings)
 
 
-def _background_train(embeddings, passages, enc, ml, start_idx,
-                      cart_name, initial_compressed_lens):
-    """Background training thread."""
+def _background_train(embeddings, passages, train_enc, sig_enc, ml,
+                      start_idx, cart_name, initial_compressed_lens):
+    """Background training thread.
+
+    Uses TrainingEncoder for Hebbian training (region-fill + text + hippocampus).
+    Uses CombinedEncoder (sig_enc) for signature capture (text recovery).
+    """
     compressed_lens = list(initial_compressed_lens)
 
     try:
         for i in range(start_idx, len(embeddings)):
             with engine.lock:
-                pattern, meta = enc.encode(embeddings[i], passages[i])
+                ml.reset()
+                pattern, meta = train_enc.encode(embeddings[i], passages[i], i)
                 ml.imprint_pattern(pattern)
                 ml.settle(frames=TRAIN_SETTLE_FRAMES, learn=True)
 
@@ -616,6 +627,55 @@ def _background_train(embeddings, passages, enc, ml, start_idx,
             time.sleep(0.001)
 
         engine.compressed_lens = compressed_lens
+
+        # ── DIAGNOSTIC: Test Associate with in-memory weights (before save) ──
+        # This isolates save/load vs training as the source of ~49% sign preservation
+        try:
+            test_query = "What causes earthquakes?"
+            from sentence_transformers import SentenceTransformer
+            _diag_model = SentenceTransformer("nomic-ai/nomic-embed-text-v1.5",
+                                              trust_remote_code=True)
+            _diag_emb = _diag_model.encode(f"search_query: {test_query}",
+                                           normalize_embeddings=False)
+            _q_bin = (_diag_emb > 0).astype(np.uint8)
+            _stored_signs = (embeddings > 0).astype(np.uint8)
+            _n_dims = embeddings.shape[1]
+
+            # Encode query as region-fill (4D→reshape layout, matches encoder + standalone)
+            _grid_enc = np.zeros((64, 64, 64, 64), dtype=np.float32)
+            for _i in range(_n_dims):
+                if _diag_emb[_i] > 0:
+                    _grid_enc[_i // 64, _i % 64, :, :] = 1.0
+            _q_pattern = _grid_enc.reshape(4096, 4096)
+
+            with engine.lock:
+                ml.reset()
+                ml.imprint_pattern(_q_pattern)
+                ml.settle(frames=30, learn=False)
+                _settled = ml.recall()
+
+            _grid = _settled.reshape(64, 64, 64, 64)
+            _settled_signs = np.zeros(_n_dims, dtype=np.uint8)
+            for _i in range(_n_dims):
+                _settled_signs[_i] = 1 if np.mean(_grid[_i // 64, _i % 64]) > 0.5 else 0
+
+            _sign_pres = float(np.mean(_q_bin == _settled_signs))
+            _xor = np.bitwise_xor(_settled_signs, _stored_signs)
+            _ham = 1.0 - _xor.sum(axis=1).astype(np.float32) / _n_dims
+            _top5 = np.argsort(_ham)[-5:][::-1]
+
+            print(f"\n{'='*70}")
+            print(f"[DIAG] IN-MEMORY Associate test (before save/load)")
+            print(f"[DIAG] Query: \"{test_query}\"")
+            print(f"[DIAG] Sign preservation: {_sign_pres:.1%}")
+            print(f"[DIAG] Settled stats: nonzero={np.count_nonzero(_settled > 0.5)}")
+            for _rank, _idx in enumerate(_top5):
+                _title = passages[_idx].splitlines()[0][:60] if _idx < len(passages) else "?"
+                print(f"[DIAG]   {_rank+1}. {_ham[_idx]:.4f}  {_title}")
+            print(f"{'='*70}\n")
+            del _diag_model
+        except Exception as _diag_err:
+            print(f"[DIAG] In-memory test failed: {_diag_err}")
 
         # Save brain
         brain_path = os.path.join(DATA_DIR, f"{cart_name}_brain")
@@ -633,12 +693,12 @@ def _background_train(embeddings, passages, enc, ml, start_idx,
         for i in range(len(embeddings)):
             with engine.lock:
                 ml.reset()
-                pattern, _ = enc.encode(embeddings[i], passages[i])
+                pattern, _ = sig_enc.encode(embeddings[i], passages[i])
                 ml.imprint_pattern(pattern)
                 ml.settle(frames=SIG_SETTLE_FRAMES, learn=False)
                 signatures[i] = ml.recall_l3().flatten()
 
-            compressed_bytes = enc.text_encoder.compress_text(passages[i])
+            compressed_bytes = sig_enc.text_encoder.compress_text(passages[i])
             compressed_texts.append(compressed_bytes)
 
         titles = [p.splitlines()[0][:50] if p else "" for p in passages]
@@ -647,6 +707,63 @@ def _background_train(embeddings, passages, enc, ml, start_idx,
         engine.signatures = signatures
         engine.signatures_loaded = True
         engine.compressed_texts = compressed_texts
+
+        # Restore clean post-training brain state.
+        # The 10K signature capture settles accumulate fatigue/BCM state
+        # that flattens the energy landscape into a single attractor.
+        # Reloading the brain (saved before sig capture) resets this.
+        with engine.lock:
+            ml.load_brain(actual_path)
+        print(f"[BG Training] Brain restored after sig capture")
+
+        # ── DIAGNOSTIC 2: Test Associate AFTER save/load round-trip ──
+        try:
+            test_query = "What causes earthquakes?"
+            from sentence_transformers import SentenceTransformer
+            _diag_model = SentenceTransformer("nomic-ai/nomic-embed-text-v1.5",
+                                              trust_remote_code=True)
+            _diag_emb = _diag_model.encode(f"search_query: {test_query}",
+                                           normalize_embeddings=False)
+            _q_bin = (_diag_emb > 0).astype(np.uint8)
+            _stored_signs = (embeddings > 0).astype(np.uint8)
+            _n_dims = embeddings.shape[1]
+
+            # Region-fill query pattern (4D→reshape layout, matches encoder + standalone)
+            _grid_enc = np.zeros((64, 64, 64, 64), dtype=np.float32)
+            for _i in range(_n_dims):
+                if _diag_emb[_i] > 0:
+                    _grid_enc[_i // 64, _i % 64, :, :] = 1.0
+            _q_pattern = _grid_enc.reshape(4096, 4096)
+
+            # Test on SHARED engine (loaded brain)
+            with engine.lock:
+                ml.reset()
+                ml.imprint_pattern(_q_pattern)
+                ml.settle(frames=30, learn=False)
+                _settled = ml.recall()
+
+            _grid = _settled.reshape(64, 64, 64, 64)
+            _settled_signs = np.zeros(_n_dims, dtype=np.uint8)
+            for _i in range(_n_dims):
+                _settled_signs[_i] = 1 if np.mean(_grid[_i // 64, _i % 64]) > 0.5 else 0
+
+            _sign_pres = float(np.mean(_q_bin == _settled_signs))
+            _xor = np.bitwise_xor(_settled_signs, _stored_signs)
+            _ham = 1.0 - _xor.sum(axis=1).astype(np.float32) / _n_dims
+            _top5 = np.argsort(_ham)[-5:][::-1]
+
+            print(f"\n{'='*70}")
+            print(f"[DIAG2] POST-SAVE Associate test (shared engine, loaded brain)")
+            print(f"[DIAG2] Query: \"{test_query}\"")
+            print(f"[DIAG2] Sign preservation: {_sign_pres:.1%}")
+            print(f"[DIAG2] Settled stats: nonzero={np.count_nonzero(_settled > 0.5)}")
+            for _rank, _idx in enumerate(_top5):
+                _title = passages[_idx].splitlines()[0][:60] if _idx < len(passages) else "?"
+                print(f"[DIAG2]   {_rank+1}. {_ham[_idx]:.4f}  {_title}")
+            print(f"{'='*70}\n")
+            del _diag_model
+        except Exception as _diag_err:
+            print(f"[DIAG2] Post-save test failed: {_diag_err}")
 
     except Exception as e:
         print(f"[BG Training] ERROR: {e}")
@@ -829,16 +946,20 @@ def _add_passage_sync(text: str) -> MessageResponse:
 
     new_idx = len(engine.passages) - 1
 
-    # If GPU + combined encoder: encode multimodal, imprint, settle+learn, capture L2
-    if engine.gpu_available and engine.ml and engine.combined_encoder:
+    # If GPU + training encoder: imprint, settle+learn, capture signature
+    if engine.gpu_available and engine.ml and engine.training_encoder:
+        # Train with TrainingEncoder (region-fill + text + hippocampus)
         with engine.lock:
-            pattern, meta = engine.combined_encoder.encode(embedding, text)
-            engine.ml.imprint_pattern(pattern)
+            engine.ml.reset()
+            train_pattern, meta = engine.training_encoder.encode(
+                embedding, text, new_idx)
+            engine.ml.imprint_pattern(train_pattern)
             engine.ml.settle(frames=TRAIN_SETTLE_FRAMES, learn=True)
 
-            # Capture L3 signature (256x256 = 65536 floats)
+            # Capture L3 signature using CombinedEncoder (for text recovery)
             engine.ml.reset()
-            engine.ml.imprint_pattern(pattern)
+            sig_pattern, _ = engine.combined_encoder.encode(embedding, text)
+            engine.ml.imprint_pattern(sig_pattern)
             engine.ml.settle(frames=SIG_SETTLE_FRAMES, learn=False)
             new_sig = engine.ml.recall_l3().flatten()
 

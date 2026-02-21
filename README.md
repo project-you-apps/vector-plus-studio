@@ -22,7 +22,7 @@ The Streamlit UI has been replaced with a proper web application:
 ### Full CRUD
 
 - **Create**: Add Passage editor (full-width workspace) + Build Cartridge from files (txt, pdf, docx)
-- **Read**: Three search modes (Smart blend, Pure Brain, Fast cosine), keyword highlighting with stemming, Top-K selector, "Must contain keywords" strict filter
+- **Read**: Five search modes (Hamming Blend, Smart Search, Pure Brain, Fast cosine, Associate), keyword highlighting with stemming, Top-K selector, "Must contain keywords" strict filter
 - **Update**: Edit Passage via pencil button on result cards -- saves new version, tombstones original (copy-on-write with full undo)
 - **Delete**: Trashcan with confirmation bar, soft-delete tombstoning
 - **Restore**: Recover any tombstoned pattern from the sidebar panel
@@ -33,6 +33,25 @@ The Streamlit UI has been replaced with a proper web application:
 - Keyword reranking with stop-word filtering
 - Clear button to reset search results
 - CPU/GPU mode indicator with tooltips
+
+### Associate Search: Retrieval That Reasons
+
+Traditional vector search finds what *matches*. Associate search finds what *relates*.
+
+**Example:** Query a 10,000-article Wikipedia cartridge with *"What is the ancient explanation for earthquakes?"*
+
+| Mode | #1 Result | #3 Result | Mechanism |
+|------|-----------|-----------|-----------|
+| **Hamming Blend** | Earthquake | Poseidon (#2) | Keyword boost on "earthquakes" + "ancient" |
+| **Associate** | **Poseidon** | Earthquake | Physics attractor basin — inferred the connection |
+
+Associate mode works by encoding the query into a 4096x4096 neuron grid, then running 30 frames of physics (lateral inhibition, Hebbian weight activation, Boltzmann noise) on the trained brain. The query pattern doesn't just sit there — it *settles* into an attractor basin shaped by every pattern the lattice has ever learned. The output is decoded back to a sign vector and compared against the full corpus via Hamming distance.
+
+The Poseidon entry says *"god of the sea, earthquakes, storms and horses in ancient Greek religion."* It doesn't say *"Poseidon is the ancient explanation for earthquakes."* The lattice inferred that connection by settling through learned weight space — the same process biological neural networks use for associative recall.
+
+No LLM in the loop. No reranking model. No chain-of-thought prompting. The embeddings come from `nomic-embed-text-v1`, a 137M-parameter BERT derivative with zero reasoning ability. It maps text to points in vector space. That's it.
+
+The reasoning happens in the physics.
 
 ### Cartridge Management
 

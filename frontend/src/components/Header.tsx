@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Cpu, Save, Zap } from 'lucide-react'
+import { Cpu, Moon, Save, Sun, Zap } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 
 export default function Header() {
@@ -7,6 +7,16 @@ export default function Header() {
   const saveCartridge = useAppStore((s) => s.saveCartridge)
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
+  const [theme, setTheme] = useState(() =>
+    document.documentElement.classList.contains('light') ? 'light' : 'dark'
+  )
+
+  const toggleTheme = () => {
+    const next = theme === 'dark' ? 'light' : 'dark'
+    setTheme(next)
+    localStorage.setItem('vps-theme', next)
+    document.documentElement.classList.toggle('light', next === 'light')
+  }
 
   const handleSave = async () => {
     setSaving(true)
@@ -20,7 +30,7 @@ export default function Header() {
   }
 
   return (
-    <header className="flex items-center justify-between px-6 py-3 border-b border-slate-800 bg-[#131620]">
+    <header className="flex items-center justify-between px-6 py-3 border-b border-slate-800 bg-[var(--chrome-bg)]">
       <div className="flex items-center gap-3">
         <div className="gradient-bg w-8 h-8 rounded-lg flex items-center justify-center">
           <Zap size={18} className="text-white" />
@@ -68,6 +78,14 @@ export default function Header() {
             {status?.gpu_available ? 'GPU' : 'CPU'}
           </span>
         </div>
+
+        <button
+          onClick={toggleTheme}
+          className="p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 transition-colors"
+          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        >
+          {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+        </button>
       </div>
     </header>
   )
