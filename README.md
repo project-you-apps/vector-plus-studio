@@ -26,6 +26,7 @@ The Streamlit UI has been replaced with a proper web application:
 - **Update**: Edit Passage via pencil button on result cards -- saves new version, tombstones original (copy-on-write with full undo)
 - **Delete**: Trashcan with confirmation bar, soft-delete tombstoning
 - **Restore**: Recover any tombstoned pattern from the sidebar panel
+- **Read-Only Lock**: Cartridges mount locked by default. Explicit unlock required before any writes (add, edit, delete, save). Lock/Unlock toggle in the header with visual state indicator
 
 ### Search Features
 
@@ -59,6 +60,7 @@ The reasoning happens in the physics.
 - File picker (native OS dialog + paste-a-path fallback)
 - Cross-format support: PKL, NPY brain, NPZ signatures, membot .cart.npz
 - Explicit Save button with unsaved-changes warning on exit
+- Read-only lock: cartridges mount locked, unlock button in header
 - Build new cartridges from uploaded documents
 
 ### Quick Start (v1.0)
@@ -168,9 +170,9 @@ The trained "brain" file is **fixed at 128MB regardless of dataset size**:
 |---------|-----------------|------------|
 | 10k articles | ~30 MB | **128 MB** |
 | 100k articles | ~300 MB | **128 MB** |
-| 500k articles | ~1.5 GB | **128 MB** |
+| 1M articles | ~3 GB | **128 MB** |
 
-This is how biological memory works - patterns are stored holographically in synaptic weights, not as separate records. The same 128MB weight matrix can encode 10k or 500k patterns.
+This is how biological memory works - patterns are stored holographically in synaptic weights, not as separate records. The same 128MB weight matrix can encode 10k or 1 million patterns. Validated at 1M Wikipedia embeddings with R@1=1.000 under clean, erasure, and bitflip conditions.
 
 ## Features
 
@@ -216,9 +218,9 @@ The first search will take ~30 seconds while the embedding model (Nomic Embed v1
 
 ## How It Works
 
-1. **Thermometer Encoding**: Each embedding dimension maps to a 64x64 region of the lattice
+1. **Encoding**: Embeddings are mapped onto the 4096x4096 neuron lattice via region-fill (search) or thermometer (recall) encoding
 2. **Hebbian Training**: Patterns are learned into synaptic weights during cartridge mount
-3. **Physics-Enhanced Query**: Query embedding is encoded → settled (physics shapes it) → decoded back
+3. **Physics-Enhanced Query**: Query embedding is encoded → settled through 30 frames of neural physics → decoded back
 4. **Associative Search**: The "physics-cleaned" embedding finds semantic neighborhoods, not just exact matches
 5. **Keyword Boosting**: Full-text phrase matching re-ranks top candidates
 
@@ -273,11 +275,11 @@ The Python wrapper and utilities are open source under MIT. The compiled CUDA ph
 
 ## Future Direction and Updates
 
-- **v1.0 (Current)**: React frontend + FastAPI backend, full CRUD, passage editor, Top-K selector, strict keyword filter
+- **v1.0 (Current)**: React frontend + FastAPI backend, full CRUD, passage editor, Top-K selector, strict keyword filter, read-only lock default
 - **v0.83**: L2 hierarchy search, blended 70/30 scoring, keyword reranking, MCP server integration
 - **v0.82**: Pure signature search, protected rows, per-row physics control
 - **v0.81**: Physics-enhanced search -- queries go through real neural physics
-- **Planned**: Edit locking via hippocampus metadata, INT8/binary physics engine, FPGA validation
+- **Planned**: Per-pattern metadata and permissions, INT8/binary physics engine, FPGA validation
 
 ---
 
