@@ -82,6 +82,7 @@ class StatusResponse(BaseModel):
     signatures_loaded: bool = False
     deleted_count: int = 0
     dirty: bool = False
+    read_only: bool = True
 
 class DeletedPattern(BaseModel):
     idx: int

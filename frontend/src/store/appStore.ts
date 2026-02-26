@@ -63,6 +63,7 @@ interface AppState {
   mount: (filename: string) => Promise<void>
   unmount: () => Promise<void>
   saveCartridge: () => Promise<{ success: boolean; message: string }>
+  toggleLock: () => Promise<void>
   setSearchMode: (mode: SearchMode) => void
   setBlendAlpha: (alpha: number) => void
   setTopK: (k: number) => void
@@ -228,6 +229,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch (e) {
       console.error('Save failed:', e)
       return { success: false, message: e instanceof Error ? e.message : 'Save failed' }
+    }
+  },
+
+  toggleLock: async () => {
+    try {
+      const isLocked = get().status?.read_only ?? true
+      if (isLocked) {
+        await api.unlockCartridge()
+      } else {
+        await api.lockCartridge()
+      }
+      await get().fetchStatus()
+    } catch (e) {
+      console.error('Lock toggle failed:', e)
     }
   },
 

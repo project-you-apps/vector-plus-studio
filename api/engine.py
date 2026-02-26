@@ -207,6 +207,9 @@ class EngineManager:
         self.training_encoder: TrainingEncoder | None = None
         self.embedder = None  # SentenceTransformer (lazy)
 
+        # Write protection — default read-only, explicit unlock required
+        self.read_only = True
+
         # Cartridge state
         self.mounted_name: str | None = None
         self.mounted_path: str | None = None  # full path if opened from file picker
@@ -312,6 +315,7 @@ class EngineManager:
         self.training_progress = 0
         self.training_total = 0
         self.dirty = False
+        self.read_only = True
         self.hippocampus = None
 
     def shutdown(self):

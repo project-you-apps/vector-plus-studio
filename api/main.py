@@ -86,6 +86,7 @@ async def get_status():
         signatures_loaded=engine.signatures_loaded,
         deleted_count=len(engine.deleted_ids),
         dirty=engine.dirty,
+        read_only=engine.read_only,
     )
 
 
@@ -788,10 +789,26 @@ async def unmount_cartridge():
     return MessageResponse(success=True, message=f"Unmounted {name}")
 
 
+@app.post("/api/cartridges/lock", response_model=MessageResponse)
+async def lock_cartridge():
+    engine.read_only = True
+    return MessageResponse(success=True, message="Cartridge locked (read-only)")
+
+
+@app.post("/api/cartridges/unlock", response_model=MessageResponse)
+async def unlock_cartridge():
+    if not engine.mounted_name:
+        return MessageResponse(success=False, message="No cartridge mounted")
+    engine.read_only = False
+    return MessageResponse(success=True, message="Cartridge unlocked (read-write)")
+
+
 @app.post("/api/cartridges/save", response_model=MessageResponse)
 async def save_cartridge():
     if not engine.mounted_name:
         return MessageResponse(success=False, message="No cartridge mounted")
+    if engine.read_only:
+        return MessageResponse(success=False, message="Cartridge is read-only. Unlock first.")
     if not engine.dirty:
         return MessageResponse(success=True, message="Nothing to save")
 
@@ -900,6 +917,8 @@ async def search_endpoint(req: SearchRequest):
 
 @app.delete("/api/patterns/{idx}", response_model=MessageResponse)
 async def delete_pattern(idx: int):
+    if engine.read_only:
+        return MessageResponse(success=False, message="Cartridge is read-only. Unlock first.")
     if idx < 0 or idx >= len(engine.passages):
         return MessageResponse(success=False, message=f"Invalid index: {idx}")
     engine.deleted_ids.add(idx)
@@ -908,6 +927,8 @@ async def delete_pattern(idx: int):
 
 @app.post("/api/patterns/{idx}/restore", response_model=MessageResponse)
 async def restore_pattern(idx: int):
+    if engine.read_only:
+        return MessageResponse(success=False, message="Cartridge is read-only. Unlock first.")
     engine.deleted_ids.discard(idx)
     return MessageResponse(success=True, message=f"Pattern {idx} restored")
 
@@ -959,6 +980,8 @@ async def get_pattern(idx: int):
 async def add_passage(req: AddPassageRequest):
     if not engine.mounted_name:
         return MessageResponse(success=False, message="No cartridge mounted")
+    if engine.read_only:
+        return MessageResponse(success=False, message="Cartridge is read-only. Unlock first.")
 
     text = req.text.strip()
     if not text:
@@ -1025,6 +1048,8 @@ async def forge_endpoint(
     name: str = Form(...),
     files: list[UploadFile] = File(...),
 ):
+    if engine.read_only and engine.mounted_name:
+        return MessageResponse(success=False, message="Cartridge is read-only. Unlock first.")
     file_data = []
     for f in files:
         content = await f.read()

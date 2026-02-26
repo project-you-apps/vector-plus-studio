@@ -54,6 +54,7 @@ export interface StatusResponse {
   signatures_loaded: boolean
   deleted_count: number
   dirty: boolean
+  read_only: boolean
 }
 
 export interface DeletedPattern {

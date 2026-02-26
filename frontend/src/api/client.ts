@@ -49,6 +49,20 @@ export async function saveCartridge() {
   )
 }
 
+export async function lockCartridge() {
+  return fetchJSON<{ success: boolean; message: string }>(
+    '/cartridges/lock',
+    { method: 'POST' }
+  )
+}
+
+export async function unlockCartridge() {
+  return fetchJSON<{ success: boolean; message: string }>(
+    '/cartridges/unlock',
+    { method: 'POST' }
+  )
+}
+
 export async function search(
   query: string,
   mode: SearchMode,

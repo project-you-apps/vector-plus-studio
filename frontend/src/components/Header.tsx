@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Cpu, Moon, Save, Sun, Zap } from 'lucide-react'
+import { Cpu, Lock, LockOpen, Moon, Save, Sun, Zap } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 
 export default function Header() {
   const status = useAppStore((s) => s.status)
   const saveCartridge = useAppStore((s) => s.saveCartridge)
+  const toggleLock = useAppStore((s) => s.toggleLock)
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
   const [theme, setTheme] = useState(() =>
@@ -64,6 +65,22 @@ export default function Header() {
         {/* Save confirmation message */}
         {saveMsg && !status?.dirty && (
           <span className="text-xs text-green-400">{saveMsg}</span>
+        )}
+
+        {/* Lock/Unlock toggle */}
+        {status?.mounted_cartridge && (
+          <button
+            onClick={toggleLock}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              status.read_only
+                ? 'bg-red-500/15 text-red-400 hover:bg-red-500/25'
+                : 'bg-green-500/15 text-green-400 hover:bg-green-500/25'
+            }`}
+            title={status.read_only ? 'Click to unlock for editing' : 'Click to lock (read-only)'}
+          >
+            {status.read_only ? <Lock size={14} /> : <LockOpen size={14} />}
+            {status.read_only ? 'Read-only' : 'Unlocked'}
+          </button>
         )}
 
         <div
