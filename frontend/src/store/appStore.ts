@@ -49,6 +49,14 @@ interface AppState {
   setEditorText: (text: string) => void
   saveEditor: () => Promise<{ success: boolean; message: string }>
 
+  // Passage modal (full reader with PREV/NEXT navigation)
+  modalOpen: boolean
+  modalPassage: { idx: number; title: string; full_text: string; prev_idx: number | null; next_idx: number | null } | null
+  modalLoading: boolean
+  openModal: (result: SearchResult) => void
+  closeModal: () => void
+  navigateModal: (idx: number) => Promise<void>
+
   // Actions
   fetchStatus: () => Promise<void>
   fetchCartridges: () => Promise<void>
@@ -63,6 +71,7 @@ interface AppState {
   deleteResult: (idx: number) => Promise<void>
   restoreResult: (idx: number) => Promise<void>
   fetchDeleted: () => Promise<void>
+  navigateToPattern: (idx: number) => Promise<void>
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -127,6 +136,41 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   confirmDeleteIdx: null,
   setConfirmDeleteIdx: (idx) => set({ confirmDeleteIdx: idx }),
+
+  // Passage modal
+  modalOpen: false,
+  modalPassage: null,
+  modalLoading: false,
+  openModal: (result) => set({
+    modalOpen: true,
+    modalPassage: {
+      idx: result.idx,
+      title: result.title,
+      full_text: result.full_text,
+      prev_idx: result.prev_idx,
+      next_idx: result.next_idx,
+    },
+  }),
+  closeModal: () => set({ modalOpen: false, modalPassage: null }),
+  navigateModal: async (idx: number) => {
+    set({ modalLoading: true })
+    try {
+      const pattern = await api.getPattern(idx)
+      set({
+        modalPassage: {
+          idx: pattern.idx,
+          title: pattern.title,
+          full_text: pattern.full_text,
+          prev_idx: pattern.prev_idx,
+          next_idx: pattern.next_idx,
+        },
+      })
+    } catch (e) {
+      console.error('Modal navigate failed:', e)
+    } finally {
+      set({ modalLoading: false })
+    }
+  },
 
   fetchStatus: async () => {
     set({ statusLoading: true })
@@ -264,6 +308,39 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ deletedPatterns: deleted })
     } catch (e) {
       console.error('Fetch deleted failed:', e)
+    }
+  },
+
+  navigateToPattern: async (idx: number) => {
+    set({ searching: true })
+    try {
+      const pattern = await api.getPattern(idx)
+      // Replace results with the single navigated-to pattern
+      const result: SearchResult = {
+        rank: 1,
+        idx: pattern.idx,
+        score: 0,
+        cosine_score: null,
+        physics_score: null,
+        hamming_score: null,
+        keyword_boost: null,
+        title: pattern.title,
+        preview: pattern.preview,
+        full_text: pattern.full_text,
+        from_lattice: false,
+        prev_idx: pattern.prev_idx,
+        next_idx: pattern.next_idx,
+      }
+      set({
+        results: [result],
+        searchModeLabel: `Navigate → #${idx}`,
+        searchElapsed: 0,
+        query: '',
+      })
+    } catch (e) {
+      console.error('Navigate failed:', e)
+    } finally {
+      set({ searching: false })
     }
   },
 }))

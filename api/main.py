@@ -22,11 +22,12 @@ from .models import (
     CartridgeInfo, CartridgeListResponse, MountResponse,
     SearchResult, SearchResponse, StatusResponse,
     DeletedPattern, DeletedListResponse, MessageResponse,
+    PatternResponse,
 )
 from .cartridge_io import (
     list_cartridges as _list_cartridges, load_cartridge, load_signatures,
     find_cartridge_path, find_companion_file, validate_brain_manifest,
-    save_brain_manifest, save_signatures, DATA_DIR,
+    save_brain_manifest, save_signatures, DATA_DIR, parse_hippocampus,
 )
 from .search import search as do_search
 from .forge import forge_cartridge
@@ -220,6 +221,7 @@ def _mount_membot_npz(full_path: str, cart_name: str) -> MountResponse:
         emb = data['embeddings']
         passages_raw = data['passages']
         txt = [str(p) for p in passages_raw]
+        hippo = parse_hippocampus(data)
         data.close()
     except Exception as e:
         return MountResponse(success=False, message=f"Failed to load membot cartridge: {e}")
@@ -240,7 +242,13 @@ def _mount_membot_npz(full_path: str, cart_name: str) -> MountResponse:
     engine.training_progress = len(emb)
     engine.training_total = len(emb)
 
+    # Load hippocampus navigation data if present
+    engine.hippocampus = hippo
+
     message_parts = [f"{len(txt)} patterns", f"from {cart_dir}"]
+    if hippo is not None:
+        n_linked = sum(1 for h in hippo if h.get("prev") is not None or h.get("next") is not None)
+        message_parts.append(f"Hippo: {n_linked} linked")
 
     # Check for companion signatures
     sig_candidates = [
@@ -867,10 +875,14 @@ async def search_endpoint(req: SearchRequest):
             score=r['score'],
             cosine_score=r.get('cosine_score'),
             physics_score=r.get('physics_score'),
+            hamming_score=r.get('hamming_score'),
+            keyword_boost=r.get('keyword_boost'),
             title=r['title'],
             preview=r['preview'],
             full_text=r['full_text'],
             from_lattice=r.get('from_lattice', False),
+            prev_idx=r.get('prev_idx'),
+            next_idx=r.get('next_idx'),
         ))
 
     return SearchResponse(
@@ -883,7 +895,7 @@ async def search_endpoint(req: SearchRequest):
 
 
 # ---------------------------------------------------------------------------
-# Patterns (Delete / Restore)
+# Patterns (Fetch / Delete / Restore)
 # ---------------------------------------------------------------------------
 
 @app.delete("/api/patterns/{idx}", response_model=MessageResponse)
@@ -913,6 +925,30 @@ async def list_deleted():
                 preview=" ".join(lines[1:3])[:200] if len(lines) > 1 else "",
             ))
     return DeletedListResponse(deleted=deleted)
+
+
+@app.get("/api/patterns/{idx}", response_model=PatternResponse)
+async def get_pattern(idx: int):
+    """Fetch a single pattern by index, with hippocampus PREV/NEXT links."""
+    if idx < 0 or idx >= len(engine.passages):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Pattern {idx} not found")
+
+    text = engine.passages[idx]
+    lines = text.splitlines() if text else ["[empty]"]
+    title = lines[0][:100]
+    preview = " ".join(lines[1:3])[:200] if len(lines) > 1 else ""
+
+    prev_idx = None
+    next_idx = None
+    if engine.hippocampus is not None and idx < len(engine.hippocampus):
+        prev_idx = engine.hippocampus[idx].get('prev')
+        next_idx = engine.hippocampus[idx].get('next')
+
+    return PatternResponse(
+        idx=idx, title=title, preview=preview, full_text=text,
+        prev_idx=prev_idx, next_idx=next_idx,
+    )
 
 
 # ---------------------------------------------------------------------------

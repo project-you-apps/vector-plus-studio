@@ -580,7 +580,8 @@ def search(query: str, mode: str = "smart", alpha: float = 0.7,
             results = []
             mode_label = "No data"
 
-    # Attach text to results
+    # Attach text and hippocampus navigation to results
+    hippo = engine.hippocampus
     for r in results:
         idx = r['idx']
         text = r.get('recovered_text') or (passages[idx] if idx < len(passages) else "")
@@ -590,5 +591,10 @@ def search(query: str, mode: str = "smart", alpha: float = 0.7,
         r['full_text'] = text or ""
         if 'recovered_text' in r:
             del r['recovered_text']
+
+        # PREV/NEXT from hippocampus metadata
+        if hippo is not None and idx < len(hippo):
+            r['prev_idx'] = hippo[idx].get('prev')
+            r['next_idx'] = hippo[idx].get('next')
 
     return results, mode_label

@@ -20,6 +20,17 @@ export interface SearchResult {
   preview: string
   full_text: string
   from_lattice: boolean
+  prev_idx: number | null
+  next_idx: number | null
+}
+
+export interface PatternResponse {
+  idx: number
+  title: string
+  preview: string
+  full_text: string
+  prev_idx: number | null
+  next_idx: number | null
 }
 
 export interface SearchResponse {

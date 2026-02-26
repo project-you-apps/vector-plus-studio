@@ -8,9 +8,47 @@ import os
 import pickle
 import hashlib
 import json
+import struct
 import numpy as np
 
 from .engine import engine, TextRegionEncoder
+
+
+# ---------------------------------------------------------------------------
+# Hippocampus metadata parsing (matches membot cartridge_builder.py format)
+# ---------------------------------------------------------------------------
+
+# 64-byte struct: pattern_id(I) format_version(B) cartridge_type(B)
+#   parent_ptr(I) child_ptr(I) sibling_ptr(I) source_hash(I)
+#   sequence_num(H) timestamp(I) flags(B) reserved(35s)
+HIPPO_FORMAT = '<I B B I I I I H I B 35s'
+HIPPO_SIZE = 64
+
+
+def parse_hippocampus(npz_data) -> list[dict] | None:
+    """Parse hippocampus metadata from a loaded .cart.npz file.
+
+    Returns list of dicts with 'prev' and 'next' as 0-based passage indices,
+    or None if no hippocampus data exists.
+    """
+    if "hippocampus" not in npz_data:
+        return None
+
+    raw = npz_data["hippocampus"]  # shape: (n, 64) uint8
+    result = []
+    for row in raw:
+        vals = struct.unpack(HIPPO_FORMAT, row.tobytes())
+        # vals[3] = parent_ptr (PREV), vals[4] = child_ptr (NEXT)
+        # These are 1-based pattern_ids (0 = no link). Convert to 0-based passage index.
+        prev = (vals[3] - 1) if vals[3] > 0 else None
+        nxt = (vals[4] - 1) if vals[4] > 0 else None
+        result.append({
+            "prev": prev,
+            "next": nxt,
+            "source_hash": vals[6],
+            "sequence_num": vals[7],
+        })
+    return result
 
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cartridges")

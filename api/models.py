@@ -59,6 +59,8 @@ class SearchResult(BaseModel):
     preview: str
     full_text: str
     from_lattice: bool = False
+    prev_idx: int | None = None
+    next_idx: int | None = None
 
 class SearchResponse(BaseModel):
     query: str
@@ -88,6 +90,14 @@ class DeletedPattern(BaseModel):
 
 class DeletedListResponse(BaseModel):
     deleted: list[DeletedPattern]
+
+class PatternResponse(BaseModel):
+    idx: int
+    title: str
+    preview: str
+    full_text: str
+    prev_idx: int | None = None
+    next_idx: int | None = None
 
 class MessageResponse(BaseModel):
     success: bool

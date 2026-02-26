@@ -5,6 +5,7 @@ import Sidebar from './components/Sidebar'
 import SearchBar from './components/SearchBar'
 import ResultsList from './components/ResultsList'
 import PassageEditor from './components/PassageEditor'
+import PassageModal from './components/PassageModal'
 
 export default function App() {
   const { fetchStatus, status, editorOpen } = useAppStore()
@@ -56,6 +57,7 @@ export default function App() {
           )}
         </main>
       </div>
+      <PassageModal />
     </div>
   )
 }

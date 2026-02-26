@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { ChevronDown, ChevronRight, Pencil, Trash2, X, Zap } from 'lucide-react'
+import { ChevronDown, ChevronRight, BookOpen, Pencil, Trash2, X, Zap } from 'lucide-react'
 import type { SearchResult } from '../api/types'
 import { useAppStore } from '../store/appStore'
 
@@ -95,10 +95,12 @@ export default function ResultCard({ result }: Props) {
   const [expanded, setExpanded] = useState(false)
   const deleteResult = useAppStore((s) => s.deleteResult)
   const openEditor = useAppStore((s) => s.openEditor)
+  const openModal = useAppStore((s) => s.openModal)
   const query = useAppStore((s) => s.query)
   const confirmDeleteIdx = useAppStore((s) => s.confirmDeleteIdx)
   const setConfirmDeleteIdx = useAppStore((s) => s.setConfirmDeleteIdx)
   const isConfirming = confirmDeleteIdx === result.idx
+  const hasLinks = result.prev_idx != null || result.next_idx != null
 
   return (
     <div className="border border-slate-700/40 rounded-xl bg-slate-800/20 hover:bg-slate-800/40 transition-all overflow-hidden">
@@ -116,8 +118,8 @@ export default function ResultCard({ result }: Props) {
           </span>
         </button>
 
-        {/* Title + preview */}
-        <div className="flex-1 min-w-0">
+        {/* Title + preview (click to expand) */}
+        <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setExpanded(!expanded)}>
           <div className="flex items-center gap-2 mb-1">
             <h3 className="font-medium text-slate-200 truncate">{result.title}</h3>
             {result.from_lattice && (
@@ -201,6 +203,15 @@ export default function ResultCard({ result }: Props) {
           <pre className="text-sm text-slate-400 whitespace-pre-wrap font-mono leading-relaxed max-h-96 overflow-y-auto">
             {result.full_text ? highlightText(result.full_text, query) : '[No text available]'}
           </pre>
+          {hasLinks && (
+            <button
+              onClick={() => openModal(result)}
+              className="mt-3 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 text-xs font-medium transition-colors"
+            >
+              <BookOpen size={12} />
+              MORE
+            </button>
+          )}
         </div>
       )}
     </div>

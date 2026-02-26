@@ -1,4 +1,4 @@
-import type { CartridgeInfo, SearchResponse, StatusResponse, DeletedPattern, SearchMode } from './types'
+import type { CartridgeInfo, SearchResponse, StatusResponse, DeletedPattern, SearchMode, PatternResponse } from './types'
 
 const BASE = '/api'
 
@@ -59,6 +59,10 @@ export async function search(
     method: 'POST',
     body: JSON.stringify({ query, mode, alpha, top_k }),
   })
+}
+
+export async function getPattern(idx: number): Promise<PatternResponse> {
+  return fetchJSON(`/patterns/${idx}`)
 }
 
 export async function deletePattern(idx: number) {

@@ -222,6 +222,9 @@ class EngineManager:
         self.deleted_ids: set[int] = set()
         self.dirty = False  # True when in-memory state differs from disk
 
+        # Hippocampus navigation (loaded from .cart.npz hippocampus metadata)
+        self.hippocampus: list[dict] | None = None  # list of {prev, next, source_hash, sequence_num}
+
         # Background training state
         self.training_active = False
         self.training_progress = 0
@@ -309,6 +312,7 @@ class EngineManager:
         self.training_progress = 0
         self.training_total = 0
         self.dirty = False
+        self.hippocampus = None
 
     def shutdown(self):
         """Clean shutdown."""
