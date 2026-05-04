@@ -11,6 +11,7 @@ import PassageModal from './components/PassageModal'
 import MemboxPanel from './components/MemboxPanel'
 import OverviewScreen from './components/OverviewScreen'
 import SettingsScreen from './components/SettingsScreen'
+import CartBuilderScreen from './components/CartBuilderScreen'
 
 // Stub placeholders for nav-rail screens introduced in 2026-05-03 reorg.
 // Each will be promoted to its own component file as it gets fleshed out.
@@ -87,12 +88,7 @@ export default function App() {
 
         {activeScreen === 'overview' && <OverviewScreen />}
 
-        {activeScreen === 'cartBuilder' && (
-          <ScreenStub
-            title="Cart Builder"
-            body="Drag-and-drop cart creation from documents. The hackathon prep work for this is mostly complete — next pass ports it into this screen. Will support .txt / .pdf / .docx / .md / .jsonl ingestion with chunker config and manifest preview."
-          />
-        )}
+        {activeScreen === 'cartBuilder' && <CartBuilderScreen />}
 
         {activeScreen === 'sql' && (
           <ScreenStub
