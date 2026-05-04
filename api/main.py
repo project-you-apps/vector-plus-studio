@@ -23,7 +23,70 @@ from .models import (
     SearchResult, SearchResponse, StatusResponse,
     DeletedPattern, DeletedListResponse, MessageResponse,
     PatternResponse,
+    MemboxLockState, MemboxCartInfo, MemboxWriteEntry, MemboxStatus,
+    MemboxCartListResponse, MemboxImprintRequest,
+    MemboxMountRequest, MemboxUnmountRequest,
 )
+
+# Import membox + multi_cart from the sibling membot/ repo without polluting sys.path.
+# We use importlib so membot's directory is NEVER added to sys.path -- this avoids
+# shadowing VPS-local modules like multi_lattice_wrapper_v7.py that exist in BOTH repos.
+import importlib.util as _ilu
+import os as _os
+_membot_dir = _os.path.abspath(_os.path.join(
+    _os.path.dirname(__file__), '..', '..', 'membot'
+))
+
+def _load_membot_module(name: str):
+    """Load a membot top-level .py file by absolute path, isolated from sys.path."""
+    path = _os.path.join(_membot_dir, f"{name}.py")
+    if not _os.path.isfile(path):
+        return None
+    spec = _ilu.spec_from_file_location(f"_membot_{name}", path)
+    if spec is None or spec.loader is None:
+        return None
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+print(f"[VPS] Membox loader: membot dir = {_membot_dir}")
+try:
+    # Strategy: temporarily prepend membot/ to sys.path JUST for this import
+    # block so cross-imports between membot's top-level files resolve correctly.
+    # Then immediately remove it to avoid shadowing VPS-local modules
+    # (e.g. multi_lattice_wrapper_v7.py exists in BOTH repos).
+    #
+    # We then verify our isolation by inspecting the loaded modules' __file__
+    # attributes -- they should all point at the membot/ directory.
+    import sys as _sys
+    _path_added = False
+    if _membot_dir not in _sys.path:
+        _sys.path.insert(0, _membot_dir)
+        _path_added = True
+    try:
+        # Drop any cached versions of these names that might shadow us
+        for _name in ("multi_cart", "membot_server", "membox", "federate"):
+            _sys.modules.pop(_name, None)
+
+        import multi_cart as _multi_cart  # noqa: E402
+        import membot_server as _membot_server  # noqa: E402
+        import membox as _membox  # noqa: E402
+
+        _MEMBOX_AVAILABLE = True
+        print(f"[VPS] Membox loaded OK from {_membox.__file__}")
+    finally:
+        # IMPORTANT: remove membot from sys.path so VPS's own modules
+        # (multi_lattice_wrapper_v7.py, region_fill_encoder.py, etc.) are not shadowed.
+        if _path_added and _membot_dir in _sys.path:
+            _sys.path.remove(_membot_dir)
+except Exception as _membox_err:
+    import traceback
+    _membox = None
+    _multi_cart = None
+    _membot_server = None
+    _MEMBOX_AVAILABLE = False
+    print(f"[VPS] Membox not available: {_membox_err}")
+    traceback.print_exc()
 from .cartridge_io import (
     list_cartridges as _list_cartridges, load_cartridge, load_signatures,
     find_cartridge_path, find_companion_file, validate_brain_manifest,
@@ -1060,6 +1123,145 @@ async def forge_endpoint(
         success=result["success"],
         message=result["message"],
     )
+
+
+# ---------------------------------------------------------------------------
+# Membox visualizer (proxy to membot.membox)
+# ---------------------------------------------------------------------------
+
+def _lock_dict_to_model(d: dict, cart_id: str) -> MemboxLockState:
+    """Convert membox CartLock.stats() dict to Pydantic model."""
+    return MemboxLockState(
+        cart_id=d.get("cart_id", cart_id),
+        holder=d.get("holder"),
+        held_for_seconds=d.get("held_for_seconds"),
+        lease_seconds=d.get("lease_seconds", 30),
+        acquire_count=d.get("acquire_count", 0),
+        wait_count=d.get("wait_count", 0),
+        is_locked=d.get("is_locked", False),
+    )
+
+
+@app.get("/api/membox/carts", response_model=MemboxCartListResponse)
+async def membox_list_carts():
+    if not _MEMBOX_AVAILABLE:
+        return MemboxCartListResponse(carts=[])
+    try:
+        mounts = _membox.list_mounts()
+    except Exception as err:
+        print(f"[VPS] membox.list_mounts failed: {err}")
+        return MemboxCartListResponse(carts=[])
+
+    carts = []
+    for m in mounts:
+        cart_id = m.get("cart_id", "")
+        carts.append(MemboxCartInfo(
+            cart_id=cart_id,
+            role=m.get("role"),
+            n_patterns=m.get("n_patterns", 0),
+            lock=_lock_dict_to_model(m.get("lock", {}), cart_id),
+            recent_writes=m.get("recent_writes", 0),
+        ))
+    return MemboxCartListResponse(carts=carts)
+
+
+@app.get("/api/membox/status/{cart_id}", response_model=MemboxStatus)
+async def membox_get_status(cart_id: str):
+    if not _MEMBOX_AVAILABLE:
+        return MemboxStatus(
+            cart_id=cart_id,
+            n_patterns=0,
+            lock=MemboxLockState(cart_id=cart_id),
+            membox_enabled=False,
+        )
+    try:
+        s = _membox.status(cart_id)
+    except Exception as err:
+        print(f"[VPS] membox.status({cart_id}) failed: {err}")
+        return MemboxStatus(
+            cart_id=cart_id,
+            n_patterns=0,
+            lock=MemboxLockState(cart_id=cart_id),
+            membox_enabled=False,
+        )
+
+    recent = [
+        MemboxWriteEntry(
+            agent_id=w.get("agent_id", "?"),
+            written_at=w.get("written_at", ""),
+            local_addr=w.get("local_addr", -1),
+            origin=w.get("origin", "agent"),
+            text_preview=w.get("text_preview", ""),
+        )
+        for w in s.get("recent_writes", [])
+    ]
+    return MemboxStatus(
+        cart_id=s.get("cart_id", cart_id),
+        n_patterns=s.get("n_patterns", 0),
+        lock=_lock_dict_to_model(s.get("lock", {}), cart_id),
+        writes_by_agent=s.get("writes_by_agent", {}),
+        recent_writes=recent,
+        membox_enabled=s.get("membox_enabled", True),
+    )
+
+
+@app.post("/api/membox/mount", response_model=MessageResponse)
+async def membox_mount_endpoint(req: MemboxMountRequest):
+    """TEMPORARY: lets the visualizer panel mount carts directly via Membox.
+    Will be removed once Phase 2 unifies the single-user mount path with Membox."""
+    if not _MEMBOX_AVAILABLE:
+        return MessageResponse(success=False, message="Membox not available")
+    try:
+        result = await asyncio.to_thread(
+            _membox.mount,
+            req.cart_path,
+            req.cart_id,
+            req.role,
+            req.lease_seconds,
+            req.verify_integrity,
+        )
+    except Exception as err:
+        return MessageResponse(success=False, message=f"mount failed: {err}")
+
+    cid = result.get("cart_id", "?")
+    n = result.get("n_patterns", 0)
+    return MessageResponse(success=True, message=f"Mounted {cid} ({n} patterns)")
+
+
+@app.post("/api/membox/unmount", response_model=MessageResponse)
+async def membox_unmount_endpoint(req: MemboxUnmountRequest):
+    if not _MEMBOX_AVAILABLE:
+        return MessageResponse(success=False, message="Membox not available")
+    try:
+        await asyncio.to_thread(_membox.unmount, req.cart_id)
+    except Exception as err:
+        return MessageResponse(success=False, message=f"unmount failed: {err}")
+    return MessageResponse(success=True, message=f"Unmounted {req.cart_id}")
+
+
+@app.post("/api/membox/imprint", response_model=MessageResponse)
+async def membox_imprint(req: MemboxImprintRequest):
+    if not _MEMBOX_AVAILABLE:
+        return MessageResponse(success=False, message="Membox not available")
+    try:
+        result = await asyncio.to_thread(
+            _membox.imprint,
+            req.cart_id,
+            req.text,
+            req.agent_id,
+            req.tags,
+            req.reasoning,
+            req.origin,
+            req.timeout_ms,
+        )
+    except Exception as err:
+        return MessageResponse(success=False, message=f"imprint failed: {err}")
+
+    if result.get("ok"):
+        addr = result.get("local_addr", "?")
+        return MessageResponse(success=True, message=f"Wrote pattern #{addr} as {req.agent_id}")
+    else:
+        return MessageResponse(success=False, message=result.get("error", "unknown error"))
 
 
 # ---------------------------------------------------------------------------

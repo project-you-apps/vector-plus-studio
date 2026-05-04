@@ -1,11 +1,13 @@
 import { useState } from 'react'
-import { Cpu, Lock, LockOpen, Moon, Save, Sun, Zap } from 'lucide-react'
+import { Activity, Cpu, Lock, LockOpen, Moon, Save, Sun, Zap } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 
 export default function Header() {
   const status = useAppStore((s) => s.status)
   const saveCartridge = useAppStore((s) => s.saveCartridge)
   const toggleLock = useAppStore((s) => s.toggleLock)
+  const memboxPanelOpen = useAppStore((s) => s.memboxPanelOpen)
+  const toggleMemboxPanel = useAppStore((s) => s.toggleMemboxPanel)
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
   const [theme, setTheme] = useState(() =>
@@ -95,6 +97,18 @@ export default function Header() {
             {status?.gpu_available ? 'GPU' : 'CPU'}
           </span>
         </div>
+
+        <button
+          onClick={toggleMemboxPanel}
+          className={`p-2 rounded-lg transition-colors ${
+            memboxPanelOpen
+              ? 'bg-purple-500/20 text-purple-300'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+          }`}
+          title="Toggle Membox visualizer"
+        >
+          <Activity size={16} />
+        </button>
 
         <button
           onClick={toggleTheme}

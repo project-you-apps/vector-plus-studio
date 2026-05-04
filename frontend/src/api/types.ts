@@ -64,3 +64,62 @@ export interface DeletedPattern {
 }
 
 export type SearchMode = 'hamming' | 'smart' | 'pure_brain' | 'fast' | 'associate'
+
+// --- Membox visualizer ---
+
+export interface MemboxLockState {
+  cart_id: string
+  holder: string | null
+  held_for_seconds: number | null
+  lease_seconds: number
+  acquire_count: number
+  wait_count: number
+  is_locked: boolean
+}
+
+export interface MemboxCartInfo {
+  cart_id: string
+  role: string | null
+  n_patterns: number
+  lock: MemboxLockState
+  recent_writes: number
+}
+
+export interface MemboxWriteEntry {
+  agent_id: string
+  written_at: string
+  local_addr: number
+  origin: string
+  text_preview: string
+}
+
+export interface MemboxStatus {
+  cart_id: string
+  n_patterns: number
+  lock: MemboxLockState
+  writes_by_agent: Record<string, number>
+  recent_writes: MemboxWriteEntry[]
+  membox_enabled: boolean
+}
+
+export interface MemboxCartListResponse {
+  carts: MemboxCartInfo[]
+}
+
+export interface MemboxImprintRequest {
+  cart_id: string
+  text: string
+  agent_id: string
+  tags?: string
+  reasoning?: string
+  origin?: string
+  timeout_ms?: number
+}
+
+export interface MemboxMountRequest {
+  cart_path: string
+  cart_id?: string | null
+  role?: string | null
+  lease_seconds?: number
+  verify_integrity?: boolean
+}

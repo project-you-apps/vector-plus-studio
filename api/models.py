@@ -103,3 +103,59 @@ class PatternResponse(BaseModel):
 class MessageResponse(BaseModel):
     success: bool
     message: str
+
+
+# --- Membox visualizer ---
+
+class MemboxLockState(BaseModel):
+    cart_id: str
+    holder: str | None = None
+    held_for_seconds: float | None = None
+    lease_seconds: int = 30
+    acquire_count: int = 0
+    wait_count: int = 0
+    is_locked: bool = False
+
+class MemboxCartInfo(BaseModel):
+    cart_id: str
+    role: str | None = None
+    n_patterns: int = 0
+    lock: MemboxLockState
+    recent_writes: int = 0
+
+class MemboxWriteEntry(BaseModel):
+    agent_id: str
+    written_at: str
+    local_addr: int
+    origin: str
+    text_preview: str
+
+class MemboxStatus(BaseModel):
+    cart_id: str
+    n_patterns: int
+    lock: MemboxLockState
+    writes_by_agent: dict[str, int] = Field(default_factory=dict)
+    recent_writes: list[MemboxWriteEntry] = Field(default_factory=list)
+    membox_enabled: bool = True
+
+class MemboxCartListResponse(BaseModel):
+    carts: list[MemboxCartInfo]
+
+class MemboxImprintRequest(BaseModel):
+    cart_id: str
+    text: str
+    agent_id: str
+    tags: str = ""
+    reasoning: str = ""
+    origin: str = "agent"
+    timeout_ms: int = 5000
+
+class MemboxMountRequest(BaseModel):
+    cart_path: str
+    cart_id: str | None = None
+    role: str | None = None
+    lease_seconds: int = 30
+    verify_integrity: bool = True
+
+class MemboxUnmountRequest(BaseModel):
+    cart_id: str

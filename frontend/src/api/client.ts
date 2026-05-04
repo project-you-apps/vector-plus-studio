@@ -1,4 +1,8 @@
-import type { CartridgeInfo, SearchResponse, StatusResponse, DeletedPattern, SearchMode, PatternResponse } from './types'
+import type {
+  CartridgeInfo, SearchResponse, StatusResponse, DeletedPattern,
+  SearchMode, PatternResponse,
+  MemboxCartInfo, MemboxStatus, MemboxImprintRequest, MemboxMountRequest,
+} from './types'
 
 const BASE = '/api'
 
@@ -102,6 +106,38 @@ export async function addPassage(text: string) {
   return fetchJSON<{ success: boolean; message: string }>(
     '/patterns',
     { method: 'POST', body: JSON.stringify({ text }) }
+  )
+}
+
+// --- Membox visualizer ---
+
+export async function fetchMemboxCarts(): Promise<MemboxCartInfo[]> {
+  const data = await fetchJSON<{ carts: MemboxCartInfo[] }>('/membox/carts')
+  return data.carts
+}
+
+export async function fetchMemboxStatus(cartId: string): Promise<MemboxStatus> {
+  return fetchJSON(`/membox/status/${encodeURIComponent(cartId)}`)
+}
+
+export async function memboxImprint(req: MemboxImprintRequest) {
+  return fetchJSON<{ success: boolean; message: string }>(
+    '/membox/imprint',
+    { method: 'POST', body: JSON.stringify(req) }
+  )
+}
+
+export async function memboxMount(req: MemboxMountRequest) {
+  return fetchJSON<{ success: boolean; message: string }>(
+    '/membox/mount',
+    { method: 'POST', body: JSON.stringify(req) }
+  )
+}
+
+export async function memboxUnmount(cartId: string) {
+  return fetchJSON<{ success: boolean; message: string }>(
+    '/membox/unmount',
+    { method: 'POST', body: JSON.stringify({ cart_id: cartId }) }
   )
 }
 

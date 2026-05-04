@@ -1,5 +1,8 @@
 import { create } from 'zustand'
-import type { CartridgeInfo, SearchResult, StatusResponse, DeletedPattern, SearchMode } from '../api/types'
+import type {
+  CartridgeInfo, SearchResult, StatusResponse, DeletedPattern, SearchMode,
+  MemboxCartInfo, MemboxStatus,
+} from '../api/types'
 import * as api from '../api/client'
 
 interface AppState {
@@ -56,6 +59,17 @@ interface AppState {
   openModal: (result: SearchResult) => void
   closeModal: () => void
   navigateModal: (idx: number) => Promise<void>
+
+  // Membox visualizer
+  memboxPanelOpen: boolean
+  memboxCarts: MemboxCartInfo[]
+  selectedMemboxCart: string | null
+  memboxStatus: MemboxStatus | null
+  memboxStatusLoading: boolean
+  toggleMemboxPanel: () => void
+  fetchMemboxCarts: () => Promise<void>
+  selectMemboxCart: (cartId: string | null) => void
+  fetchMemboxStatus: (cartId: string) => Promise<void>
 
   // Actions
   fetchStatus: () => Promise<void>
@@ -170,6 +184,43 @@ export const useAppStore = create<AppState>((set, get) => ({
       console.error('Modal navigate failed:', e)
     } finally {
       set({ modalLoading: false })
+    }
+  },
+
+  // Membox visualizer state
+  memboxPanelOpen: false,
+  memboxCarts: [],
+  selectedMemboxCart: null,
+  memboxStatus: null,
+  memboxStatusLoading: false,
+
+  toggleMemboxPanel: () => set((state) => ({ memboxPanelOpen: !state.memboxPanelOpen })),
+
+  fetchMemboxCarts: async () => {
+    try {
+      const carts = await api.fetchMemboxCarts()
+      set({ memboxCarts: carts })
+    } catch (e) {
+      console.error('Membox carts fetch failed:', e)
+      set({ memboxCarts: [] })
+    }
+  },
+
+  selectMemboxCart: (cartId) => {
+    set({ selectedMemboxCart: cartId, memboxStatus: null })
+    if (cartId) get().fetchMemboxStatus(cartId)
+  },
+
+  fetchMemboxStatus: async (cartId: string) => {
+    set({ memboxStatusLoading: true })
+    try {
+      const status = await api.fetchMemboxStatus(cartId)
+      set({ memboxStatus: status })
+    } catch (e) {
+      console.error('Membox status fetch failed:', e)
+      set({ memboxStatus: null })
+    } finally {
+      set({ memboxStatusLoading: false })
     }
   },
 
