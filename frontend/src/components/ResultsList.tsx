@@ -69,7 +69,7 @@ export default function ResultsList() {
           <Zap size={28} />
         </div>
         <p className="text-lg font-medium">Welcome to Vector+ Studio</p>
-        <p className="text-sm mt-1">Mount a cartridge from the sidebar to begin</p>
+        <p className="text-sm mt-1">Mount a cartridge from the picker above to begin</p>
       </div>
     )
   }
