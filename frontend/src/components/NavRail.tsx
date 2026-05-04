@@ -35,16 +35,25 @@ export default function NavRail() {
           <button
             key={item.key}
             onClick={() => setActiveScreen(item.key)}
-            title={`${item.label} — ${item.tooltip}`}
             aria-label={item.label}
             aria-current={active ? 'page' : undefined}
-            className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
+            className={`group relative w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
               active
                 ? 'bg-purple-500/20 text-purple-300'
                 : 'text-slate-500 hover:text-slate-200 hover:bg-slate-800/40'
             }`}
           >
             <Icon size={18} />
+            {/* Discord-style flyout tooltip on hover. Faster + nicer than the
+                native title attribute, and gives us room for the longer
+                description on a second line. */}
+            <span
+              role="tooltip"
+              className="pointer-events-none absolute left-full top-1/2 -translate-y-1/2 ml-2 px-2.5 py-1.5 rounded-md bg-slate-900 border border-slate-700 text-slate-100 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-50 shadow-lg"
+            >
+              <span className="block text-xs font-semibold">{item.label}</span>
+              <span className="block text-[10px] text-slate-400 mt-0.5 max-w-[14rem] whitespace-normal">{item.tooltip}</span>
+            </span>
           </button>
         )
       })}

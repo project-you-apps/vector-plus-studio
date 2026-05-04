@@ -100,18 +100,24 @@ export default function SearchToolbar() {
       <div className="relative" ref={ref}>
         <button
           onClick={() => setOpen(!open)}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm border border-slate-700 bg-slate-800/40 hover:bg-slate-800/70 transition-colors min-w-[240px]"
-          title={mounted ? `Mounted: ${mounted}` : 'Click to mount a cartridge'}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm border border-slate-700 bg-slate-800/40 hover:bg-slate-800/70 hover:border-purple-500/40 transition-colors min-w-[280px] cursor-pointer"
+          title={mounted ? 'Click to change or unmount the current cartridge' : 'Click to mount a cartridge'}
         >
           <Database size={14} className={mounted ? 'text-purple-400' : 'text-slate-500'} />
-          <span className={`flex-1 text-left truncate ${mounted ? 'text-slate-200 font-medium' : 'text-slate-500 italic'}`}>
-            {mounted
-              ? mountedCart
-                ? `${mounted} (${mountedCart.size_mb.toFixed(1)} MB)`
-                : mounted
-              : 'Mount a cartridge…'}
+          <span className="flex-1 text-left truncate">
+            {mounted ? (
+              <>
+                <span className="text-slate-500 mr-1.5">Cartridge:</span>
+                <span className="text-slate-100 font-medium">{mounted}</span>
+                {mountedCart && (
+                  <span className="text-slate-500 ml-1.5 text-xs">({mountedCart.size_mb.toFixed(1)} MB)</span>
+                )}
+              </>
+            ) : (
+              <span className="text-slate-500 italic">Click to mount a cartridge…</span>
+            )}
           </span>
-          <ChevronDown size={14} className={`text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`} />
+          <ChevronDown size={14} className={`text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
         </button>
 
         {open && (
