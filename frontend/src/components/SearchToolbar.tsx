@@ -1,35 +1,57 @@
 import { useEffect, useRef, useState } from 'react'
-import { Database, ChevronDown, FolderOpen, Loader2 } from 'lucide-react'
+import { Database, ChevronDown, FolderOpen, Loader2, Zap } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
+import type { SearchMode } from '../api/types'
 import * as api from '../api/client'
+
+// Search modes (lifted from Sidebar.tsx in 2026-05-03 reorg Phase 3).
+// Disable/training/ready logic depends on status.gpu_available,
+// status.physics_trained, status.training_active, status.signatures_loaded.
+const MODES: { key: SearchMode; label: string; desc: string; tooltip: string }[] = [
+  { key: 'hamming',    label: 'Hamming Blend', desc: '70% cosine + 30% Hamming',  tooltip: '70% cosine + 30% sign-zero Hamming with keyword reranking. Same as Membot production search. No GPU required.' },
+  { key: 'smart',      label: 'Smart Search',  desc: 'Physics + cosine blend',     tooltip: 'Blends neural lattice physics with cosine similarity. Use the slider to control the mix. Best overall quality. Requires GPU mode.' },
+  { key: 'pure_brain', label: 'Pure Brain',    desc: 'L2 signatures only',         tooltip: 'Searches using only the trained neural lattice — no embedding database needed. Finds associative relationships cosine misses.' },
+  { key: 'fast',       label: 'Fast',          desc: 'Cosine only',                tooltip: 'Standard cosine similarity on embeddings. No GPU required. Fastest but misses physics-discovered associations.' },
+  { key: 'associate',  label: 'Associate',     desc: 'Physics-driven association', tooltip: 'Settle the query through the trained lattice and rank by what the physics surfaces. Finds cross-domain associations (e.g. earthquakes → Poseidon). Requires GPU + trained cartridge.' },
+]
 
 // Top-of-screen toolbar for the Search screen. Owns the cart picker that
 // previously lived in the Sidebar's top section. This is the per-screen
 // toolbar pattern from the 2026-05-03 sidebar reorg — controls that operate
 // on the *current screen's* state belong here, not in the global nav rail.
 export default function SearchToolbar() {
-  const { cartridges, status, mounting, fetchCartridges, mount, unmount } = useAppStore()
+  const {
+    cartridges, status, mounting,
+    searchMode, blendAlpha,
+    fetchCartridges, mount, unmount,
+    setSearchMode, setBlendAlpha,
+  } = useAppStore()
+
   const [open, setOpen] = useState(false)
+  const [modeOpen, setModeOpen] = useState(false)
   const [pathOpen, setPathOpen] = useState(false)
   const [pathInput, setPathInput] = useState('')
   const [pathLoading, setPathLoading] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const modeRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     fetchCartridges()
   }, [fetchCartridges])
 
-  // Close dropdown when clicking outside
+  // Close dropdowns when clicking outside (one handler for both)
   useEffect(() => {
-    if (!open) return
+    if (!open && !modeOpen) return
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false)
-      }
+      const target = e.target as Node
+      if (open && ref.current && !ref.current.contains(target)) setOpen(false)
+      if (modeOpen && modeRef.current && !modeRef.current.contains(target)) setModeOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
-  }, [open])
+  }, [open, modeOpen])
+
+  const currentMode = MODES.find((m) => m.key === searchMode) ?? MODES[0]
 
   const mounted = status?.mounted_cartridge ?? null
   const mountedCart = mounted ? cartridges.find((c) => c.name === mounted) : null
@@ -199,7 +221,91 @@ export default function SearchToolbar() {
         </span>
       )}
 
-      {/* Spacer for future toolbar additions (search mode picker, filters, etc.) */}
+      {/* Search mode dropdown */}
+      <div className="relative" ref={modeRef}>
+        <button
+          onClick={() => setModeOpen(!modeOpen)}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm border border-slate-700 bg-slate-800/40 hover:bg-slate-800/70 transition-colors min-w-[200px]"
+          title={`Search mode: ${currentMode.label} — ${currentMode.tooltip}`}
+        >
+          <Zap size={14} className="text-purple-400" />
+          <span className="flex-1 text-left text-slate-200 font-medium">{currentMode.label}</span>
+          <ChevronDown size={14} className={`text-slate-500 transition-transform ${modeOpen ? 'rotate-180' : ''}`} />
+        </button>
+
+        {modeOpen && (
+          <div className="absolute top-full mt-1 left-0 w-72 rounded-lg border border-slate-700 bg-[var(--chrome-bg)] shadow-2xl z-30 p-2 space-y-1">
+            <div className="px-1 py-1 text-[10px] uppercase tracking-wider text-slate-600">Search mode</div>
+            {MODES.map((m) => {
+              const needsFullBrain = m.key === 'smart' || m.key === 'associate'
+              const needsSigs = m.key === 'pure_brain'
+              const stillTraining = !!status?.training_active
+              const isDisabled =
+                (needsFullBrain && !status?.gpu_available) ||
+                (needsFullBrain && status?.gpu_available && (!status?.physics_trained || stillTraining)) ||
+                (needsSigs && !status?.signatures_loaded)
+              const isTraining =
+                (needsFullBrain && status?.gpu_available && stillTraining) ||
+                (needsSigs && !status?.signatures_loaded && stillTraining)
+              const isReady =
+                (needsFullBrain && status?.physics_trained && !stillTraining) ||
+                (needsSigs && status?.signatures_loaded)
+              let subtitle = m.desc
+              if (needsFullBrain && !status?.gpu_available) subtitle = 'Requires GPU'
+              else if (needsSigs && !status?.signatures_loaded && stillTraining) subtitle = 'Building signatures…'
+              else if (needsSigs && !status?.signatures_loaded) subtitle = 'Signatures not available'
+              else if (needsFullBrain && stillTraining) subtitle = 'Training — available soon'
+              else if (needsFullBrain && status?.gpu_available && !status?.physics_trained && !stillTraining) subtitle = 'Mount a cartridge to enable'
+
+              const active = searchMode === m.key
+              return (
+                <button
+                  key={m.key}
+                  onClick={() => {
+                    if (isDisabled || isTraining) return
+                    setSearchMode(m.key)
+                    setModeOpen(false)
+                  }}
+                  title={isDisabled ? (needsSigs ? `${m.label} requires built signatures` : `${m.label} requires a GPU — currently running in CPU mode`) : m.tooltip}
+                  className={`w-full text-left px-2.5 py-2 rounded text-sm transition-all ${
+                    isDisabled || isTraining
+                      ? 'opacity-40 cursor-not-allowed text-slate-500'
+                      : active
+                        ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                        : 'text-slate-300 hover:bg-slate-800/50 border border-transparent'
+                  }`}
+                >
+                  <div className="font-medium flex items-center gap-2">
+                    {m.label}
+                    {isTraining && <Loader2 size={10} className="animate-spin text-amber-400" />}
+                    {isReady && !active && <span className="w-1.5 h-1.5 rounded-full bg-green-400" />}
+                  </div>
+                  <div className="text-[10px] opacity-60 mt-0.5">{subtitle}</div>
+                </button>
+              )
+            })}
+
+            {/* Blend slider (only when smart mode active) */}
+            {searchMode === 'smart' && (
+              <div className="px-2 pt-2 mt-1 border-t border-slate-800">
+                <div className="flex justify-between text-[10px] text-slate-500 mb-1">
+                  <span>Cosine</span>
+                  <span className="font-mono">{blendAlpha.toFixed(2)}</span>
+                  <span>Physics</span>
+                </div>
+                <input
+                  type="range"
+                  min={0} max={1} step={0.05}
+                  value={blendAlpha}
+                  onChange={(e) => setBlendAlpha(parseFloat(e.target.value))}
+                  className="w-full h-1.5 rounded-lg appearance-none cursor-pointer accent-purple-500 bg-slate-700"
+                />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="flex-1" />
     </div>
   )
