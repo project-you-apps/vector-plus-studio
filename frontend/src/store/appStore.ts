@@ -5,7 +5,16 @@ import type {
 } from '../api/types'
 import * as api from '../api/client'
 
+// Top-level screen state (nav rail picks which screen renders in the main area).
+// 'search' is the default; the original VPS 1.0 search/CRUD experience. Other
+// screens are stubbed in this iteration and fleshed out incrementally.
+export type ActiveScreen = 'search' | 'overview' | 'cartBuilder' | 'sql' | 'settings'
+
 interface AppState {
+  // Active screen (nav rail)
+  activeScreen: ActiveScreen
+  setActiveScreen: (screen: ActiveScreen) => void
+
   // Status
   status: StatusResponse | null
   statusLoading: boolean
@@ -90,6 +99,9 @@ interface AppState {
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
+  activeScreen: 'search' as ActiveScreen,
+  setActiveScreen: (screen) => set({ activeScreen: screen }),
+
   status: null,
   statusLoading: false,
   cartridges: [],
