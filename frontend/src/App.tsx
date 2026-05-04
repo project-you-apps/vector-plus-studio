@@ -9,6 +9,7 @@ import ResultsList from './components/ResultsList'
 import PassageEditor from './components/PassageEditor'
 import PassageModal from './components/PassageModal'
 import MemboxPanel from './components/MemboxPanel'
+import OverviewScreen from './components/OverviewScreen'
 
 // Stub placeholders for nav-rail screens introduced in 2026-05-03 reorg.
 // Each will be promoted to its own component file as it gets fleshed out.
@@ -83,12 +84,7 @@ export default function App() {
           </>
         )}
 
-        {activeScreen === 'overview' && (
-          <ScreenStub
-            title="Overview"
-            body="Cart stats, mounted carts, system health. Coming next — Supabase-style Project Overview equivalent (mounted cartridges + passage counts + GPU/CPU mode + droplet health if connected)."
-          />
-        )}
+        {activeScreen === 'overview' && <OverviewScreen />}
 
         {activeScreen === 'cartBuilder' && (
           <ScreenStub
