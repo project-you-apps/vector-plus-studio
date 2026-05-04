@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Database, Upload, Plus, Trash2, RotateCcw, ChevronDown, ChevronRight, Loader2, FolderOpen } from 'lucide-react'
+import { Upload, Plus, Trash2, RotateCcw, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import type { SearchMode } from '../api/types'
 import * as api from '../api/client'
@@ -13,18 +13,20 @@ const MODES: { key: SearchMode; label: string; desc: string; tooltip: string }[]
 ]
 
 export default function Sidebar() {
+  // Cart picker moved to SearchToolbar (2026-05-03 reorg). This sidebar now
+  // owns: search mode picker, build cartridge expandable, add passage button,
+  // tombstoned restore, training progress. Future iterations migrate the
+  // search mode picker to the SearchToolbar dropdown and Build Cartridge to
+  // its own full screen.
   const {
-    cartridges, status, mounting,
+    status,
     searchMode, blendAlpha,
     deletedPatterns,
-    fetchCartridges, mount, unmount,
+    fetchCartridges,
     setSearchMode, setBlendAlpha,
     restoreResult, fetchDeleted,
   } = useAppStore()
 
-  const [pathOpen, setPathOpen] = useState(false)
-  const [pathInput, setPathInput] = useState('')
-  const [pathLoading, setPathLoading] = useState(false)
   const [buildOpen, setBuildOpen] = useState(false)
   const [restoreOpen, setRestoreOpen] = useState(false)
   const [buildName, setBuildName] = useState('my_docs')
@@ -60,144 +62,8 @@ export default function Sidebar() {
 
   return (
     <aside className="w-72 border-r border-slate-800 bg-[var(--chrome-bg)] flex flex-col overflow-hidden">
-      {/* Cartridge List */}
-      <div className="p-4 max-h-72 overflow-y-auto shrink-0">
-        <h2 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-3 flex items-center gap-2">
-          <Database size={12} /> Cartridges
-        </h2>
-
-        {/* Open from file system */}
-        <button
-          onClick={async () => {
-            setPathLoading(true)
-            try {
-              const path = await api.browseForCartridge()
-              if (path) {
-                const res = await api.mountCartridge(path)
-                if (!res.success) {
-                  alert(res.message || 'Mount failed')
-                  return
-                }
-                fetchCartridges()
-                useAppStore.getState().fetchStatus()
-              }
-            } catch (err) {
-              alert(err instanceof Error ? err.message : 'Failed to open file')
-            } finally {
-              setPathLoading(false)
-            }
-          }}
-          disabled={pathLoading}
-          className="w-full flex items-center gap-2 px-3 py-2 mb-1 rounded-lg text-sm transition-all border bg-slate-800/40 border-slate-700/50 text-slate-300 hover:bg-slate-800/70 disabled:opacity-50"
-        >
-          {pathLoading ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />}
-          <span className="font-medium">{pathLoading ? 'Opening...' : 'Open Cartridge...'}</span>
-        </button>
-
-        {/* Paste path fallback */}
-        <button
-          onClick={() => setPathOpen(!pathOpen)}
-          className="text-[10px] text-slate-600 hover:text-slate-400 transition-colors mb-3 px-1"
-        >
-          {pathOpen ? 'hide' : 'or paste a path...'}
-        </button>
-
-        {pathOpen && (
-          <div className="mb-3 space-y-1.5">
-            <input
-              type="text"
-              value={pathInput}
-              onChange={(e) => setPathInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && pathInput.trim()) {
-                  setPathLoading(true)
-                  api.mountCartridge(pathInput.trim())
-                    .then(() => { fetchCartridges(); useAppStore.getState().fetchStatus() })
-                    .catch((err) => alert(err.message))
-                    .finally(() => { setPathLoading(false); setPathOpen(false); setPathInput('') })
-                }
-              }}
-              autoFocus
-              placeholder="Paste full path to .pkl file"
-              className="w-full px-2 py-1.5 text-xs bg-slate-800 border border-slate-700 rounded text-slate-200 placeholder-slate-600 focus:border-purple-500/50 focus:outline-none"
-            />
-            <button
-              onClick={() => {
-                if (!pathInput.trim()) return
-                setPathLoading(true)
-                api.mountCartridge(pathInput.trim())
-                  .then(() => { fetchCartridges(); useAppStore.getState().fetchStatus() })
-                  .catch((err) => alert(err.message))
-                  .finally(() => { setPathLoading(false); setPathOpen(false); setPathInput('') })
-              }}
-              disabled={pathLoading || !pathInput.trim()}
-              className="w-full text-xs py-1.5 rounded gradient-bg text-white font-medium disabled:opacity-50 transition-opacity"
-            >
-              {pathLoading ? 'Mounting...' : 'Mount'}
-            </button>
-          </div>
-        )}
-
-        {cartridges.length === 0 ? (
-          <p className="text-sm text-slate-600 italic">No cartridges found</p>
-        ) : (
-          <div className="space-y-2">
-            {cartridges.map((c) => {
-              const isMounted = status?.mounted_cartridge === c.name
-              return (
-                <div
-                  key={c.filename}
-                  className={`p-3 rounded-lg border transition-all ${
-                    isMounted
-                      ? 'border-purple-500/50 bg-purple-500/10'
-                      : 'border-slate-700/50 bg-slate-800/30 hover:bg-slate-800/60'
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="font-medium text-sm truncate">{c.name}</span>
-                    <span className="text-xs text-slate-500">{c.size_mb} MB</span>
-                  </div>
-
-                  <div className="flex gap-1 mb-2">
-                    {c.has_brain && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/20 text-green-400">Brain</span>
-                    )}
-                    {c.has_signatures && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400">Sigs</span>
-                    )}
-                  </div>
-
-                  {isMounted ? (
-                    <button
-                      onClick={unmount}
-                      className="w-full text-xs py-1.5 rounded bg-slate-700/50 hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-colors"
-                    >
-                      Unmount
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => mount(c.filename)}
-                      disabled={mounting}
-                      className="w-full text-xs py-1.5 rounded gradient-bg text-white font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
-                    >
-                      {mounting ? (
-                        <span className="flex items-center justify-center gap-1">
-                          <Loader2 size={12} className="animate-spin" /> Mounting...
-                        </span>
-                      ) : (
-                        'Mount'
-                      )}
-                    </button>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </div>
-
       {/* Search Mode */}
-      <div className="px-4 py-3 border-t border-slate-800">
+      <div className="px-4 py-4">
         <h2 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Search Mode</h2>
         <div className="space-y-1">
           {MODES.map((m) => {

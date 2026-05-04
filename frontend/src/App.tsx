@@ -3,6 +3,7 @@ import { useAppStore } from './store/appStore'
 import Header from './components/Header'
 import NavRail from './components/NavRail'
 import Sidebar from './components/Sidebar'
+import SearchToolbar from './components/SearchToolbar'
 import SearchBar from './components/SearchBar'
 import ResultsList from './components/ResultsList'
 import PassageEditor from './components/PassageEditor'
@@ -64,18 +65,21 @@ export default function App() {
         {activeScreen === 'search' && (
           <>
             <Sidebar />
-            <main className="flex-1 flex flex-col p-6 overflow-hidden">
-              {editorOpen ? (
-                <PassageEditor />
-              ) : (
-                <>
-                  <SearchBar />
-                  <div className="mt-6 flex-1 overflow-hidden flex flex-col">
-                    <ResultsList />
-                  </div>
-                </>
-              )}
-            </main>
+            <div className="flex-1 flex flex-col overflow-hidden">
+              {!editorOpen && <SearchToolbar />}
+              <main className="flex-1 flex flex-col p-6 overflow-hidden">
+                {editorOpen ? (
+                  <PassageEditor />
+                ) : (
+                  <>
+                    <SearchBar />
+                    <div className="mt-6 flex-1 overflow-hidden flex flex-col">
+                      <ResultsList />
+                    </div>
+                  </>
+                )}
+              </main>
+            </div>
           </>
         )}
 
