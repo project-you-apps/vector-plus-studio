@@ -12,8 +12,13 @@ Open bugs listed first. Move to "Closed" with a date and resolution note when fi
 
 ## Open
 
-### B-high · "Open Cartridge…" button hangs (file picker never opens)
+### B-high · "Open Cartridge…" button hangs (file picker never opens) — *priority bump 2026-05-04*
 **Reported:** 2026-05-04 (Andy, during sidebar reorg testing)
+**Priority note (2026-05-04 12:18):** Andy explicitly flagged this for the
+near-term sprint queue — *"we should add that file picker for load cartridge
+though at some point."* Likely the right fix is replacing the server-side
+`tk` dialog with an `<input type="file">` on the client + a backend
+upload-and-register route. Investigate at start of next VPS session.
 **Where:** SearchToolbar cart picker dropdown (and previously in Sidebar; pre-existing — the migration to SearchToolbar did not introduce it).
 **Symptom:** Clicking "Open Cartridge…" sets `pathLoading=true` and shows the spinner, but no native file picker dialog ever appears. The spinner spins indefinitely (or until the operation eventually times out on the backend).
 **Root-cause hypothesis:** The `api.browseForCartridge()` backend route presumably uses a desktop file-picker (tkinter/native) that either:

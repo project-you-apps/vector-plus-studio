@@ -10,6 +10,7 @@ import PassageEditor from './components/PassageEditor'
 import PassageModal from './components/PassageModal'
 import MemboxPanel from './components/MemboxPanel'
 import OverviewScreen from './components/OverviewScreen'
+import SettingsScreen from './components/SettingsScreen'
 
 // Stub placeholders for nav-rail screens introduced in 2026-05-03 reorg.
 // Each will be promoted to its own component file as it gets fleshed out.
@@ -100,12 +101,7 @@ export default function App() {
           />
         )}
 
-        {activeScreen === 'settings' && (
-          <ScreenStub
-            title="Settings"
-            body="Search mode picker (cosine / hamming / blend / pure_brain / associate), FAST/BALANCED/QUALITY profile toggle, theme, advanced flags. Will absorb most of the current Sidebar's lower sections."
-          />
-        )}
+        {activeScreen === 'settings' && <SettingsScreen />}
       </div>
       <PassageModal />
       <MemboxPanel />
