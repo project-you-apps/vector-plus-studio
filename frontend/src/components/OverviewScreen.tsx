@@ -146,6 +146,33 @@ export default function OverviewScreen() {
             </h2>
             <span className="text-xs text-slate-500">Mount from the Search screen toolbar</span>
           </div>
+
+          {/* Badge legend — three states a cart can be in, by what it carries.
+              Each badge below mirrors what the per-cart row shows, so visitors
+              can read the row icons against the legend. */}
+          {cartridges.length > 0 && (
+            <div className="px-4 py-2 border-b border-slate-800 flex items-center gap-3 text-[10px] text-slate-500 flex-wrap">
+              <span className="uppercase tracking-wider">Legend:</span>
+              <span
+                className="px-1.5 py-0.5 rounded bg-green-500/10 text-green-400 border border-green-500/20"
+                title="Cart contains trained Hebbian weights — physics-based search modes (smart, pure_brain, associate) are available"
+              >Brain</span>
+              <span className="text-slate-600">trained Hebbian weights (physics modes)</span>
+              <span className="text-slate-700">·</span>
+              <span
+                className="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20"
+                title="Cart has L2 signatures cached — pure_brain mode available without on-the-fly settle"
+              >Sigs</span>
+              <span className="text-slate-600">L2 signatures cached (pure-brain mode)</span>
+              <span className="text-slate-700">·</span>
+              <span
+                className="px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400 border border-slate-600/50"
+                title="Cart has SHA-256 integrity manifest — content verified at mount time"
+              >SHA</span>
+              <span className="text-slate-600">SHA-256 integrity manifest (mount-time verify)</span>
+            </div>
+          )}
+
           {cartridges.length === 0 ? (
             <div className="p-6 text-center text-sm text-slate-500 italic">
               No cartridges found in <code className="font-mono text-slate-400">cartridges/</code>
@@ -173,17 +200,26 @@ export default function OverviewScreen() {
                     </span>
                     <div className="flex gap-1.5 w-32 justify-end">
                       {c.has_brain && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-400 border border-green-500/20">
+                        <span
+                          className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-400 border border-green-500/20"
+                          title="Trained Hebbian weights — physics modes available"
+                        >
                           Brain
                         </span>
                       )}
                       {c.has_signatures && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                        <span
+                          className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20"
+                          title="L2 signatures cached — pure-brain mode available"
+                        >
                           Sigs
                         </span>
                       )}
                       {c.has_manifest && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400 border border-slate-600/50">
+                        <span
+                          className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400 border border-slate-600/50"
+                          title="SHA-256 integrity manifest present"
+                        >
                           SHA
                         </span>
                       )}
