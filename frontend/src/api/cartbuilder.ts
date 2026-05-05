@@ -1,0 +1,192 @@
+// Cart Builder API client — wraps /api/cartbuilder/* (Phase 1 backend).
+// Mirrors the 15 backend routes from api/cartbuilder.py with typed
+// request / response shapes. Used by the future Cart Builder screen
+// (Phase 2 frontend port).
+
+const BASE = '/api/cartbuilder'
+
+async function fetchJSON<T>(url: string, opts?: RequestInit): Promise<T> {
+  const res = await fetch(`${BASE}${url}`, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Cart Builder API error ${res.status}: ${text}`)
+  }
+  return res.json()
+}
+
+// ---------------------------------------------------------------------------
+// Types — public-facing shapes from the FastAPI router.
+// Keep aligned with api/cartbuilder.py response objects.
+// ---------------------------------------------------------------------------
+
+export interface CartBuilderFile {
+  id: string
+  name: string
+  type: string
+  size: number
+  chunks: number
+  chars: number
+  preview: string
+  owner: string
+  description: string
+  tags: string[]
+  from_cart?: boolean
+}
+
+export interface CartBuilderListedCart {
+  name: string
+  filename: string
+  size_mb: number
+  passages: number | string
+  modified: string
+  path: string
+  folder?: string
+}
+
+export interface CartBuilderSubdir {
+  name: string
+  path: string
+}
+
+export interface CartBuilderDoc {
+  name: string
+  path: string
+  size: number
+  type: string
+}
+
+export interface CartBuilderCartsResponse {
+  carts: CartBuilderListedCart[]
+  subdirs: CartBuilderSubdir[]
+  docs?: CartBuilderDoc[]
+  folders: string[]
+  current_path: string
+}
+
+export interface CartBuilderBrowseResponse {
+  path: string
+  dirs: string[]
+  parent?: string | null
+  is_root: boolean
+}
+
+export interface CartBuilderPattern0 {
+  cart_name: string
+  file_count: number
+  total_chunks: number
+  files: { name: string; chunks: number; owner: string }[]
+  created: string
+}
+
+export interface CartBuilderBuildState {
+  status: 'idle' | 'building' | 'done' | 'error' | string
+  progress: number
+  chunks_done?: number
+  chunks_total?: number
+  cart_path?: string | null
+  error?: string | null
+  message?: string
+}
+
+export interface CartBuilderHasChanges {
+  has_files: boolean
+  has_built: boolean
+  file_count: number
+  message: string
+}
+
+export interface CartBuilderLoadCartResponse {
+  ok: boolean
+  cart_path: string
+  cart_name: string
+  files: CartBuilderFile[]
+  total_passages: number
+  total_sources: number
+  truncated: boolean
+  showing: number
+}
+
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
+
+export async function uploadFiles(files: File[]): Promise<{ files: CartBuilderFile[] }> {
+  const form = new FormData()
+  for (const f of files) form.append('files', f)
+  const res = await fetch(`${BASE}/upload`, { method: 'POST', body: form })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Upload failed ${res.status}: ${text}`)
+  }
+  return res.json()
+}
+
+export async function listFiles(): Promise<{ files: CartBuilderFile[] }> {
+  return fetchJSON('/files')
+}
+
+export async function setMetadata(payload: {
+  file_id: string
+  owner?: string
+  description?: string
+  tags?: string[]
+}): Promise<{ ok: boolean }> {
+  return fetchJSON('/metadata', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export async function ingestPath(path: string): Promise<{ file: CartBuilderFile }> {
+  return fetchJSON('/ingest', { method: 'POST', body: JSON.stringify({ path }) })
+}
+
+export async function getPattern0(name = 'hackathon-cart'): Promise<CartBuilderPattern0> {
+  return fetchJSON(`/pattern0?name=${encodeURIComponent(name)}`)
+}
+
+export async function buildCart(cart_name: string): Promise<{
+  status: string
+  cart_name: string
+  chunks: number
+}> {
+  return fetchJSON('/build', { method: 'POST', body: JSON.stringify({ cart_name }) })
+}
+
+export async function getBuildStatus(): Promise<CartBuilderBuildState> {
+  return fetchJSON('/build/status')
+}
+
+export async function listCarts(path = ''): Promise<CartBuilderCartsResponse> {
+  const q = path ? `?path=${encodeURIComponent(path)}` : ''
+  return fetchJSON(`/carts${q}`)
+}
+
+export async function getCartFolders(): Promise<{ folders: string[] }> {
+  return fetchJSON('/cart_folders')
+}
+
+export async function addCartFolder(folder: string): Promise<{ folders: string[] }> {
+  return fetchJSON('/cart_folders', { method: 'POST', body: JSON.stringify({ folder }) })
+}
+
+export async function removeCartFolder(folder: string): Promise<{ folders: string[] }> {
+  return fetchJSON('/cart_folders', { method: 'DELETE', body: JSON.stringify({ folder }) })
+}
+
+export async function browseFolders(path = ''): Promise<CartBuilderBrowseResponse> {
+  const q = path ? `?path=${encodeURIComponent(path)}` : ''
+  return fetchJSON(`/browse${q}`)
+}
+
+export async function loadCart(cart_path: string): Promise<CartBuilderLoadCartResponse> {
+  return fetchJSON('/load_cart', { method: 'POST', body: JSON.stringify({ cart_path }) })
+}
+
+export async function clearWorkspace(): Promise<{ ok: boolean }> {
+  return fetchJSON('/clear_workspace', { method: 'POST' })
+}
+
+export async function getHasChanges(): Promise<CartBuilderHasChanges> {
+  return fetchJSON('/has_changes')
+}
