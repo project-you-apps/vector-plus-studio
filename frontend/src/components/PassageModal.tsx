@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { ChevronLeft, ChevronRight, X, Loader2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, X, Loader2, FolderOpen } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { renderTextWithLinks } from './ResultCard'
 
@@ -9,6 +9,7 @@ export default function PassageModal() {
   const loading = useAppStore((s) => s.modalLoading)
   const closeModal = useAppStore((s) => s.closeModal)
   const navigateModal = useAppStore((s) => s.navigateModal)
+  const loadSource = useAppStore((s) => s.loadSourceForCurrentPassage)
   const query = useAppStore((s) => s.query)
   const mountedCart = useAppStore((s) => s.status?.mounted_cartridge)
 
@@ -64,11 +65,32 @@ export default function PassageModal() {
           )}
         </div>
 
-        {/* Provenance source line — VPS-shape (cart name + pattern idx).
-            Membot demo's three-tier provenance has a "Load from source DB" CTA
-            here; VPS local backend doesn't have split-cart support yet, so
-            this is the simpler honest version. */}
-        {mountedCart && !loading && (
+        {/* RAG+ provenance — three states:
+              1. Split-cart, source not yet loaded:
+                  show "Load full passage from <db> →" CTA
+              2. Split-cart, source loaded (paper_id present):
+                  show full source line with paper_id
+              3. Standard cart (no source_db):
+                  show cart-name + pattern idx (the simpler honest version)
+            Mirrors the membot demo's modal UX. */}
+        {!loading && passage.source_db && !passage.paper_id && (
+          <div className="px-6 py-3 border-t border-slate-700/40 flex items-center justify-center">
+            <button
+              onClick={loadSource}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-500/20 border border-purple-500/40 text-purple-300 hover:bg-purple-500/30 hover:text-purple-200 text-sm font-medium transition-colors"
+              title={`Fetch the full passage from ${passage.source_db}`}
+            >
+              <FolderOpen size={14} />
+              Load full passage from {passage.source_db} →
+            </button>
+          </div>
+        )}
+        {!loading && passage.source_db && passage.paper_id && (
+          <div className="px-6 py-2 border-t border-slate-700/40 text-[11px] text-slate-500 font-mono">
+            source: {passage.source_db} · id: {passage.paper_id}
+          </div>
+        )}
+        {!loading && !passage.source_db && mountedCart && (
           <div className="px-6 py-2 border-t border-slate-700/40 text-[11px] text-slate-500 font-mono">
             source: {mountedCart} · pattern #{passage.idx}
           </div>

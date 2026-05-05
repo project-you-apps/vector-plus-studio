@@ -61,6 +61,12 @@ class SearchResult(BaseModel):
     from_lattice: bool = False
     prev_idx: int | None = None
     next_idx: int | None = None
+    # Split-cart provenance hints — populated when the mounted cart has a
+    # SQLite sidecar. Frontend uses presence of source_db to render the
+    # "Load full passage from <db>" CTA in the modal (parity with membot's
+    # RAG+ provenance feature). paper_id arrives after the source-load fetch.
+    source_db: str | None = None
+    paper_id: str | None = None
 
 class SearchResponse(BaseModel):
     query: str
@@ -99,6 +105,10 @@ class PatternResponse(BaseModel):
     full_text: str
     prev_idx: int | None = None
     next_idx: int | None = None
+    # Split-cart provenance — populated when /api/patterns/{idx} fetched the
+    # full text from a SQLite sidecar (parity with membot RAG+ provenance).
+    source_db: str | None = None
+    paper_id: str | None = None
 
 class MessageResponse(BaseModel):
     success: bool

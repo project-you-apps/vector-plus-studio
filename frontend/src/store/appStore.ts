@@ -61,13 +61,22 @@ interface AppState {
   setEditorText: (text: string) => void
   saveEditor: () => Promise<{ success: boolean; message: string }>
 
-  // Passage modal (full reader with PREV/NEXT navigation)
+  // Passage modal (full reader with PREV/NEXT navigation + split-cart load-source)
   modalOpen: boolean
-  modalPassage: { idx: number; title: string; full_text: string; prev_idx: number | null; next_idx: number | null } | null
+  modalPassage: {
+    idx: number
+    title: string
+    full_text: string
+    prev_idx: number | null
+    next_idx: number | null
+    source_db?: string | null  // present when the mounted cart is split-cart
+    paper_id?: string | null   // populated AFTER load-source-from-DB CTA fires
+  } | null
   modalLoading: boolean
   openModal: (result: SearchResult) => void
   closeModal: () => void
   navigateModal: (idx: number) => Promise<void>
+  loadSourceForCurrentPassage: () => Promise<void>  // split-cart RAG+ load-source CTA
 
   // Membox visualizer
   memboxPanelOpen: boolean
@@ -176,6 +185,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       full_text: result.full_text,
       prev_idx: result.prev_idx,
       next_idx: result.next_idx,
+      // Carry split-cart hints from the search result so the modal can render
+      // the "Load full passage from <db>" CTA. paper_id is only set after the
+      // user clicks load-source (via loadSourceForCurrentPassage below).
+      source_db: result.source_db ?? null,
+      paper_id: result.paper_id ?? null,
     },
   }),
   closeModal: () => set({ modalOpen: false, modalPassage: null }),
@@ -190,10 +204,40 @@ export const useAppStore = create<AppState>((set, get) => ({
           full_text: pattern.full_text,
           prev_idx: pattern.prev_idx,
           next_idx: pattern.next_idx,
+          source_db: pattern.source_db ?? null,
+          paper_id: pattern.paper_id ?? null,
         },
       })
     } catch (e) {
       console.error('Modal navigate failed:', e)
+    } finally {
+      set({ modalLoading: false })
+    }
+  },
+  loadSourceForCurrentPassage: async () => {
+    // RAG+ split-cart "Load full passage from <db>" CTA. The search response
+    // gave us the in-RAM 200-char snippet; this pulls the full passage from
+    // the SQLite sidecar via /api/patterns/{idx} (which the backend wires
+    // up when the cart is split-cart). After load: full_text is the long
+    // version, paper_id is populated.
+    const current = useAppStore.getState().modalPassage
+    if (!current) return
+    set({ modalLoading: true })
+    try {
+      const pattern = await api.getPattern(current.idx)
+      set({
+        modalPassage: {
+          idx: pattern.idx,
+          title: pattern.title,
+          full_text: pattern.full_text,
+          prev_idx: pattern.prev_idx,
+          next_idx: pattern.next_idx,
+          source_db: pattern.source_db ?? current.source_db ?? null,
+          paper_id: pattern.paper_id ?? null,
+        },
+      })
+    } catch (e) {
+      console.error('Load source failed:', e)
     } finally {
       set({ modalLoading: false })
     }

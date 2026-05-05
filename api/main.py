@@ -8,6 +8,7 @@ Start with:
 
 import asyncio
 import os
+import sqlite3
 import time
 import threading
 import numpy as np
@@ -278,13 +279,53 @@ async def mount_cartridge(req: MountRequest):
         return await asyncio.to_thread(_mount_pkl, filename, cart_name)
 
 
+def _sqlite_fetch_passages(conn: sqlite3.Connection, indices: list) -> dict:
+    """Fetch full passages from a split-cart SQLite sidecar by index.
+    Returns {idx: {"passage": str, "title": str, "paper_id": str}}.
+
+    LOAD-BEARING: indices must be Python ints (not numpy.int64) — sqlite3 binds
+    numpy.int64 silently as a no-match value, returning zero rows. Callers MUST
+    cast via int(...) at the call site. Same fix that landed in membot 2026-05-04.
+    """
+    if not conn or not indices:
+        return {}
+    placeholders = ",".join("?" for _ in indices)
+    rows = conn.execute(
+        f"SELECT idx, passage, title, paper_id FROM passages WHERE idx IN ({placeholders})",
+        indices
+    ).fetchall()
+    return {r[0]: {"passage": r[1], "title": r[2], "paper_id": r[3]} for r in rows}
+
+
 def _mount_membot_npz(full_path: str, cart_name: str) -> MountResponse:
-    """Mount a membot-format .cart.npz (embeddings + passages, like a PKL)."""
+    """Mount a membot-format .cart.npz (embeddings + passages, like a PKL).
+
+    Supports two cart shapes:
+      - Standard: NPZ contains 'passages' field with full text per pattern.
+      - Split-cart: NPZ contains 'has_sqlite=True' + 'snippets' (200-char preview
+        per pattern) + 'text_db' (sidecar filename). Full text lives in the
+        SQLite sidecar at <cart_dir>/<text_db>, fetched on-demand at query time
+        via /api/patterns/{idx}. Mirrors membot's split-cart support — same
+        format, same NPZ keys, same SQLite schema (idx, passage, title, paper_id).
+    """
     try:
         data = np.load(full_path, allow_pickle=True)
         emb = data['embeddings']
-        passages_raw = data['passages']
-        txt = [str(p) for p in passages_raw]
+
+        # Detect split-cart via has_sqlite flag (membot convention)
+        has_sqlite = bool(data['has_sqlite']) if 'has_sqlite' in data.files else False
+
+        if has_sqlite:
+            # Split cart: snippets in NPZ, full text in SQLite sidecar
+            snippets_raw = data['snippets']
+            txt = [str(s) for s in snippets_raw]
+            db_filename = str(data['text_db']) if 'text_db' in data.files else None
+        else:
+            # Standard cart: full passages in NPZ
+            passages_raw = data['passages']
+            txt = [str(p) for p in passages_raw]
+            db_filename = None
+
         hippo = parse_hippocampus(data)
         data.close()
     except Exception as e:
@@ -309,7 +350,26 @@ def _mount_membot_npz(full_path: str, cart_name: str) -> MountResponse:
     # Load hippocampus navigation data if present
     engine.hippocampus = hippo
 
+    # Open split-cart SQLite sidecar if present
+    engine.is_split_cart = False
+    engine.sqlite_conn = None
+    engine.sqlite_db_path = None
+    if has_sqlite and db_filename:
+        db_path = os.path.join(cart_dir, db_filename)
+        if os.path.exists(db_path):
+            try:
+                engine.sqlite_conn = sqlite3.connect(db_path, check_same_thread=False)
+                engine.sqlite_db_path = db_path
+                engine.is_split_cart = True
+                print(f"[mount] Split cart: SQLite sidecar opened at {db_path}")
+            except Exception as e:
+                print(f"[mount] Split cart sidecar open failed: {e}")
+        else:
+            print(f"[mount] Split cart sidecar not found at {db_path}")
+
     message_parts = [f"{len(txt)} patterns", f"from {cart_dir}"]
+    if engine.is_split_cart:
+        message_parts.append("split-cart (SQLite sidecar)")
     if hippo is not None:
         n_linked = sum(1 for h in hippo if h.get("prev") is not None or h.get("next") is not None)
         message_parts.append(f"Hippo: {n_linked} linked")
@@ -947,6 +1007,16 @@ async def search_endpoint(req: SearchRequest):
     )
     elapsed = (time.perf_counter() - t0) * 1000
 
+    # Split-cart provenance hint — for split carts, the search response surfaces
+    # source_db so the frontend knows to render the "Load full passage from <db>"
+    # CTA in the modal. paper_id is NOT fetched here (would require a SQLite hop
+    # per result, defeating the lazy-load design); it arrives later via
+    # /api/patterns/{idx} when the user clicks the CTA. Same shape as membot.
+    source_db_label = (
+        os.path.basename(engine.sqlite_db_path)
+        if engine.is_split_cart and engine.sqlite_db_path else None
+    )
+
     search_results = []
     for rank, r in enumerate(results):
         search_results.append(SearchResult(
@@ -961,6 +1031,7 @@ async def search_endpoint(req: SearchRequest):
             preview=r['preview'],
             full_text=r['full_text'],
             from_lattice=r.get('from_lattice', False),
+            source_db=source_db_label,
             prev_idx=r.get('prev_idx'),
             next_idx=r.get('next_idx'),
         ))
@@ -1013,12 +1084,35 @@ async def list_deleted():
 
 @app.get("/api/patterns/{idx}", response_model=PatternResponse)
 async def get_pattern(idx: int):
-    """Fetch a single pattern by index, with hippocampus PREV/NEXT links."""
+    """Fetch a single pattern by index, with hippocampus PREV/NEXT links.
+
+    For split carts, the in-RAM `engine.passages[idx]` is the 200-char snippet;
+    the FULL passage is fetched from the SQLite sidecar on demand. This is the
+    user-driven 'load source' path (parity with membot's RAG+ provenance
+    feature) — every full-text fetch is a labeled action against the named
+    source database.
+    """
     if idx < 0 or idx >= len(engine.passages):
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail=f"Pattern {idx} not found")
 
+    # Default: in-RAM text (full for standard carts, snippet for split carts)
     text = engine.passages[idx]
+    paper_id = None
+    source_db = None
+
+    # Split cart: fetch the FULL passage from SQLite sidecar.
+    # int(idx) cast is load-bearing: sqlite3 binds numpy.int64 silently as a
+    # no-match value, so passing the raw idx (which can be int or numpy.int64
+    # depending on caller) returns zero rows.
+    if engine.is_split_cart and engine.sqlite_conn is not None:
+        sqlite_row = _sqlite_fetch_passages(engine.sqlite_conn, [int(idx)]).get(int(idx))
+        if sqlite_row:
+            text = sqlite_row.get("passage") or text
+            paper_id = sqlite_row.get("paper_id")
+        if engine.sqlite_db_path:
+            source_db = os.path.basename(engine.sqlite_db_path)
+
     lines = text.splitlines() if text else ["[empty]"]
     title = lines[0][:100]
     preview = " ".join(lines[1:3])[:200] if len(lines) > 1 else ""
@@ -1032,6 +1126,7 @@ async def get_pattern(idx: int):
     return PatternResponse(
         idx=idx, title=title, preview=preview, full_text=text,
         prev_idx=prev_idx, next_idx=next_idx,
+        source_db=source_db, paper_id=paper_id,
     )
 
 

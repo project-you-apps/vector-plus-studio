@@ -22,6 +22,12 @@ export interface SearchResult {
   from_lattice: boolean
   prev_idx: number | null
   next_idx: number | null
+  // Split-cart provenance hints — populated when the mounted cart has a
+  // SQLite sidecar. Frontend uses presence of source_db to render the
+  // "Load full passage from <db>" CTA in the modal. paper_id arrives later
+  // via /api/patterns/{idx} when the user clicks the CTA.
+  source_db?: string | null
+  paper_id?: string | null
 }
 
 export interface PatternResponse {
@@ -31,6 +37,10 @@ export interface PatternResponse {
   full_text: string
   prev_idx: number | null
   next_idx: number | null
+  // Split-cart provenance — populated when /api/patterns/{idx} fetched the
+  // full text from a SQLite sidecar.
+  source_db?: string | null
+  paper_id?: string | null
 }
 
 export interface SearchResponse {

@@ -228,6 +228,14 @@ class EngineManager:
         # Hippocampus navigation (loaded from .cart.npz hippocampus metadata)
         self.hippocampus: list[dict] | None = None  # list of {prev, next, source_hash, sequence_num}
 
+        # Split-cart state (parity with membot's NPZ-index-plus-SQLite-sidecar format).
+        # When mounted from a split cart, in-RAM `passages` holds the 200-char snippets
+        # and `sqlite_conn` is opened against the sidecar for full-text retrieval on
+        # demand via /api/patterns/{idx}.
+        self.is_split_cart: bool = False
+        self.sqlite_conn = None  # sqlite3.Connection | None
+        self.sqlite_db_path: str | None = None
+
         # Background training state
         self.training_active = False
         self.training_progress = 0
@@ -317,6 +325,15 @@ class EngineManager:
         self.dirty = False
         self.read_only = True
         self.hippocampus = None
+        # Close split-cart sidecar if we have one
+        if self.sqlite_conn is not None:
+            try:
+                self.sqlite_conn.close()
+            except Exception:
+                pass
+        self.sqlite_conn = None
+        self.sqlite_db_path = None
+        self.is_split_cart = False
 
     def shutdown(self):
         """Clean shutdown."""
