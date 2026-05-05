@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { ChevronLeft, ChevronRight, X, Loader2 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
+import { renderTextWithLinks } from './ResultCard'
 
 export default function PassageModal() {
   const modalOpen = useAppStore((s) => s.modalOpen)
@@ -8,6 +9,8 @@ export default function PassageModal() {
   const loading = useAppStore((s) => s.modalLoading)
   const closeModal = useAppStore((s) => s.closeModal)
   const navigateModal = useAppStore((s) => s.navigateModal)
+  const query = useAppStore((s) => s.query)
+  const mountedCart = useAppStore((s) => s.status?.mounted_cartridge)
 
   const hasPrev = passage?.prev_idx != null
   const hasNext = passage?.next_idx != null
@@ -56,10 +59,20 @@ export default function PassageModal() {
             </div>
           ) : (
             <pre className="text-sm text-slate-300 whitespace-pre-wrap font-mono leading-relaxed">
-              {passage.full_text || '[No text available]'}
+              {passage.full_text ? renderTextWithLinks(passage.full_text, query) : '[No text available]'}
             </pre>
           )}
         </div>
+
+        {/* Provenance source line — VPS-shape (cart name + pattern idx).
+            Membot demo's three-tier provenance has a "Load from source DB" CTA
+            here; VPS local backend doesn't have split-cart support yet, so
+            this is the simpler honest version. */}
+        {mountedCart && !loading && (
+          <div className="px-6 py-2 border-t border-slate-700/40 text-[11px] text-slate-500 font-mono">
+            source: {mountedCart} · pattern #{passage.idx}
+          </div>
+        )}
 
         {/* Footer with navigation */}
         <div className="flex items-center justify-between px-6 py-4 border-t border-slate-700/40">

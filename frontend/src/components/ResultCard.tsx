@@ -56,7 +56,7 @@ function stemPattern(word: string): string {
 }
 
 /** Split text on query keywords and wrap matches in highlighted spans. */
-function highlightText(text: string, query: string): ReactNode {
+export function highlightText(text: string, query: string): ReactNode {
   if (!query.trim()) return text
 
   // Clean punctuation, filter: 2+ chars and not a stop word
@@ -85,6 +85,48 @@ function highlightText(text: string, query: string): ReactNode {
       part
     )
   )
+}
+
+/** Render text with http(s) URLs wrapped in <a target="_blank"> AND query-keyword highlighting
+ *  applied to non-URL segments. URLs themselves are not highlighted (would risk breaking the link).
+ *  Trailing punctuation (.,;:!?) immediately after a URL is excluded from the link.
+ *
+ *  Ported from the Membot demo's provenance feature 2026-05-04 — VPS-shaped (React node tree
+ *  rather than HTML string injection, so structurally safer than the Membot version). */
+export function renderTextWithLinks(text: string, query: string): ReactNode {
+  if (!text) return text
+  const URL_RE = /(https?:\/\/[^\s<]+?)([.,;:!?)\]]?)(?=\s|$|<)/g
+  const out: ReactNode[] = []
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+  let key = 0
+  while ((match = URL_RE.exec(text)) !== null) {
+    // Non-URL text before this URL — highlight it
+    if (match.index > lastIndex) {
+      const before = text.slice(lastIndex, match.index)
+      out.push(<span key={`t-${key++}`}>{highlightText(before, query)}</span>)
+    }
+    const url = match[1]
+    const trailing = match[2]
+    out.push(
+      <a
+        key={`u-${key++}`}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-cyan-400 underline decoration-dotted hover:decoration-solid"
+      >
+        {url}
+      </a>
+    )
+    if (trailing) out.push(trailing)
+    lastIndex = match.index + match[0].length
+  }
+  if (lastIndex < text.length) {
+    const after = text.slice(lastIndex)
+    out.push(<span key={`t-${key++}`}>{highlightText(after, query)}</span>)
+  }
+  return out.length > 0 ? <>{out}</> : highlightText(text, query)
 }
 
 interface Props {
@@ -129,7 +171,7 @@ export default function ResultCard({ result }: Props) {
             )}
           </div>
           {result.preview && (
-            <p className="text-sm text-slate-500 line-clamp-2">{highlightText(result.preview, query)}</p>
+            <p className="text-sm text-slate-500 line-clamp-2">{renderTextWithLinks(result.preview, query)}</p>
           )}
         </div>
 
@@ -201,7 +243,7 @@ export default function ResultCard({ result }: Props) {
       {expanded && (
         <div className="border-t border-slate-700/30 p-4 bg-slate-900/30">
           <pre className="text-sm text-slate-400 whitespace-pre-wrap font-mono leading-relaxed max-h-96 overflow-y-auto">
-            {result.full_text ? highlightText(result.full_text, query) : '[No text available]'}
+            {result.full_text ? renderTextWithLinks(result.full_text, query) : '[No text available]'}
           </pre>
           {hasLinks && (
             <button
