@@ -1,7 +1,8 @@
 import { useEffect } from 'react'
 import { ChevronLeft, ChevronRight, X, Loader2, FolderOpen } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { useAppStore } from '../store/appStore'
-import { renderTextWithLinks } from './ResultCard'
 
 export default function PassageModal() {
   const modalOpen = useAppStore((s) => s.modalOpen)
@@ -10,7 +11,6 @@ export default function PassageModal() {
   const closeModal = useAppStore((s) => s.closeModal)
   const navigateModal = useAppStore((s) => s.navigateModal)
   const loadSource = useAppStore((s) => s.loadSourceForCurrentPassage)
-  const query = useAppStore((s) => s.query)
   const mountedCart = useAppStore((s) => s.status?.mounted_cartridge)
 
   const hasPrev = passage?.prev_idx != null
@@ -51,17 +51,69 @@ export default function PassageModal() {
           </button>
         </div>
 
-        {/* Body */}
+        {/* Body — markdown rendered with remark-gfm (tables, autolinks, strikethrough).
+              Trade-off vs the previous <pre>/renderTextWithLinks: per-query term
+              highlighting is lost in the modal (it stays on the result cards, where
+              it's more useful). The modal is the readable, formatted view; cards
+              are the scan view. */}
         <div className="flex-1 overflow-y-auto px-6 py-5">
           {loading ? (
             <div className="flex items-center justify-center py-12 text-slate-500">
               <Loader2 size={20} className="animate-spin mr-2" />
               Loading passage...
             </div>
+          ) : passage.full_text ? (
+            <div className="text-sm text-slate-300 leading-relaxed space-y-3">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  h1: ({ children }) => <h1 className="text-xl font-semibold text-slate-100 mt-4 mb-2">{children}</h1>,
+                  h2: ({ children }) => <h2 className="text-lg font-semibold text-slate-100 mt-3 mb-2">{children}</h2>,
+                  h3: ({ children }) => <h3 className="text-base font-semibold text-slate-200 mt-2 mb-1">{children}</h3>,
+                  p: ({ children }) => <p className="my-2">{children}</p>,
+                  ul: ({ children }) => <ul className="list-disc pl-6 my-2 space-y-1">{children}</ul>,
+                  ol: ({ children }) => <ol className="list-decimal pl-6 my-2 space-y-1">{children}</ol>,
+                  li: ({ children }) => <li className="text-slate-300">{children}</li>,
+                  a: ({ href, children }) => (
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-cyan-400 hover:text-cyan-300 underline decoration-cyan-400/40 hover:decoration-cyan-300"
+                    >
+                      {children}
+                    </a>
+                  ),
+                  code: ({ children }) => (
+                    <code className="px-1 py-0.5 rounded bg-slate-800 text-amber-200 font-mono text-[12px]">{children}</code>
+                  ),
+                  pre: ({ children }) => (
+                    <pre className="my-3 p-3 rounded-lg bg-slate-950/80 border border-slate-800 overflow-x-auto text-[12px] font-mono text-slate-200">{children}</pre>
+                  ),
+                  blockquote: ({ children }) => (
+                    <blockquote className="border-l-2 border-purple-500/40 pl-3 my-3 italic text-slate-400">{children}</blockquote>
+                  ),
+                  table: ({ children }) => (
+                    <div className="my-3 overflow-x-auto">
+                      <table className="border-collapse text-[13px]">{children}</table>
+                    </div>
+                  ),
+                  th: ({ children }) => (
+                    <th className="border border-slate-700 px-3 py-1 bg-slate-800/60 text-slate-200 text-left font-medium">{children}</th>
+                  ),
+                  td: ({ children }) => (
+                    <td className="border border-slate-700 px-3 py-1 text-slate-300">{children}</td>
+                  ),
+                  hr: () => <hr className="my-4 border-slate-700/50" />,
+                  strong: ({ children }) => <strong className="font-semibold text-slate-100">{children}</strong>,
+                  em: ({ children }) => <em className="italic text-slate-200">{children}</em>,
+                }}
+              >
+                {passage.full_text}
+              </ReactMarkdown>
+            </div>
           ) : (
-            <pre className="text-sm text-slate-300 whitespace-pre-wrap font-mono leading-relaxed">
-              {passage.full_text ? renderTextWithLinks(passage.full_text, query) : '[No text available]'}
-            </pre>
+            <div className="text-sm text-slate-500 italic">[No text available]</div>
           )}
         </div>
 
