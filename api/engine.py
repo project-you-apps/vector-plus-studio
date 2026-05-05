@@ -210,6 +210,11 @@ class EngineManager:
         # Write protection — default read-only, explicit unlock required
         self.read_only = True
 
+        # Cart-format permissions (Step 2a). Loaded from sidecar at mount.
+        # Schema: {"default": "r"|"rw"|"rwx", "owner"?: str, "description"?: str}.
+        # When None, cart pre-dates Step 2a and defaults to writable for compat.
+        self.cart_permissions: dict | None = None
+
         # Cartridge state
         self.mounted_name: str | None = None
         self.mounted_path: str | None = None  # full path if opened from file picker
@@ -324,6 +329,7 @@ class EngineManager:
         self.training_total = 0
         self.dirty = False
         self.read_only = True
+        self.cart_permissions = None
         self.hippocampus = None
         # Close split-cart sidecar if we have one
         if self.sqlite_conn is not None:

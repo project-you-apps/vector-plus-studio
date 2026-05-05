@@ -29,11 +29,27 @@ if READ_ONLY_MODE:
 
 
 def _enforce_writable():
-    """Raise 403 if the server is in read-only mode. Call from any write route."""
+    """Raise 403 if writes are disallowed at the server or cart level.
+
+    Two layers compose:
+      1. Server-wide VPS_READ_ONLY env var (Step 1) — public-deploy gate.
+      2. Cart-level permissions sidecar (Step 2a) — cart self-declares its
+         RWX. cart_permits_write returns True for carts with no sidecar
+         (backward compat) and for carts whose `default` includes 'w'.
+    """
     if READ_ONLY_MODE:
         raise HTTPException(
             status_code=403,
             detail="Server is in read-only mode. Writes disabled for the public demo.",
+        )
+    if engine.mounted_name and not cart_permits_write(engine.cart_permissions):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Cart '{engine.mounted_name}' is read-only by its permissions sidecar "
+                f"(default={(engine.cart_permissions or {}).get('default', 'r')!r}). "
+                f"Edit the cart's .permissions.json to allow writes."
+            ),
         )
 
 from .engine import engine, TRAIN_SETTLE_FRAMES, SIG_SETTLE_FRAMES, TextRegionEncoder, TrainingEncoder
@@ -111,6 +127,7 @@ from .cartridge_io import (
     list_cartridges as _list_cartridges, load_cartridge, load_signatures,
     find_cartridge_path, find_companion_file, validate_brain_manifest,
     save_brain_manifest, save_signatures, DATA_DIR, parse_hippocampus,
+    load_cart_permissions, cart_permits_write,
 )
 from .search import search as do_search
 from .forge import forge_cartridge
@@ -176,6 +193,7 @@ async def get_status():
         dirty=engine.dirty,
         read_only=engine.read_only or READ_ONLY_MODE,
         read_only_mode=READ_ONLY_MODE,
+        cart_permissions=engine.cart_permissions,
     )
 
 
@@ -248,6 +266,30 @@ def _open_file_dialog() -> str:
         return ""
 
 
+def _apply_cart_permissions_after_mount(cart_path: str | None) -> None:
+    """Step 2a: load the cart's permissions sidecar after a successful mount.
+
+    Called after every mount helper. If the cart self-declares 'r' default,
+    engine.read_only stays True and unlock requests will 403 (via _enforce_writable).
+    """
+    if not cart_path:
+        return
+    perms = load_cart_permissions(cart_path)
+    engine.cart_permissions = perms
+    if perms is not None:
+        if not cart_permits_write(perms):
+            engine.read_only = True
+        print(f"[Mount] cart_permissions loaded: default={perms.get('default')!r}")
+
+
+async def _dispatch_mount(helper_fn, *args) -> MountResponse:
+    """Run a mount helper in a thread and apply cart permissions on success."""
+    resp = await asyncio.to_thread(helper_fn, *args)
+    if resp.success:
+        _apply_cart_permissions_after_mount(engine.mounted_path)
+    return resp
+
+
 @app.post("/api/cartridges/mount", response_model=MountResponse)
 async def mount_cartridge(req: MountRequest):
     # Unmount current if any
@@ -274,7 +316,7 @@ async def mount_cartridge(req: MountRequest):
             if 'embeddings' in probe_keys and 'passages' in probe_keys:
                 # Membot-format cartridge: embeddings + passages (like a PKL)
                 cart_name = basename.replace('.cart.npz', '').replace('.npz', '')
-                return await asyncio.to_thread(_mount_membot_npz, filename, cart_name)
+                return await _dispatch_mount(_mount_membot_npz, filename, cart_name)
             else:
                 # Studio signatures format
                 cart_name = basename
@@ -282,7 +324,7 @@ async def mount_cartridge(req: MountRequest):
                     if cart_name.endswith(suffix):
                         cart_name = cart_name[:-len(suffix)]
                         break
-                return await asyncio.to_thread(_mount_brain_by_path, filename, cart_name)
+                return await _dispatch_mount(_mount_brain_by_path, filename, cart_name)
 
         if ext == '.npy':
             cart_name = basename
@@ -290,18 +332,18 @@ async def mount_cartridge(req: MountRequest):
                 if cart_name.endswith(suffix):
                     cart_name = cart_name[:-len(suffix)]
                     break
-            return await asyncio.to_thread(_mount_brain_by_path, filename, cart_name)
+            return await _dispatch_mount(_mount_brain_by_path, filename, cart_name)
 
         cart_name = os.path.splitext(basename)[0]
-        return await asyncio.to_thread(_mount_pkl_by_path, filename, cart_name)
+        return await _dispatch_mount(_mount_pkl_by_path, filename, cart_name)
 
     is_brain_only = filename.endswith("(brain only)")
     cart_name = filename.replace(" (brain only)", "").replace(".pkl", "")
 
     if is_brain_only:
-        return await asyncio.to_thread(_mount_brain_only, cart_name)
+        return await _dispatch_mount(_mount_brain_only, cart_name)
     else:
-        return await asyncio.to_thread(_mount_pkl, filename, cart_name)
+        return await _dispatch_mount(_mount_pkl, filename, cart_name)
 
 
 def _sqlite_fetch_passages(conn: sqlite3.Connection, indices: list) -> dict:

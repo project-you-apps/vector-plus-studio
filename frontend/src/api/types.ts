@@ -68,6 +68,16 @@ export interface StatusResponse {
   // True when the server is in global read-only mode (VPS_READ_ONLY env var).
   // Frontend uses this to hide the unlock button — attempting to unlock returns 403.
   read_only_mode?: boolean
+  // Cart-format permissions sidecar (Step 2a). Present when the cart has a
+  // .permissions.json next to it. default: "r" | "rw" | "rwx".
+  cart_permissions?: CartPermissions | null
+}
+
+export interface CartPermissions {
+  default: string  // "r" | "rw" | "rwx"
+  owner?: string
+  description?: string
+  version?: string
 }
 
 export interface DeletedPattern {

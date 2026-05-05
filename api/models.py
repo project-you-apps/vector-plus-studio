@@ -90,6 +90,7 @@ class StatusResponse(BaseModel):
     dirty: bool = False
     read_only: bool = True
     read_only_mode: bool = False  # global server-side lock (VPS_READ_ONLY env var)
+    cart_permissions: dict | None = None  # cart-format RWX sidecar (Step 2a)
 
 class DeletedPattern(BaseModel):
     idx: int

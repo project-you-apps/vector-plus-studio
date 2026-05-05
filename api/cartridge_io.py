@@ -244,6 +244,86 @@ def save_brain_manifest(brain_path, embeddings):
     return manifest_path
 
 
+# ---------------------------------------------------------------------------
+# Cart-format RWX (Step 2a of the RWX roadmap, Andy 2026-05-05).
+#
+# Permissions live in a sidecar JSON `<cart_basename>.permissions.json`
+# alongside the cart file. Sidecar (vs. embedded in NPZ) so existing carts
+# can be retrofitted with permissions without rebuild.
+#
+# Schema:
+#   {
+#     "default": "r" | "rw" | "rwx",   // cart-wide default
+#     "owner": "string" (optional),    // foundation for Step 3 user-ACL layer
+#     "description": "string" (optional),
+#     "version": "1.0"
+#   }
+#
+# Backward-compat: when the sidecar is absent, carts default to "rw" so
+# existing private use is unchanged. Public deploys ship sidecars with
+# "default": "r" alongside every cart.
+#
+# Step 2b (hrow per-pattern RWX) will layer on top of this — when both
+# a default and per-pattern bits exist, per-pattern wins.
+# ---------------------------------------------------------------------------
+
+def _permissions_path_for(cart_path: str) -> str:
+    """Compute the sidecar path next to a cart file."""
+    base = cart_path
+    for suffix in (".cart.npz", ".cart.pkl", ".npz", ".pkl", "_brain.npy"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    else:
+        base = os.path.splitext(cart_path)[0]
+    return base + ".permissions.json"
+
+
+def load_cart_permissions(cart_path: str) -> dict | None:
+    """Read cart permissions sidecar. Returns None if absent."""
+    perms_path = _permissions_path_for(cart_path)
+    if not os.path.exists(perms_path):
+        return None
+    try:
+        with open(perms_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return None
+        return data
+    except Exception as e:
+        print(f"[cartridge_io] Failed to read permissions {perms_path}: {e}")
+        return None
+
+
+def save_cart_permissions(cart_path: str, permissions: dict) -> str:
+    """Write cart permissions sidecar. Caller supplies the permissions dict."""
+    perms_path = _permissions_path_for(cart_path)
+    payload = {
+        "default": permissions.get("default", "rw"),
+        "version": permissions.get("version", "1.0"),
+    }
+    if "owner" in permissions:
+        payload["owner"] = permissions["owner"]
+    if "description" in permissions:
+        payload["description"] = permissions["description"]
+    with open(perms_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    return perms_path
+
+
+def cart_permits_write(permissions: dict | None) -> bool:
+    """Resolve whether the cart-level permissions allow writes.
+
+    Returns True if the cart's `default` includes 'w'. Absent/malformed
+    permissions default to True (rw) for backward compat with carts built
+    before Step 2a.
+    """
+    if not permissions:
+        return True
+    default = str(permissions.get("default", "rw")).lower()
+    return "w" in default
+
+
 def validate_brain_manifest(brain_path, embeddings):
     manifest_path = brain_path.replace("_brain.npy", "_brain_manifest.json")
     if not os.path.exists(manifest_path):

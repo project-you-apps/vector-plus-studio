@@ -69,9 +69,10 @@ export default function Header() {
           <span className="text-xs text-green-400">{saveMsg}</span>
         )}
 
-        {/* Lock/Unlock toggle. In server-wide read-only mode (public demo, set via
-            VPS_READ_ONLY env var), the toggle is replaced by a non-interactive
-            "Public read-only" badge — unlock requests would 403 anyway. */}
+        {/* Lock state — three flavors, in priority order:
+              (1) Server-wide read-only (VPS_READ_ONLY env var) → "Public read-only"
+              (2) Cart-declared read-only (Step 2a permissions sidecar) → "Cart read-only"
+              (3) Per-session toggle (the legacy interactive lock) */}
         {status?.mounted_cartridge && status.read_only_mode && (
           <span
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-700/50 text-slate-400 cursor-default"
@@ -81,7 +82,18 @@ export default function Header() {
             Public read-only
           </span>
         )}
-        {status?.mounted_cartridge && !status.read_only_mode && (
+        {status?.mounted_cartridge && !status.read_only_mode && status.cart_permissions
+          && !String(status.cart_permissions.default).includes('w') && (
+          <span
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-700/50 text-slate-400 cursor-default"
+            title={`This cart's .permissions.json declares default="${status.cart_permissions.default}". Edit the sidecar to allow writes.`}
+          >
+            <Lock size={14} />
+            Cart read-only
+          </span>
+        )}
+        {status?.mounted_cartridge && !status.read_only_mode
+          && (!status.cart_permissions || String(status.cart_permissions.default).includes('w')) && (
           <button
             onClick={toggleLock}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
