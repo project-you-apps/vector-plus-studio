@@ -1,4 +1,4 @@
-import { Search, LayoutDashboard, Hammer, Terminal, Settings } from 'lucide-react'
+import { Search, LayoutDashboard, Hammer, Pencil, Terminal, Settings } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import type { ActiveScreen } from '../store/appStore'
 
@@ -16,6 +16,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: 'search',      label: 'Search',       icon: Search,          tooltip: 'Search and CRUD on the mounted cartridge (default)' },
   { key: 'overview',    label: 'Overview',     icon: LayoutDashboard, tooltip: 'Cart stats, mounted carts, system health' },
   { key: 'cartBuilder', label: 'Cart Builder', icon: Hammer,          tooltip: 'Drag-and-drop cart creation from documents' },
+  { key: 'crud',        label: 'Edit Carts',   icon: Pencil,          tooltip: 'Add / update / delete passages on the mounted cart' },
   { key: 'sql',         label: 'SQL',          icon: Terminal,        tooltip: 'SQL-like query editor (planned)' },
   { key: 'settings',    label: 'Settings',     icon: Settings,        tooltip: 'Search modes, theme, advanced options' },
 ]

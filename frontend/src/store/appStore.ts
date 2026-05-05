@@ -8,7 +8,7 @@ import * as api from '../api/client'
 // Top-level screen state (nav rail picks which screen renders in the main area).
 // 'search' is the default; the original VPS 1.0 search/CRUD experience. Other
 // screens are stubbed in this iteration and fleshed out incrementally.
-export type ActiveScreen = 'search' | 'overview' | 'cartBuilder' | 'sql' | 'settings'
+export type ActiveScreen = 'search' | 'overview' | 'cartBuilder' | 'crud' | 'sql' | 'settings'
 
 interface AppState {
   // Active screen (nav rail)
