@@ -95,6 +95,7 @@ from .cartridge_io import (
 )
 from .search import search as do_search
 from .forge import forge_cartridge
+from . import cartbuilder
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +130,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Cart Builder Phase 1 — port of cart-builder Flask app as /api/cartbuilder/*
+# (15 backend routes; CRUD scope deferred to its own screen per 2026-05-05 decision).
+app.include_router(cartbuilder.router)
 
 
 # ---------------------------------------------------------------------------
