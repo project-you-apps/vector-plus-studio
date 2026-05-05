@@ -6,17 +6,29 @@ __pycache__/
 dist/
 build/
 
-# User data (cartridges contain personal documents + generated caches)
-cartridges/*.pkl
-cartridges/*.npy
-cartridges/*.npz
-cartridges/*.json
-cartridges/*.txt
-cartridges/*.jsonl
+# User data (cartridges contain personal documents + generated caches).
+# Hardened 2026-05-05 to also catch nested subdirs (e.g. archive folders
+# under cartridges/ that may contain personal session transcripts).
+cartridges/**/*.pkl
+cartridges/**/*.npy
+cartridges/**/*.npz
+cartridges/**/*.json
+cartridges/**/*.txt
+cartridges/**/*.jsonl
+cartridges/**/*.db
+cartridges/**/*.db-*
+cartridges/**/*.cart
+cartridges/**/claude_sessions*
 !cartridges/.gitkeep
 
 # Sample data - allow small demo cartridges
 !sample_data/.gitkeep
+
+# Session transcripts / memory artifacts — never commit, anywhere in tree
+**/claude_sessions*
+**/session_memory*
+**/session-memory*
+**/memory_keys*
 
 # IDE
 .vscode/
