@@ -167,6 +167,16 @@ def _check_available() -> None:
         )
 
 
+def _check_writable() -> None:
+    """Raise 403 if the server is in global read-only mode (VPS_READ_ONLY env var).
+    Mirrors main._enforce_writable but kept local to avoid a circular import."""
+    if os.environ.get("VPS_READ_ONLY", "").lower() in ("1", "true", "yes", "on"):
+        raise HTTPException(
+            status_code=403,
+            detail="Server is in read-only mode. Cart Builder writes disabled for the public demo.",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
@@ -177,6 +187,7 @@ router = APIRouter(prefix="/api/cartbuilder", tags=["cartbuilder"])
 @router.post("/upload")
 async def upload(files: list[UploadFile] = File(...)):
     """Multipart file upload. Saves to UPLOAD_DIR with a hashed prefix, parses, registers in files_db."""
+    _check_writable()
     _check_available()
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
@@ -222,6 +233,7 @@ async def list_files():
 @router.post("/metadata")
 async def set_metadata(payload: dict):
     """Set owner/description/tags on a workspace file. Persists to .meta.json sidecar."""
+    _check_writable()
     file_id = payload.get("file_id")
     if file_id not in files_db:
         raise HTTPException(status_code=404, detail="File not found")
@@ -238,6 +250,7 @@ async def set_metadata(payload: dict):
 @router.post("/ingest")
 async def ingest_file(payload: dict):
     """Add a document to the workspace by server-side path (from the folder browser)."""
+    _check_writable()
     _check_available()
     file_path = payload.get("path", "")
     if not file_path or not os.path.isfile(file_path):
@@ -289,6 +302,7 @@ async def pattern0(name: str = "hackathon-cart"):
 @router.post("/build")
 async def build(payload: dict):
     """Kick off async cart build from current workspace state."""
+    _check_writable()
     _check_available()
     cart_name = payload.get("cart_name", "hackathon-cart")
     cart_name = "".join(c if c.isalnum() or c in "-_" else "-" for c in cart_name)
@@ -431,6 +445,7 @@ async def get_cart_folders():
 
 @router.post("/cart_folders")
 async def add_cart_folder(payload: dict):
+    _check_writable()
     folder = (payload.get("folder") or "").strip()
     if not folder:
         raise HTTPException(status_code=400, detail="No folder provided")
@@ -445,6 +460,7 @@ async def add_cart_folder(payload: dict):
 
 @router.delete("/cart_folders")
 async def remove_cart_folder(payload: dict):
+    _check_writable()
     folder = (payload.get("folder") or "").strip()
     folders = load_cart_folders()
     if folder in folders:
@@ -491,6 +507,7 @@ async def load_cart(payload: dict):
     Large carts (>100 sources) get truncated file-card display but remain searchable.
     Restores per-file metadata from .meta.json sidecar if present.
     """
+    _check_writable()  # Mutates server-side workspace state (files_db.clear())
     _check_available()
     cart_path = payload.get("cart_path", "")
     if not cart_path or not os.path.exists(cart_path):
@@ -587,6 +604,7 @@ async def load_cart(payload: dict):
 @router.post("/clear_workspace")
 async def clear_workspace():
     """Reset workspace state — files, build state."""
+    _check_writable()
     files_db.clear()
     try:
         from builder import build_state, _lock  # type: ignore

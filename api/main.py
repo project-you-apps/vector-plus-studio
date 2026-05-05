@@ -14,8 +14,27 @@ import threading
 import numpy as np
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+
+# Global read-only mode for public deploys (e.g. droplet demo).
+# Set VPS_READ_ONLY=1 in the environment to refuse all unlock + write
+# endpoints regardless of the per-cart engine.read_only state. This is
+# Step 1 of the RWX roadmap (Andy 2026-05-05): a coarse server-wide
+# lock for the public demo. Step 2 will replace it with cart-format
+# RWX bits in the hippocampus row + Pattern 0 manifest.
+READ_ONLY_MODE = os.environ.get("VPS_READ_ONLY", "").lower() in ("1", "true", "yes", "on")
+if READ_ONLY_MODE:
+    print("[VPS] READ_ONLY_MODE active (VPS_READ_ONLY env var set). All writes refused.")
+
+
+def _enforce_writable():
+    """Raise 403 if the server is in read-only mode. Call from any write route."""
+    if READ_ONLY_MODE:
+        raise HTTPException(
+            status_code=403,
+            detail="Server is in read-only mode. Writes disabled for the public demo.",
+        )
 
 from .engine import engine, TRAIN_SETTLE_FRAMES, SIG_SETTLE_FRAMES, TextRegionEncoder, TrainingEncoder
 from .models import (
@@ -155,7 +174,8 @@ async def get_status():
         signatures_loaded=engine.signatures_loaded,
         deleted_count=len(engine.deleted_ids),
         dirty=engine.dirty,
-        read_only=engine.read_only,
+        read_only=engine.read_only or READ_ONLY_MODE,
+        read_only_mode=READ_ONLY_MODE,
     )
 
 
@@ -925,6 +945,7 @@ async def lock_cartridge():
 
 @app.post("/api/cartridges/unlock", response_model=MessageResponse)
 async def unlock_cartridge():
+    _enforce_writable()  # Public demo: refuses unlock so the per-cart lock can't be cleared
     if not engine.mounted_name:
         return MessageResponse(success=False, message="No cartridge mounted")
     engine.read_only = False
@@ -933,6 +954,7 @@ async def unlock_cartridge():
 
 @app.post("/api/cartridges/save", response_model=MessageResponse)
 async def save_cartridge():
+    _enforce_writable()
     if not engine.mounted_name:
         return MessageResponse(success=False, message="No cartridge mounted")
     if engine.read_only:
@@ -1056,6 +1078,7 @@ async def search_endpoint(req: SearchRequest):
 
 @app.delete("/api/patterns/{idx}", response_model=MessageResponse)
 async def delete_pattern(idx: int):
+    _enforce_writable()
     if engine.read_only:
         return MessageResponse(success=False, message="Cartridge is read-only. Unlock first.")
     if idx < 0 or idx >= len(engine.passages):
@@ -1066,6 +1089,7 @@ async def delete_pattern(idx: int):
 
 @app.post("/api/patterns/{idx}/restore", response_model=MessageResponse)
 async def restore_pattern(idx: int):
+    _enforce_writable()
     if engine.read_only:
         return MessageResponse(success=False, message="Cartridge is read-only. Unlock first.")
     engine.deleted_ids.discard(idx)
@@ -1141,6 +1165,7 @@ async def get_pattern(idx: int):
 
 @app.post("/api/patterns", response_model=MessageResponse)
 async def add_passage(req: AddPassageRequest):
+    _enforce_writable()
     if not engine.mounted_name:
         return MessageResponse(success=False, message="No cartridge mounted")
     if engine.read_only:
@@ -1211,6 +1236,7 @@ async def forge_endpoint(
     name: str = Form(...),
     files: list[UploadFile] = File(...),
 ):
+    _enforce_writable()  # Forge creates new cart files on disk — refuse in read-only mode
     if engine.read_only and engine.mounted_name:
         return MessageResponse(success=False, message="Cartridge is read-only. Unlock first.")
     file_data = []
@@ -1309,6 +1335,7 @@ async def membox_get_status(cart_id: str):
 async def membox_mount_endpoint(req: MemboxMountRequest):
     """TEMPORARY: lets the visualizer panel mount carts directly via Membox.
     Will be removed once Phase 2 unifies the single-user mount path with Membox."""
+    _enforce_writable()
     if not _MEMBOX_AVAILABLE:
         return MessageResponse(success=False, message="Membox not available")
     try:
@@ -1330,6 +1357,7 @@ async def membox_mount_endpoint(req: MemboxMountRequest):
 
 @app.post("/api/membox/unmount", response_model=MessageResponse)
 async def membox_unmount_endpoint(req: MemboxUnmountRequest):
+    _enforce_writable()
     if not _MEMBOX_AVAILABLE:
         return MessageResponse(success=False, message="Membox not available")
     try:
@@ -1341,6 +1369,7 @@ async def membox_unmount_endpoint(req: MemboxUnmountRequest):
 
 @app.post("/api/membox/imprint", response_model=MessageResponse)
 async def membox_imprint(req: MemboxImprintRequest):
+    _enforce_writable()
     if not _MEMBOX_AVAILABLE:
         return MessageResponse(success=False, message="Membox not available")
     try:

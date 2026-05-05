@@ -65,6 +65,9 @@ export interface StatusResponse {
   deleted_count: number
   dirty: boolean
   read_only: boolean
+  // True when the server is in global read-only mode (VPS_READ_ONLY env var).
+  // Frontend uses this to hide the unlock button — attempting to unlock returns 403.
+  read_only_mode?: boolean
 }
 
 export interface DeletedPattern {

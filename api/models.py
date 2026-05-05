@@ -89,6 +89,7 @@ class StatusResponse(BaseModel):
     deleted_count: int = 0
     dirty: bool = False
     read_only: bool = True
+    read_only_mode: bool = False  # global server-side lock (VPS_READ_ONLY env var)
 
 class DeletedPattern(BaseModel):
     idx: int

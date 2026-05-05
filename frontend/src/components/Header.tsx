@@ -69,8 +69,19 @@ export default function Header() {
           <span className="text-xs text-green-400">{saveMsg}</span>
         )}
 
-        {/* Lock/Unlock toggle */}
-        {status?.mounted_cartridge && (
+        {/* Lock/Unlock toggle. In server-wide read-only mode (public demo, set via
+            VPS_READ_ONLY env var), the toggle is replaced by a non-interactive
+            "Public read-only" badge — unlock requests would 403 anyway. */}
+        {status?.mounted_cartridge && status.read_only_mode && (
+          <span
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-700/50 text-slate-400 cursor-default"
+            title="This server is in public read-only mode. All writes are disabled."
+          >
+            <Lock size={14} />
+            Public read-only
+          </span>
+        )}
+        {status?.mounted_cartridge && !status.read_only_mode && (
           <button
             onClick={toggleLock}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
