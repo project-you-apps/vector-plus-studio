@@ -4,6 +4,7 @@ import {
   FolderOpen, Database, AlertCircle, CheckCircle2, Loader2, Info,
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
+import CartBrowser from './CartBrowser'
 
 // CRUDScreen — first mockup for Andy to react to.
 //
@@ -368,6 +369,18 @@ export default function CRUDScreen() {
             </div>
           </div>
         )}
+
+        {/* Cart browser — same component embedded in Cart Builder. From Edit
+            Carts, clicking a cart MOUNTS it (passage-level CRUD context),
+            unlike Cart Builder which loads it into a workspace. */}
+        <CartBrowser
+          headerLabel="Carts available to edit"
+          onCartClick={(cart) => {
+            // Mount via the existing /api/cartridges/mount path (absolute path)
+            useAppStore.getState().mount(cart.path)
+            log('add', `Mounted ${cart.name} for editing`, true)
+          }}
+        />
 
         {/* Activity log */}
         <ActivityLog entries={activity} />

@@ -1,18 +1,63 @@
-import { useState } from 'react'
-import { Hammer, Upload, ExternalLink, FileText, Settings as SettingsIcon, Info } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import {
+  Hammer, Upload, FileText, Save, Loader2, Info, AlertCircle,
+  Folder, Tag, User, RefreshCw,
+} from 'lucide-react'
+import { useCartBuilderStore } from '../store/cartBuilderStore'
+import CartBrowser from './CartBrowser'
+import FolderPickerModal from './FolderPickerModal'
+import type { CartBuilderFile } from '../api/cartbuilder'
 
-// Cart Builder — currently the layout skeleton + a fallback that launches
-// the existing standalone Flask Cart Builder at http://localhost:5000.
-// Full React port is phased; see docs/CARTBUILDER-PORT-PLAN.md.
-
-const STANDALONE_URL = 'http://localhost:5000'
+// Cart Builder — full Phase 2 port. Drag-drop file ingestion → metadata
+// editing → Pattern 0 preview → Build with sticky bottom progress bar.
+//
+// Layout (Andy 2026-05-05 IA decisions):
+//   • CartBrowser cross-cuts: lives at the bottom of this screen AND in
+//     Edit Carts. Same component, same store.
+//   • "Open existing cart" → Cart Builder (this screen). Edit Carts is a
+//     manual nav from the rail when the user wants passage-level edits.
+//   • Build progress = sticky bottom bar (matches Edit Carts save bar).
 
 export default function CartBuilderScreen() {
+  const {
+    files, uploading, uploadError,
+    pattern0, build, buildPolling,
+    cartName, setCartName,
+    uploadFiles, refreshFiles, refreshPattern0,
+    startBuild, stopBuildPolling,
+    clearWorkspace, refreshBrowser,
+  } = useCartBuilderStore()
+
   const [dragOver, setDragOver] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    refreshFiles()
+    refreshPattern0()
+    refreshBrowser()
+    return () => stopBuildPolling()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Re-render Pattern 0 when cartName changes
+  useEffect(() => {
+    refreshPattern0()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cartName])
+
+  const handleFiles = (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return
+    uploadFiles(Array.from(fileList))
+  }
+
+  const isBuilding = build.status === 'building' || buildPolling
+  const buildPct = build.chunks_total
+    ? Math.min(100, Math.round((build.chunks_done ?? 0) / build.chunks_total * 100))
+    : Math.round((build.progress ?? 0) * 100)
 
   return (
-    <main className="flex-1 flex flex-col p-6 overflow-y-auto">
-      <div className="max-w-6xl mx-auto w-full space-y-6">
+    <main className="flex-1 flex flex-col p-6 overflow-y-auto pb-24">
+      <div className="max-w-6xl mx-auto w-full space-y-5">
         {/* Header */}
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -24,112 +69,298 @@ export default function CartBuilderScreen() {
               Drag-and-drop documents to build a Membot brain cartridge.
             </p>
           </div>
-
-          {/* Interim: launch the existing standalone Flask app */}
-          <a
-            href={STANDALONE_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 transition-colors"
-            title="Open the standalone Flask Cart Builder in a new tab (interim — full React port in progress)"
-          >
-            <ExternalLink size={12} />
-            Open standalone Cart Builder
-          </a>
+          {files.length > 0 && (
+            <button
+              onClick={() => {
+                if (confirm('Clear workspace? Uploaded files will be removed.')) {
+                  clearWorkspace()
+                }
+              }}
+              className="text-xs text-slate-500 hover:text-slate-300 px-3 py-1.5 rounded-lg hover:bg-slate-800/40 transition-colors"
+            >
+              Clear workspace
+            </button>
+          )}
         </div>
 
-        {/* Status banner — interim notice */}
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 flex items-start gap-3">
-          <Info size={16} className="text-amber-400 flex-shrink-0 mt-0.5" />
-          <div className="text-sm">
-            <div className="text-amber-200 font-medium mb-0.5">Cart Builder port in progress</div>
-            <div className="text-xs text-slate-400 leading-relaxed">
-              The full Cart Builder is a working Flask app at{' '}
-              <code className="text-slate-300">localhost:5000</code> (run{' '}
-              <code className="text-slate-300">python app.py</code> from{' '}
-              <code className="text-slate-300">cart-builder/cart-builder/</code>).
-              The React port lives here; phasing is in{' '}
-              <code className="text-slate-300">docs/CARTBUILDER-PORT-PLAN.md</code>.
-              Skeleton below is non-functional pending the backend route port.
-            </div>
+        {uploadError && (
+          <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 flex items-start gap-2 text-sm text-rose-300">
+            <AlertCircle size={16} className="flex-shrink-0 mt-0.5" />
+            <span>{uploadError}</span>
           </div>
-        </div>
+        )}
 
-        {/* Drop zone (skeleton) */}
+        {/* Drop zone */}
         <div
-          onDragOver={(e) => {
-            e.preventDefault()
-            setDragOver(true)
-          }}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
           onDragLeave={() => setDragOver(false)}
           onDrop={(e) => {
             e.preventDefault()
             setDragOver(false)
-            // TODO: wire to /api/cartbuilder/upload once backend route lands
-            // For now: hint to use the standalone app
-            alert('Drag-and-drop will land in Phase 2 of the port. Use the standalone Cart Builder for now (Open standalone Cart Builder button in the header).')
+            handleFiles(e.dataTransfer.files)
           }}
-          className={`rounded-xl border-2 border-dashed p-12 text-center transition-colors ${
+          onClick={() => fileInputRef.current?.click()}
+          className={`rounded-xl border-2 border-dashed p-10 text-center transition-colors cursor-pointer ${
             dragOver
               ? 'border-purple-500 bg-purple-500/10'
               : 'border-slate-700 bg-slate-800/20 hover:border-slate-600'
           }`}
         >
-          <Upload size={36} className={`mx-auto mb-3 ${dragOver ? 'text-purple-400' : 'text-slate-600'}`} />
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept=".pdf,.docx,.xlsx,.txt,.md,.rtf"
+            className="hidden"
+            onChange={(e) => handleFiles(e.target.files)}
+          />
+          {uploading ? (
+            <Loader2 size={36} className="mx-auto mb-3 text-purple-400 animate-spin" />
+          ) : (
+            <Upload size={36} className={`mx-auto mb-3 ${dragOver ? 'text-purple-400' : 'text-slate-600'}`} />
+          )}
           <div className="text-sm font-medium text-slate-300 mb-1">
-            Drop documents here
+            {uploading ? 'Uploading…' : 'Drop documents here or click to browse'}
           </div>
           <div className="text-xs text-slate-500">
-            PDF, DOCX, XLSX, TXT, MD, RTF — or click to browse
-          </div>
-          <div className="mt-4 text-[10px] text-slate-600 italic">
-            (Skeleton — wires up in Phase 2)
+            PDF, DOCX, XLSX, TXT, MD, RTF
           </div>
         </div>
 
-        {/* Future-feature placeholders, laid out as the real screen will look */}
-        <div className="grid grid-cols-3 gap-3">
-          <PlaceholderCard
-            icon={FileText}
-            title="File Cards"
-            body="Per-file preview with metadata editor (owner / description / tags). Replace, soft-remove + undo, hard delete."
-          />
-          <PlaceholderCard
-            icon={SettingsIcon}
-            title="Pattern 0 Preview"
-            body="Manifest TOC: cart name, creator, file list with chunk counts, embedding model, tags."
-          />
-          <PlaceholderCard
-            icon={Hammer}
-            title="Build / Update"
-            body="Cart name, build button, live progress bar, model-load message, interrupt detection."
-          />
+        {/* Workspace file list */}
+        {files.length > 0 && (
+          <div className="rounded-lg border border-slate-700 bg-slate-800/30">
+            <div className="px-4 py-2 border-b border-slate-700 flex items-center justify-between">
+              <h2 className="text-xs uppercase tracking-wider text-slate-500 flex items-center gap-2">
+                <FileText size={12} />
+                Workspace ({files.length} {files.length === 1 ? 'file' : 'files'})
+              </h2>
+              <button
+                onClick={refreshFiles}
+                className="text-[10px] text-slate-500 hover:text-slate-300 flex items-center gap-1"
+                title="Refresh from server"
+              >
+                <RefreshCw size={10} />
+                Refresh
+              </button>
+            </div>
+            <div className="divide-y divide-slate-800">
+              {files.map((f) => <FileCard key={f.id} file={f} />)}
+            </div>
+          </div>
+        )}
+
+        {/* Pattern 0 preview + cart name */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="rounded-lg border border-slate-700 bg-slate-800/30 p-4 space-y-3">
+            <h2 className="text-xs uppercase tracking-wider text-slate-500 flex items-center gap-2">
+              <Folder size={12} />
+              Cart Settings
+            </h2>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Cart name</label>
+              <input
+                type="text"
+                value={cartName}
+                onChange={(e) => setCartName(e.target.value)}
+                placeholder="my-cart"
+                className="w-full rounded-lg bg-slate-950/60 border border-slate-800 px-3 py-1.5 text-sm text-slate-200 font-mono focus:outline-none focus:border-purple-500/60"
+              />
+              <div className="text-[10px] text-slate-600 mt-1 italic">
+                alphanumeric, dashes, underscores only — backend sanitizes
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-700 bg-slate-800/30 p-4 space-y-2">
+            <h2 className="text-xs uppercase tracking-wider text-slate-500 flex items-center gap-2">
+              <Info size={12} />
+              Pattern 0 Preview
+            </h2>
+            {pattern0 ? (
+              <div className="text-sm space-y-1.5">
+                <div className="flex justify-between"><span className="text-slate-500">Cart:</span><span className="font-mono text-slate-300">{pattern0.cart_name}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">Files:</span><span className="font-mono text-slate-300">{pattern0.file_count}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">Total chunks:</span><span className="font-mono text-purple-300 font-semibold">{pattern0.total_chunks}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">Created:</span><span className="font-mono text-slate-400 text-xs">{pattern0.created}</span></div>
+              </div>
+            ) : (
+              <div className="text-xs text-slate-600 italic">
+                Pattern 0 unavailable (backend cart-builder modules not loaded on this server).
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Footnote */}
-        <p className="text-center text-xs text-slate-600 italic pt-2">
-          Source: <code className="font-mono">cart-builder/cart-builder/</code> (commit{' '}
-          <code className="font-mono">c2fb03c</code>, v1.1, 2026-04-03). Port plan:{' '}
-          <code className="font-mono">docs/CARTBUILDER-PORT-PLAN.md</code>.
-        </p>
+        {/* Cart browser embedded — also lives in Edit Carts */}
+        <CartBrowser
+          headerLabel="My Carts"
+          onCartClick={(cart) => {
+            // Q1 = (c): one button → Cart Builder. Open loads the cart's
+            // contents into THIS workspace for re-editing. To passage-edit,
+            // user navigates manually to Edit Carts.
+            useCartBuilderStore.getState().loadCart(cart.path)
+          }}
+        />
+      </div>
+
+      <FolderPickerModal />
+
+      {/* Sticky build bar */}
+      <div className="fixed bottom-0 left-0 right-0 lg:left-48 px-6 py-3 border-t border-slate-700 bg-slate-900/95 backdrop-blur flex items-center gap-4 z-40">
+        <div className="flex-1 min-w-0">
+          {isBuilding ? (
+            <div className="flex items-center gap-3">
+              <Loader2 size={16} className="text-amber-400 animate-spin shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-[10px] uppercase tracking-wider text-amber-400 font-semibold">Building</span>
+                  <span className="text-xs text-slate-400 font-mono truncate">
+                    {build.chunks_done ?? 0} / {build.chunks_total ?? 0} chunks · {build.message || build.status}
+                  </span>
+                </div>
+                <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                  <div
+                    className="h-full gradient-bg transition-all duration-500"
+                    style={{ width: `${buildPct}%` }}
+                  />
+                </div>
+              </div>
+              <span className="text-xs text-amber-300 font-mono shrink-0">{buildPct}%</span>
+            </div>
+          ) : build.status === 'done' && build.cart_path ? (
+            <div className="flex items-center gap-2 text-sm text-green-400">
+              <Save size={14} />
+              <span>Built: <code className="font-mono text-xs text-slate-300">{build.cart_path}</code></span>
+            </div>
+          ) : build.status === 'error' ? (
+            <div className="flex items-center gap-2 text-sm text-rose-400">
+              <AlertCircle size={14} />
+              <span>Build failed: {build.error || 'unknown error'}</span>
+            </div>
+          ) : (
+            <span className="text-xs text-slate-500">
+              {files.length === 0 ? 'Add files to start building' : `${files.length} files queued · ready to build`}
+            </span>
+          )}
+        </div>
+
+        <button
+          onClick={startBuild}
+          disabled={isBuilding || files.length === 0}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            !isBuilding && files.length > 0
+              ? 'bg-purple-500/30 border border-purple-500/50 text-purple-200 hover:bg-purple-500/40'
+              : 'bg-slate-800/50 border border-slate-700 text-slate-600 cursor-not-allowed'
+          }`}
+        >
+          <Hammer size={14} />
+          {isBuilding ? 'Building…' : 'Build Cart'}
+        </button>
       </div>
     </main>
   )
 }
 
-function PlaceholderCard({ icon: Icon, title, body }: {
-  icon: React.ComponentType<{ size?: number; className?: string }>
-  title: string
-  body: string
-}) {
+// ─────────────────────────────────────────────────────────────────────────────
+// FileCard — per-file workspace card with inline metadata editor.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function FileCard({ file }: { file: CartBuilderFile }) {
+  const setMetadata = useCartBuilderStore((s) => s.setMetadata)
+  const [editing, setEditing] = useState(false)
+  const [owner, setOwner] = useState(file.owner)
+  const [description, setDescription] = useState(file.description)
+  const [tagsText, setTagsText] = useState((file.tags || []).join(', '))
+
+  const saveMeta = () => {
+    const tags = tagsText.split(',').map(t => t.trim()).filter(Boolean)
+    setMetadata(file.id, { owner, description, tags })
+    setEditing(false)
+  }
+
   return (
-    <div className="rounded-lg border border-slate-700 bg-slate-800/20 p-4">
-      <div className="flex items-center gap-2 mb-2">
-        <Icon size={14} className="text-slate-500" />
-        <h3 className="text-sm font-semibold text-slate-300">{title}</h3>
+    <div className="px-4 py-3">
+      <div className="flex items-center gap-3">
+        <FileText size={14} className="text-slate-500 flex-shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="text-sm text-slate-200 font-medium truncate">{file.name}</div>
+          <div className="text-[11px] text-slate-500 font-mono">
+            {file.type.toUpperCase()} · {file.chunks} chunks · {(file.size / 1024).toFixed(1)} KB · {file.chars.toLocaleString()} chars
+          </div>
+        </div>
+        <button
+          onClick={() => setEditing(!editing)}
+          className="text-[10px] uppercase tracking-wider text-slate-500 hover:text-slate-300 px-2 py-1 rounded hover:bg-slate-700/40"
+        >
+          {editing ? 'Close' : 'Metadata'}
+        </button>
       </div>
-      <p className="text-xs text-slate-500 leading-relaxed">{body}</p>
-      <div className="mt-2 text-[10px] text-slate-600 italic">Coming soon</div>
+
+      {file.preview && !editing && (
+        <div className="mt-2 ml-6 text-[11px] text-slate-500 italic line-clamp-2">{file.preview}</div>
+      )}
+
+      {(file.owner || file.description || (file.tags && file.tags.length > 0)) && !editing && (
+        <div className="mt-2 ml-6 flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
+          {file.owner && <span className="flex items-center gap-1"><User size={10} /> {file.owner}</span>}
+          {file.description && <span className="flex items-center gap-1 truncate max-w-md"><Info size={10} /> {file.description}</span>}
+          {(file.tags || []).map(t => (
+            <span key={t} className="px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400 text-[10px] flex items-center gap-1">
+              <Tag size={9} />{t}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {editing && (
+        <div className="mt-3 ml-6 space-y-2">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Owner</label>
+              <input
+                value={owner}
+                onChange={(e) => setOwner(e.target.value)}
+                placeholder="who owns this doc"
+                className="w-full rounded bg-slate-950/60 border border-slate-800 px-2 py-1 text-xs text-slate-200 font-mono focus:outline-none focus:border-purple-500/60"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Tags (comma-sep)</label>
+              <input
+                value={tagsText}
+                onChange={(e) => setTagsText(e.target.value)}
+                placeholder="tag1, tag2"
+                className="w-full rounded bg-slate-950/60 border border-slate-800 px-2 py-1 text-xs text-slate-200 font-mono focus:outline-none focus:border-purple-500/60"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Description</label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="short note about this doc"
+              rows={2}
+              className="w-full rounded bg-slate-950/60 border border-slate-800 px-2 py-1 text-xs text-slate-200 font-mono resize-none focus:outline-none focus:border-purple-500/60"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => { setEditing(false); setOwner(file.owner); setDescription(file.description); setTagsText((file.tags || []).join(', ')) }}
+              className="px-2 py-1 text-[11px] text-slate-500 hover:text-slate-300"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={saveMeta}
+              className="px-3 py-1 text-[11px] rounded bg-purple-500/20 border border-purple-500/40 text-purple-300 hover:bg-purple-500/30"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
