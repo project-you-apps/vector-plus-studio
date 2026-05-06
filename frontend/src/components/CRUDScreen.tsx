@@ -109,7 +109,8 @@ export default function CRUDScreen() {
     if (isNaN(idx)) return
     setUpdateLoading(true)
     try {
-      const res = await fetch(`/api/patterns/${idx}`)
+      const apiBase = (import.meta.env.VITE_API_BASE as string | undefined) || '/api'
+      const res = await fetch(`${apiBase}/patterns/${idx}`)
       if (!res.ok) throw new Error(`Pattern #${idx} not found`)
       const p = await res.json()
       setUpdateText(p.full_text || '')

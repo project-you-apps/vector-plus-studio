@@ -4,7 +4,9 @@ import type {
   MemboxCartInfo, MemboxStatus, MemboxImprintRequest, MemboxMountRequest,
 } from './types'
 
-const BASE = '/api'
+// Set VITE_API_BASE at build time for hosted deploys (e.g. '/vps/api'). Local
+// dev uses '/api' which the Vite proxy routes to localhost:8000.
+const BASE = (import.meta.env.VITE_API_BASE as string | undefined) || '/api'
 
 async function fetchJSON<T>(url: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${url}`, {
