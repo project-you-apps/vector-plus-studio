@@ -344,7 +344,17 @@ async def build_status():
 
 @router.get("/carts")
 async def list_carts(path: str = ""):
-    """List carts and subdirectories for a given path (or saved-folders root)."""
+    """List carts and subdirectories for a given path (or saved-folders root).
+
+    SECURITY (Andy 2026-05-06): the no-path variant returns carts from the
+    SAVED folders only — that's bounded to whatever the operator configured.
+    The with-path variant walks the filesystem and is gated by read-only mode
+    on public deploys, otherwise it leaks directory structure to anyone who
+    knows the URL. Sandbox uploads have their own dir; users don't need
+    arbitrary path traversal in a hosted demo.
+    """
+    if path:
+        _check_writable()  # blocks arbitrary filesystem reads on the public droplet
     folders = load_cart_folders()
     DOC_EXTS = {".pdf", ".docx", ".doc", ".xlsx", ".xls", ".md", ".txt", ".rtf"}
 
@@ -471,7 +481,14 @@ async def remove_cart_folder(payload: dict):
 
 @router.get("/browse")
 async def browse_folders(path: str = ""):
-    """List subdirectories at a path. Empty path → drive roots on Windows, / on Unix."""
+    """List subdirectories at a path. Empty path → drive roots on Windows, / on Unix.
+
+    SECURITY (Andy 2026-05-06): always gated by read-only mode. There's no
+    legitimate use for a public-demo user to walk the server's filesystem;
+    the only purpose was the local-deploy folder picker. On the droplet this
+    becomes a reconnaissance vector (list /etc/, /opt/, /root/, etc.). 403.
+    """
+    _check_writable()
     if not path:
         import platform
         if platform.system() == "Windows":
