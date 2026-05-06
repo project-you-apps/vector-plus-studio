@@ -132,6 +132,7 @@ from .cartridge_io import (
 from .search import search as do_search
 from .forge import forge_cartridge
 from . import cartbuilder
+from . import uploads as uploads_mod
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +145,11 @@ async def lifespan(app: FastAPI):
     # Pre-warm embedder in background so first search is fast
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, engine.load_embedder)
+    # Sandbox-upload TTL cleanup — provider returns the currently-mounted
+    # path so the sweep doesn't evict a file the user is actively using.
+    uploads_mod.start_cleanup(lambda: engine.mounted_path)
     yield
+    uploads_mod.stop_cleanup()
     engine.shutdown()
 
 
@@ -170,6 +175,12 @@ app.add_middleware(
 # Cart Builder Phase 1 — port of cart-builder Flask app as /api/cartbuilder/*
 # (15 backend routes; CRUD scope deferred to its own screen per 2026-05-05 decision).
 app.include_router(cartbuilder.router)
+
+# Sandbox-upload endpoint for the public demo's "Open Cartridge" picker.
+# Bypasses _enforce_writable() — uploads land in cartridges/_session_uploads/
+# only, never the canonical catalog. Forced r-only permissions sidecar on
+# every upload. TTL cleanup runs from the lifespan task.
+app.include_router(uploads_mod.router)
 
 
 # ---------------------------------------------------------------------------
