@@ -51,6 +51,38 @@ body {
 }
 .animate-dragpulse { animation: dragpulse 1.4s ease-in-out infinite; }
 
+/* ---------------------------------------------------------------------------
+ * Light-mode form fields.
+ *
+ * The components default to dark theme (bg-slate-950/60 + light text). Light
+ * mode is toggled by Header.tsx setting `html.light`. Without these rules,
+ * input backgrounds stay near-black and only the borders soften, leaving
+ * Edit Carts text boxes + Cart Builder name field illegible in light mode
+ * (Andy 2026-05-05). These selectors flip the background + text + placeholder
+ * + focus border so any current or future <input>/<textarea>/<select> works.
+ * --------------------------------------------------------------------------- */
+html.light input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+html.light textarea,
+html.light select {
+  background-color: rgb(248 250 252);  /* slate-50 */
+  color: rgb(15 23 42);                /* slate-900 */
+  border-color: rgb(203 213 225);      /* slate-300 */
+}
+html.light input::placeholder,
+html.light textarea::placeholder {
+  color: rgb(100 116 139);             /* slate-500 */
+}
+html.light input:focus,
+html.light textarea:focus,
+html.light select:focus {
+  border-color: rgb(168 85 247);       /* purple-500 */
+  outline: none;
+}
+/* Body + chrome — soften the slate-900 default to a warm off-white so
+   light-mode pages aren't a black void with white inputs floating in it. */
+html.light body { background-color: rgb(248 250 252); color: rgb(15 23 42); }
+html.light { --chrome-bg: #f1f5f9; }
+
 .gradient-border {
   border: 1px solid transparent;
   background-clip: padding-box;
