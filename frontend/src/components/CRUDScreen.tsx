@@ -43,12 +43,10 @@ interface ActivityEntry {
 
 export default function CRUDScreen() {
   const status = useAppStore((s) => s.status)
-  const cartridges = useAppStore((s) => s.cartridges)
   const deletedPatterns = useAppStore((s) => s.deletedPatterns)
   const fetchCartridges = useAppStore((s) => s.fetchCartridges)
   const fetchStatus = useAppStore((s) => s.fetchStatus)
   const fetchDeleted = useAppStore((s) => s.fetchDeleted)
-  const mount = useAppStore((s) => s.mount)
   const unmount = useAppStore((s) => s.unmount)
   const toggleLock = useAppStore((s) => s.toggleLock)
   const saveCartridge = useAppStore((s) => s.saveCartridge)
@@ -417,24 +415,13 @@ export default function CRUDScreen() {
           <AlertCircle size={16} className="text-amber-400 flex-shrink-0 mt-0.5" />
           <div className="text-sm">
             <div className="text-amber-200 font-medium mb-1">No cart mounted</div>
-            <div className="text-xs text-slate-400 leading-relaxed mb-3">
-              Mount a cart from the list below, or jump to Search to mount via the toolbar.
+            <div className="text-xs text-slate-400 leading-relaxed">
+              Edit Carts is the destructive screen — passages get tombstoned, updated, and deleted here.
+              Mount a cart from the <strong className="text-slate-200">Search</strong> screen first
+              (the toolbar there has the file picker, upload, and the cart list), then come back to edit.
+              Or pick from <strong className="text-slate-200">My Carts</strong> below if you already
+              know which one you want.
             </div>
-            {cartridges.length > 0 && (
-              <div className="space-y-1.5">
-                {cartridges.slice(0, 5).map((c) => (
-                  <button
-                    key={c.filename}
-                    onClick={() => mount(c.filename)}
-                    className="block w-full text-left text-xs px-2 py-1.5 rounded bg-slate-800/60 hover:bg-slate-700/60 text-slate-300 hover:text-slate-100 flex items-center gap-2"
-                  >
-                    <Database size={11} className="text-slate-500 shrink-0" />
-                    <span className="flex-1 truncate font-mono">{c.name}</span>
-                    <span className="text-[10px] text-slate-500">{c.size_mb.toFixed(1)} MB</span>
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
         </div>
       )

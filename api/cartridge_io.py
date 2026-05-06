@@ -157,9 +157,15 @@ def list_cartridges() -> list[dict]:
 
     Mount path uses absolute filename so the existing _mount_membot_npz
     handler in main.py can dispatch by suffix.
+
+    Zero-byte files are filtered — sample_data ships placeholder .pkl stubs
+    that aren't real carts; they were showing as `0.0 MB` and click-to-mount
+    failed silently (Andy 2026-05-06). Anything under 1KB is treated as a
+    stub and skipped.
     """
     results = []
     seen = set()
+    MIN_CART_BYTES = 1024  # skip empty placeholders
 
     for d in get_cartridge_dirs():
         os.makedirs(d, exist_ok=True)
@@ -172,7 +178,10 @@ def list_cartridges() -> list[dict]:
 
             name = os.path.splitext(f)[0]
             path = os.path.join(d, f)
-            size_mb = os.path.getsize(path) / (1024 * 1024)
+            size_bytes = os.path.getsize(path)
+            if size_bytes < MIN_CART_BYTES:
+                continue  # placeholder stub, not a real cart
+            size_mb = size_bytes / (1024 * 1024)
 
             brain_path = os.path.join(d, f"{name}_brain.npy")
             sig_path = os.path.join(d, f"{name}_signatures.npz")
@@ -210,7 +219,10 @@ def list_cartridges() -> list[dict]:
             seen.add(f)
             name = f.replace(".cart.npz", "")
             path = os.path.join(d, f)
-            size_mb = os.path.getsize(path) / (1024 * 1024)
+            size_bytes = os.path.getsize(path)
+            if size_bytes < MIN_CART_BYTES:
+                continue  # placeholder stub
+            size_mb = size_bytes / (1024 * 1024)
             cart_manifest = os.path.join(d, f"{name}.cart_manifest.json")
             sig_path = os.path.join(d, f"{name}.sigs.npz")
             if not os.path.exists(sig_path):

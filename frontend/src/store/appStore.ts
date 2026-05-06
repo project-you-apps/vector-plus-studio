@@ -302,14 +302,28 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   mount: async (filename: string) => {
+    // Lazy-load toaster from cartBuilderStore so we don't take a hard
+    // dependency on it from this store's module init order.
+    const pushToast = (kind: 'success' | 'error' | 'info', text: string, ttl?: number) => {
+      import('./cartBuilderStore').then((m) => m.useCartBuilderStore.getState().pushToast(kind, text, ttl))
+    }
     set({ mounting: true })
     try {
-      await api.mountCartridge(filename)
+      const resp = await api.mountCartridge(filename)
+      if (!resp.success) {
+        // Backend returned 200 with success=false (e.g. file not found, manifest
+        // mismatch, malformed cart). Previously this fell through silently.
+        pushToast('error', `Mount failed: ${resp.message || 'unknown error'}`, 8000)
+        return
+      }
       await get().fetchStatus()
       await get().fetchCartridges()
       set({ results: [], query: '', deletedPatterns: [], strictMode: false, exactMatch: false })
+      pushToast('success', `Mounted ${resp.name} (${resp.pattern_count} patterns)`, 4000)
     } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Mount request failed'
       console.error('Mount failed:', e)
+      pushToast('error', `Mount failed: ${msg}`, 8000)
     } finally {
       set({ mounting: false })
     }
