@@ -8,6 +8,13 @@ import CartBrowser from './CartBrowser'
 import FolderPickerModal from './FolderPickerModal'
 import type { CartBuilderFile } from '../api/cartbuilder'
 
+// Heuristic: dragenter event has actual files in dataTransfer.types.
+// Without this check, dragging text selections inside the page fires
+// the overlay too. We only want the OS-level file drag.
+function _hasFiles(dt: DataTransfer): boolean {
+  return Array.from(dt.types).includes('Files')
+}
+
 // Cart Builder — full Phase 2 port. Drag-drop file ingestion → metadata
 // editing → Pattern 0 preview → Build with sticky bottom progress bar.
 //
@@ -20,7 +27,7 @@ import type { CartBuilderFile } from '../api/cartbuilder'
 
 export default function CartBuilderScreen() {
   const {
-    files, uploading, uploadError,
+    files, uploading,
     pattern0, build, buildPolling,
     cartName, setCartName,
     uploadFiles, refreshFiles, refreshPattern0,
@@ -29,6 +36,8 @@ export default function CartBuilderScreen() {
   } = useCartBuilderStore()
 
   const [dragOver, setDragOver] = useState(false)
+  const [windowDrag, setWindowDrag] = useState(false)
+  const dragCounter = useRef(0)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
@@ -36,6 +45,48 @@ export default function CartBuilderScreen() {
     refreshPattern0()
     refreshBrowser()
     return () => stopBuildPolling()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Screen-wide drag detection — show full-screen overlay when the user
+  // drags files anywhere onto Cart Builder (not just the inner drop zone).
+  // dragCounter handles enter/leave on nested children correctly.
+  useEffect(() => {
+    const onDragEnter = (e: DragEvent) => {
+      if (!e.dataTransfer || !_hasFiles(e.dataTransfer)) return
+      e.preventDefault()
+      dragCounter.current += 1
+      setWindowDrag(true)
+    }
+    const onDragOver = (e: DragEvent) => {
+      if (!e.dataTransfer || !_hasFiles(e.dataTransfer)) return
+      e.preventDefault()  // required to allow the drop
+    }
+    const onDragLeave = (e: DragEvent) => {
+      if (!e.dataTransfer || !_hasFiles(e.dataTransfer)) return
+      dragCounter.current -= 1
+      if (dragCounter.current <= 0) {
+        dragCounter.current = 0
+        setWindowDrag(false)
+      }
+    }
+    const onDrop = (e: DragEvent) => {
+      if (!e.dataTransfer || !_hasFiles(e.dataTransfer)) return
+      e.preventDefault()
+      dragCounter.current = 0
+      setWindowDrag(false)
+      handleFiles(e.dataTransfer.files)
+    }
+    window.addEventListener('dragenter', onDragEnter)
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('dragleave', onDragLeave)
+    window.addEventListener('drop', onDrop)
+    return () => {
+      window.removeEventListener('dragenter', onDragEnter)
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('dragleave', onDragLeave)
+      window.removeEventListener('drop', onDrop)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -83,12 +134,8 @@ export default function CartBuilderScreen() {
           )}
         </div>
 
-        {uploadError && (
-          <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 flex items-start gap-2 text-sm text-rose-300">
-            <AlertCircle size={16} className="flex-shrink-0 mt-0.5" />
-            <span>{uploadError}</span>
-          </div>
-        )}
+        {/* Upload errors surface as toasts now (bottom-right). The store still
+            keeps `uploadError` for any inline retry UI we might add later. */}
 
         {/* Drop zone */}
         <div
@@ -205,6 +252,19 @@ export default function CartBuilderScreen() {
       </div>
 
       <FolderPickerModal />
+
+      {/* Full-screen drag-drop overlay — fires when files are dragged anywhere
+          on the Cart Builder screen, not just over the inner drop zone. The
+          window-level listeners in useEffect drive `windowDrag`. */}
+      {windowDrag && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-purple-500/15 backdrop-blur-sm border-4 border-dashed border-purple-400 pointer-events-none animate-dragpulse">
+          <div className="rounded-2xl bg-slate-900/90 px-8 py-6 border border-purple-400/60 shadow-2xl flex flex-col items-center gap-3">
+            <Upload size={48} className="text-purple-300" />
+            <div className="text-lg font-medium text-purple-200">Drop to upload</div>
+            <div className="text-xs text-slate-400">PDF, DOCX, XLSX, TXT, MD, RTF</div>
+          </div>
+        </div>
+      )}
 
       {/* Sticky build bar */}
       <div className="fixed bottom-0 left-0 right-0 lg:left-48 px-6 py-3 border-t border-slate-700 bg-slate-900/95 backdrop-blur flex items-center gap-4 z-40">

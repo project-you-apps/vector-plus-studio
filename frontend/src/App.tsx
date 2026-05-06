@@ -12,6 +12,7 @@ import OverviewScreen from './components/OverviewScreen'
 import SettingsScreen from './components/SettingsScreen'
 import CartBuilderScreen from './components/CartBuilderScreen'
 import CRUDScreen from './components/CRUDScreen'
+import Toaster from './components/Toaster'
 
 // Stub placeholders for nav-rail screens introduced in 2026-05-03 reorg.
 // Each will be promoted to its own component file as it gets fleshed out.
@@ -122,6 +123,7 @@ export default function App() {
       </div>
       <PassageModal />
       <MemboxPanel />
+      <Toaster />
     </div>
   )
 }

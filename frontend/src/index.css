@@ -37,6 +37,20 @@ body {
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
 }
 
+/* Toaster fade-in */
+@keyframes fadein {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fadein { animation: fadein 200ms ease-out; }
+
+/* Drag-drop full-screen overlay — pulses subtly so it's obvious */
+@keyframes dragpulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.85; }
+}
+.animate-dragpulse { animation: dragpulse 1.4s ease-in-out infinite; }
+
 .gradient-border {
   border: 1px solid transparent;
   background-clip: padding-box;

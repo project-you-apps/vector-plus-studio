@@ -10,7 +10,21 @@ import type {
 // stores both hit the same backend via fetch — they don't talk to each other
 // directly. The shared CartBrowser component is rendered via this store.
 
+// Toasts — lightweight cross-screen notification system. Cart Builder owns
+// it for now (build events + upload errors); other screens can borrow.
+export interface Toast {
+  id: string
+  kind: 'success' | 'error' | 'info'
+  text: string
+  ttlMs?: number  // null = sticky
+}
+
 interface CartBuilderState {
+  // Toasts
+  toasts: Toast[]
+  pushToast: (kind: Toast['kind'], text: string, ttlMs?: number) => void
+  dismissToast: (id: string) => void
+
   // Workspace (uploaded / ingested files awaiting build)
   files: CartBuilderFile[]
   uploading: boolean
@@ -74,6 +88,16 @@ const initialBuild: CartBuilderBuildState = {
 let buildPollHandle: ReturnType<typeof setInterval> | null = null
 
 export const useCartBuilderStore = create<CartBuilderState>((set, get) => ({
+  toasts: [],
+  pushToast: (kind, text, ttlMs = 4500) => {
+    const id = `t_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+    set((s) => ({ toasts: [...s.toasts, { id, kind, text, ttlMs }] }))
+    if (ttlMs && ttlMs > 0) {
+      setTimeout(() => get().dismissToast(id), ttlMs)
+    }
+  },
+  dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+
   files: [],
   uploading: false,
   uploadError: null,
@@ -104,8 +128,11 @@ export const useCartBuilderStore = create<CartBuilderState>((set, get) => ({
       const resp = await cb.uploadFiles(files)
       set((s) => ({ files: [...s.files, ...resp.files], uploading: false }))
       get().refreshPattern0()
+      get().pushToast('success', `Uploaded ${resp.files.length} file${resp.files.length === 1 ? '' : 's'}`)
     } catch (e) {
-      set({ uploading: false, uploadError: e instanceof Error ? e.message : 'Upload failed' })
+      const msg = e instanceof Error ? e.message : 'Upload failed'
+      set({ uploading: false, uploadError: msg })
+      get().pushToast('error', `Upload failed: ${msg}`, 8000)
     }
   },
 
@@ -154,20 +181,28 @@ export const useCartBuilderStore = create<CartBuilderState>((set, get) => ({
   startBuild: async () => {
     const name = get().cartName.trim() || 'my-cart'
     try {
-      await cb.buildCart(name)
+      const resp = await cb.buildCart(name)
+      get().pushToast('info', `Build started: ${resp.cart_name} (${resp.chunks} chunks)`, 3000)
       get().startBuildPolling()
     } catch (e) {
-      set({ uploadError: e instanceof Error ? e.message : 'Build failed' })
+      const msg = e instanceof Error ? e.message : 'Build failed'
+      set({ uploadError: msg })
+      get().pushToast('error', `Build failed to start: ${msg}`, 8000)
     }
   },
 
   refreshBuildStatus: async () => {
     try {
       const s = await cb.getBuildStatus()
+      const prev = get().build.status
       set({ build: s })
-      if (s.status === 'done' || s.status === 'error') {
+      if (s.status === 'done' && prev !== 'done') {
         get().stopBuildPolling()
         get().refreshBrowser()  // new cart now visible
+        get().pushToast('success', `Cart built: ${s.cart_path?.split(/[/\\]/).pop() ?? 'done'}`, 6000)
+      } else if (s.status === 'error' && prev !== 'error') {
+        get().stopBuildPolling()
+        get().pushToast('error', `Build failed: ${s.error || 'unknown error'}`, 10000)
       }
     } catch (e) {
       console.error('build status failed', e)
