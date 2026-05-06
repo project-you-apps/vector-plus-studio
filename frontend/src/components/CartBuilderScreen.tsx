@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import {
   Hammer, Upload, FileText, Save, Loader2, Info, AlertCircle,
   Folder, Tag, User, RefreshCw,
@@ -7,6 +7,10 @@ import { useCartBuilderStore } from '../store/cartBuilderStore'
 import CartBrowser from './CartBrowser'
 import FolderPickerModal from './FolderPickerModal'
 import type { CartBuilderFile } from '../api/cartbuilder'
+
+// MDEditor lazy-loaded so the ~315KB gzip cost is only paid when a user
+// actually opens a metadata panel (which most won't on first visit).
+const MDEditor = lazy(() => import('@uiw/react-md-editor'))
 
 // Heuristic: dragenter event has actual files in dataTransfer.types.
 // Without this check, dragging text selections inside the page fires
@@ -395,15 +399,29 @@ function FileCard({ file }: { file: CartBuilderFile }) {
               />
             </div>
           </div>
-          <div>
-            <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">Description</label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="short note about this doc"
-              rows={2}
-              className="w-full rounded bg-slate-950/60 border border-slate-800 px-2 py-1 text-xs text-slate-200 font-mono resize-none focus:outline-none focus:border-purple-500/60"
-            />
+          <div data-color-mode="dark">
+            <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">
+              Description
+              <span className="ml-2 text-slate-600 normal-case">· markdown supported</span>
+            </label>
+            <Suspense fallback={
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="short note about this doc"
+                rows={4}
+                className="w-full rounded bg-slate-950/60 border border-slate-800 px-2 py-1 text-xs text-slate-200 font-mono resize-none focus:outline-none focus:border-purple-500/60"
+              />
+            }>
+              <MDEditor
+                value={description}
+                onChange={(v) => setDescription(v ?? '')}
+                height={150}
+                preview="edit"
+                visibleDragbar={false}
+                textareaProps={{ placeholder: 'short note about this doc — **markdown** _works_' }}
+              />
+            </Suspense>
           </div>
           <div className="flex justify-end gap-2">
             <button
