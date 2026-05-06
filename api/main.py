@@ -28,14 +28,20 @@ if READ_ONLY_MODE:
     print("[VPS] READ_ONLY_MODE active (VPS_READ_ONLY env var set). All writes refused.")
 
 
-def _enforce_writable():
-    """Raise 403 if writes are disallowed at the server or cart level.
+def _enforce_writable(idx: int | None = None):
+    """Raise 403 if writes are disallowed at any level.
 
-    Two layers compose:
+    Three layers compose, checked in priority order:
       1. Server-wide VPS_READ_ONLY env var (Step 1) — public-deploy gate.
       2. Cart-level permissions sidecar (Step 2a) — cart self-declares its
-         RWX. cart_permits_write returns True for carts with no sidecar
-         (backward compat) and for carts whose `default` includes 'w'.
+         RWX via .permissions.json. Default `r` blocks all writes.
+      3. Pattern-level flags byte in the hippocampus row (Step 2b) — when a
+         specific pattern idx is supplied, check its `w` bit. Allows a
+         `default: rw` cart to lock individual patterns down.
+
+    Pass idx for endpoints that target a specific pattern (DELETE, restore,
+    /update). Omit it for endpoints that affect the cart as a whole
+    (save, unlock, add new, etc.).
     """
     if READ_ONLY_MODE:
         raise HTTPException(
@@ -51,6 +57,17 @@ def _enforce_writable():
                 f"Edit the cart's .permissions.json to allow writes."
             ),
         )
+    if idx is not None and engine.hippocampus is not None and 0 <= idx < len(engine.hippocampus):
+        entry = engine.hippocampus[idx]
+        if not pattern_permits_write(entry):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Pattern #{idx} is locked by its hippocampus flags "
+                    f"(perms={entry.get('perms', {}).get('raw'):#x}). "
+                    f"Use bin/set_pattern_permissions.py to flip the bit."
+                ),
+            )
 
 from .engine import engine, TRAIN_SETTLE_FRAMES, SIG_SETTLE_FRAMES, TextRegionEncoder, TrainingEncoder
 from .models import (
@@ -127,7 +144,7 @@ from .cartridge_io import (
     list_cartridges as _list_cartridges, load_cartridge, load_signatures,
     find_cartridge_path, find_companion_file, validate_brain_manifest,
     save_brain_manifest, save_signatures, DATA_DIR, parse_hippocampus,
-    load_cart_permissions, cart_permits_write,
+    load_cart_permissions, cart_permits_write, pattern_permits_write,
 )
 from .search import search as do_search
 from .forge import forge_cartridge
@@ -1098,10 +1115,15 @@ async def search_endpoint(req: SearchRequest):
     )
 
     search_results = []
+    hippo = engine.hippocampus
     for rank, r in enumerate(results):
+        idx = r['idx']
+        perms = None
+        if hippo is not None and 0 <= idx < len(hippo):
+            perms = hippo[idx].get('perms')
         search_results.append(SearchResult(
             rank=rank + 1,
-            idx=r['idx'],
+            idx=idx,
             score=r['score'],
             cosine_score=r.get('cosine_score'),
             physics_score=r.get('physics_score'),
@@ -1114,6 +1136,7 @@ async def search_endpoint(req: SearchRequest):
             source_db=source_db_label,
             prev_idx=r.get('prev_idx'),
             next_idx=r.get('next_idx'),
+            perms=perms,
         ))
 
     return SearchResponse(
@@ -1131,7 +1154,7 @@ async def search_endpoint(req: SearchRequest):
 
 @app.delete("/api/patterns/{idx}", response_model=MessageResponse)
 async def delete_pattern(idx: int):
-    _enforce_writable()
+    _enforce_writable(idx=idx)
     if engine.read_only:
         return MessageResponse(success=False, message="Cartridge is read-only. Unlock first.")
     if idx < 0 or idx >= len(engine.passages):
@@ -1142,7 +1165,7 @@ async def delete_pattern(idx: int):
 
 @app.post("/api/patterns/{idx}/restore", response_model=MessageResponse)
 async def restore_pattern(idx: int):
-    _enforce_writable()
+    _enforce_writable(idx=idx)
     if engine.read_only:
         return MessageResponse(success=False, message="Cartridge is read-only. Unlock first.")
     engine.deleted_ids.discard(idx)
@@ -1201,14 +1224,18 @@ async def get_pattern(idx: int):
 
     prev_idx = None
     next_idx = None
+    perms = None
     if engine.hippocampus is not None and idx < len(engine.hippocampus):
-        prev_idx = engine.hippocampus[idx].get('prev')
-        next_idx = engine.hippocampus[idx].get('next')
+        entry = engine.hippocampus[idx]
+        prev_idx = entry.get('prev')
+        next_idx = entry.get('next')
+        perms = entry.get('perms')
 
     return PatternResponse(
         idx=idx, title=title, preview=preview, full_text=text,
         prev_idx=prev_idx, next_idx=next_idx,
         source_db=source_db, paper_id=paper_id,
+        perms=perms,
     )
 
 

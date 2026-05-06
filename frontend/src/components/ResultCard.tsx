@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { ChevronDown, ChevronRight, BookOpen, Pencil, Trash2, X, Zap } from 'lucide-react'
+import { ChevronDown, ChevronRight, BookOpen, Pencil, Trash2, X, Zap, Lock } from 'lucide-react'
 import type { SearchResult } from '../api/types'
 import { useAppStore } from '../store/appStore'
 
@@ -167,6 +167,14 @@ export default function ResultCard({ result }: Props) {
             {result.from_lattice && (
               <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full gradient-bg text-white font-medium flex items-center gap-1">
                 <Zap size={8} /> FROM LATTICE
+              </span>
+            )}
+            {result.perms && !result.perms.w && (
+              <span
+                className="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-slate-700/50 text-slate-400 border border-slate-600/50 font-medium flex items-center gap-1"
+                title={`Pattern locked at the hippocampus level (perms=0x${result.perms.raw.toString(16)}). Edit attempts will return 403.`}
+              >
+                <Lock size={8} /> LOCKED
               </span>
             )}
           </div>

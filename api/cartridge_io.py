@@ -20,9 +20,51 @@ from .engine import engine, TextRegionEncoder
 
 # 64-byte struct: pattern_id(I) format_version(B) cartridge_type(B)
 #   parent_ptr(I) child_ptr(I) sibling_ptr(I) source_hash(I)
-#   sequence_num(H) timestamp(I) flags(B) reserved(35s)
-HIPPO_FORMAT = '<I B B I I I I H I B 35s'
+#   sequence_num(H) timestamp(I) flags(B) perms_byte(B) reserved(34s)
+#
+# Step 2b update (Andy 2026-05-06): broke the first byte of the previously-35-byte
+# `reserved` field out into a dedicated `perms_byte` for our RWX semantics.
+# The original `flags` byte at offset 28 is fully claimed by membot's
+# cartridge_builder.py for {tombstone, pinned, has_parent, has_child,
+# has_sibling, perishability-class}. Stomping on it would corrupt every
+# pre-Step-2b cart on the droplet. The first reserved byte (offset 29) is
+# explicitly written as 0 by membot (`b'\x00' * 35`), so it's safe to repurpose.
+# Field count now 11 (was 10): vals[9]=flags, vals[10]=perms_byte, vals[11]=reserved-34.
+HIPPO_FORMAT = '<I B B I I I I H I B B 34s'
 HIPPO_SIZE = 64
+
+# Step 2b — perms_byte bit layout (offset 29 in the hippo row).
+PERM_R = 0x01  # readable — included in search results
+PERM_W = 0x02  # writable — can be tombstoned, restored, or in-place updated
+PERM_X = 0x04  # reserved for future executable / lambda-passage feature
+
+# Backward-compat: when the perms_byte is zero (carts built before Step 2b),
+# treat it as rw — existing behavior was "all patterns writable if cart unlocked."
+PERM_DEFAULT_LEGACY = PERM_R | PERM_W
+
+
+def _flags_to_perms(flags: int) -> dict:
+    """Translate a flags byte into a perms dict for the API surface."""
+    if flags == 0:
+        flags = PERM_DEFAULT_LEGACY
+    return {
+        "r": bool(flags & PERM_R),
+        "w": bool(flags & PERM_W),
+        "x": bool(flags & PERM_X),
+        "raw": int(flags),
+    }
+
+
+def pattern_permits_write(hippocampus_entry: dict | None) -> bool:
+    """Is the given hippocampus entry's pattern writable?
+    Returns True for legacy/missing entries (backward compat — pre-Step 2b carts
+    behaved as if every pattern were writable when the cart was unlocked)."""
+    if not hippocampus_entry:
+        return True
+    perms = hippocampus_entry.get("perms")
+    if not perms:
+        return True
+    return bool(perms.get("w"))
 
 
 def parse_hippocampus(npz_data) -> list[dict] | None:
@@ -42,13 +84,56 @@ def parse_hippocampus(npz_data) -> list[dict] | None:
         # These are 1-based pattern_ids (0 = no link). Convert to 0-based passage index.
         prev = (vals[3] - 1) if vals[3] > 0 else None
         nxt = (vals[4] - 1) if vals[4] > 0 else None
+        # vals[9] = membot's flags (tombstone/pinned/has_parent/has_child/has_sibling/perish)
+        # vals[10] = our Step 2b perms_byte (R/W/X)
         result.append({
             "prev": prev,
             "next": nxt,
             "source_hash": vals[6],
             "sequence_num": vals[7],
+            "flags": vals[9],
+            "perms": _flags_to_perms(vals[10]),
         })
     return result
+
+
+PERMS_BYTE_OFFSET = 29  # First byte of the original 35-byte reserved field.
+
+
+def write_hippocampus_perms(cart_path: str, idx_to_perms: dict[int, int]) -> int:
+    """Rewrite specific rows' perms_byte (offset 29) in the cart's hippocampus.
+
+    Used by bin/set_pattern_permissions.py to retrofit per-pattern bits on an
+    existing cart without rebuilding. Loads the .cart.npz, mutates only the
+    perms_byte at offset 29 of the requested rows, re-saves the NPZ. Other
+    arrays (embeddings, passages, etc.) and other bytes in the row (including
+    the membot flags byte at offset 28) are preserved untouched.
+
+    Returns the number of rows updated. Raises if the cart has no
+    hippocampus array or the indices are out of range.
+    """
+    if not os.path.exists(cart_path):
+        raise FileNotFoundError(cart_path)
+
+    data = np.load(cart_path, allow_pickle=True)
+    if "hippocampus" not in data.files:
+        raise ValueError(f"Cart has no hippocampus array: {cart_path}")
+
+    arrays = {k: data[k] for k in data.files}
+    data.close()
+
+    hippo = arrays["hippocampus"].copy()
+    n = hippo.shape[0]
+    updated = 0
+    for idx, new_perms in idx_to_perms.items():
+        if idx < 0 or idx >= n:
+            raise IndexError(f"Pattern idx {idx} out of range [0, {n})")
+        hippo[idx, PERMS_BYTE_OFFSET] = new_perms & 0xFF
+        updated += 1
+
+    arrays["hippocampus"] = hippo
+    np.savez_compressed(cart_path, **arrays)
+    return updated
 
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cartridges")

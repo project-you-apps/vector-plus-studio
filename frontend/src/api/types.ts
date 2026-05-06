@@ -8,6 +8,13 @@ export interface CartridgeInfo {
   pattern_count?: number
 }
 
+export interface PatternPerms {
+  r: boolean
+  w: boolean
+  x: boolean
+  raw: number
+}
+
 export interface SearchResult {
   rank: number
   idx: number
@@ -28,6 +35,10 @@ export interface SearchResult {
   // via /api/patterns/{idx} when the user clicks the CTA.
   source_db?: string | null
   paper_id?: string | null
+  // Step 2b: per-pattern RWX from the hippocampus row's perms_byte.
+  // null when the cart has no hippocampus data; otherwise an object with
+  // r/w/x bools and the raw byte value.
+  perms?: PatternPerms | null
 }
 
 export interface PatternResponse {
@@ -41,6 +52,8 @@ export interface PatternResponse {
   // full text from a SQLite sidecar.
   source_db?: string | null
   paper_id?: string | null
+  // Step 2b: per-pattern RWX bits from hippocampus row's perms_byte.
+  perms?: PatternPerms | null
 }
 
 export interface SearchResponse {

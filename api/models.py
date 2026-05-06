@@ -67,6 +67,8 @@ class SearchResult(BaseModel):
     # RAG+ provenance feature). paper_id arrives after the source-load fetch.
     source_db: str | None = None
     paper_id: str | None = None
+    # Step 2b: per-pattern RWX from the hippocampus row's flags byte.
+    perms: dict | None = None
 
 class SearchResponse(BaseModel):
     query: str
@@ -111,6 +113,9 @@ class PatternResponse(BaseModel):
     # full text from a SQLite sidecar (parity with membot RAG+ provenance).
     source_db: str | None = None
     paper_id: str | None = None
+    # Step 2b: per-pattern RWX from the hippocampus row's flags byte. None
+    # if the cart has no hippocampus or this pattern's flags=0 (legacy).
+    perms: dict | None = None
 
 class MessageResponse(BaseModel):
     success: bool
