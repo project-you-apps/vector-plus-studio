@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Database, ChevronDown, FolderOpen, Loader2, Zap } from 'lucide-react'
+import { Database, ChevronDown, FolderOpen, Loader2, Zap, Upload } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
+import { useCartBuilderStore } from '../store/cartBuilderStore'
 import type { SearchMode } from '../api/types'
 import * as api from '../api/client'
 
@@ -32,8 +33,10 @@ export default function SearchToolbar() {
   const [pathOpen, setPathOpen] = useState(false)
   const [pathInput, setPathInput] = useState('')
   const [pathLoading, setPathLoading] = useState(false)
+  const [uploadLoading, setUploadLoading] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const modeRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     fetchCartridges()
@@ -92,6 +95,32 @@ export default function SearchToolbar() {
         setPathInput('')
         setOpen(false)
       })
+  }
+
+  // Client-side upload — works in both local and read-only-mode (droplet) deploys.
+  // The backend writes to a sandbox dir with TTL eviction (1h default), forces a
+  // read-only permissions sidecar, then we mount via the standard path.
+  const handleUpload = async (file: File) => {
+    setUploadLoading(true)
+    const pushToast = useCartBuilderStore.getState().pushToast
+    try {
+      const resp = await api.uploadCartridge(file)
+      pushToast('info', `Uploaded ${resp.size_mb} MB — mounting…`, 3000)
+      const mres = await api.mountCartridge(resp.cart_path)
+      if (!mres.success) {
+        pushToast('error', `Mount failed: ${mres.message}`, 8000)
+        return
+      }
+      fetchCartridges()
+      useAppStore.getState().fetchStatus()
+      pushToast('success', `Mounted ${mres.name} (${mres.pattern_count} patterns) — sandbox cart, expires in ${Math.round(resp.ttl_sec / 60)} min`, 6000)
+      setOpen(false)
+    } catch (err) {
+      pushToast('error', `Upload failed: ${err instanceof Error ? err.message : 'unknown'}`, 8000)
+    } finally {
+      setUploadLoading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
   }
 
   return (
@@ -170,14 +199,37 @@ export default function SearchToolbar() {
               </div>
             )}
 
-            {/* Public-demo notice — replaces the file-picker UI when on the
-                read-only droplet. Tells the user to pick from the list below. */}
+            {/* Upload Cartridge — works in both local and droplet deploys.
+                Backend sandboxes the upload (1h TTL) and forces r-only perms.
+                On the droplet this is the ONLY way to bring your own data. */}
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploadLoading}
+              className="w-full flex items-center gap-2 px-3 py-2.5 text-sm border-b border-slate-800 hover:bg-slate-800/50 disabled:opacity-50 transition-colors"
+              title="Upload a .cart.npz or .pkl from your machine. Sandboxed, read-only, evicted after 1 hour."
+            >
+              {uploadLoading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+              <span className="font-medium">{uploadLoading ? 'Uploading…' : 'Upload Cartridge…'}</span>
+              <span className="ml-auto text-[10px] text-slate-500">
+                {status?.read_only_mode ? 'sandbox · 1h TTL' : 'sandbox'}
+              </span>
+            </button>
             {status?.read_only_mode && (
-              <div className="px-3 py-2 border-b border-slate-800 text-[11px] text-slate-500 italic flex items-center gap-2">
-                <FolderOpen size={11} className="text-slate-600 flex-shrink-0" />
-                Public demo — pick a cartridge from the list below.
+              <div className="px-3 py-1.5 border-b border-slate-800 text-[10px] text-slate-500 italic flex items-center gap-2">
+                <FolderOpen size={10} className="text-slate-600 flex-shrink-0" />
+                Public demo — uploads are sandboxed and read-only. Or pick from the list below.
               </div>
             )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".npz,.pkl,.cart.npz"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) handleUpload(f)
+              }}
+            />
 
             {/* Available carts */}
             <div className="p-2 space-y-1">

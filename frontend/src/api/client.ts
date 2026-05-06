@@ -34,6 +34,26 @@ export async function browseForCartridge(): Promise<string> {
   return data.path
 }
 
+export interface UploadResponse {
+  success: boolean
+  message: string
+  cart_path: string
+  size_mb: number
+  ttl_sec: number
+}
+
+export async function uploadCartridge(file: File): Promise<UploadResponse> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch(`${BASE}/cartridges/upload`, { method: 'POST', body: form })
+  if (!res.ok) {
+    let detail = `${res.status}`
+    try { detail = (await res.json()).detail || detail } catch { /* keep status */ }
+    throw new Error(detail)
+  }
+  return res.json()
+}
+
 export async function mountCartridge(filename: string) {
   return fetchJSON<{ success: boolean; message: string; name: string; pattern_count: number }>(
     '/cartridges/mount',
