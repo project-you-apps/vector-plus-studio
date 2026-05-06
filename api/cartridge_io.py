@@ -64,7 +64,15 @@ def get_cartridge_dirs() -> list[str]:
 
 
 def list_cartridges() -> list[dict]:
-    """List all available cartridges across cartridge dirs."""
+    """List all available cartridges across cartridge dirs.
+
+    Discovers two cart formats:
+      • Legacy VPS .pkl + companion files (_brain.npy, _signatures.npz, _brain_manifest.json)
+      • Membot .cart.npz with optional .cart_manifest.json sidecar
+
+    Mount path uses absolute filename so the existing _mount_membot_npz
+    handler in main.py can dispatch by suffix.
+    """
     results = []
     seen = set()
 
@@ -104,6 +112,34 @@ def list_cartridges() -> list[dict]:
                 "has_manifest": os.path.exists(manifest_path),
                 "brain_path": brain_path,
                 "sig_path": sig_path,
+            })
+
+    # Membot-format .cart.npz files (split-cart compatible).
+    # filename = absolute path so the mount endpoint dispatches by suffix.
+    for d in get_cartridge_dirs():
+        for f in os.listdir(d):
+            if not f.endswith(".cart.npz"):
+                continue
+            if f in seen:
+                continue
+            seen.add(f)
+            name = f.replace(".cart.npz", "")
+            path = os.path.join(d, f)
+            size_mb = os.path.getsize(path) / (1024 * 1024)
+            cart_manifest = os.path.join(d, f"{name}.cart_manifest.json")
+            sig_path = os.path.join(d, f"{name}.sigs.npz")
+            if not os.path.exists(sig_path):
+                sig_path = os.path.join(d, f"{name}_signatures.npz")
+            results.append({
+                "name": name,
+                "filename": path,  # absolute — frontend passes through to mount
+                "path": path,
+                "size_mb": round(size_mb, 1),
+                "has_brain": False,  # .cart.npz is embeddings + passages, no brain
+                "has_signatures": os.path.exists(sig_path),
+                "has_manifest": os.path.exists(cart_manifest),
+                "brain_path": None,
+                "sig_path": sig_path if os.path.exists(sig_path) else None,
             })
 
     # Also find brain-only (no pkl)
