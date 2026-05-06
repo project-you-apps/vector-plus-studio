@@ -3,6 +3,7 @@ import {
   Folder, Database, FileText, ChevronRight, FolderPlus, Trash2,
   ChevronUp, Plus, RefreshCw,
 } from 'lucide-react'
+import { useAppStore } from '../store/appStore'
 import { useCartBuilderStore } from '../store/cartBuilderStore'
 import type { CartBuilderListedCart, CartBuilderDoc } from '../api/cartbuilder'
 
@@ -33,6 +34,15 @@ export default function CartBrowser({
     ingestPath, openFolderPicker,
   } = useCartBuilderStore()
 
+  // In read-only mode (public droplet), filesystem-walking endpoints are 403'd
+  // by the backend. Hide the affordances that would only produce errors:
+  //   • Folders button + folder management (would need /browse and /carts?path=…)
+  //   • Subdir drill-down (would need /carts?path=…)
+  //   • Up button (same)
+  // The saved-folders root list still works (no path) so users can see the
+  // operator-curated cart catalog.
+  const readOnlyMode = useAppStore((s) => s.status?.read_only_mode ?? false)
+
   const [showFolderManager, setShowFolderManager] = useState(false)
 
   useEffect(() => {
@@ -61,7 +71,7 @@ export default function CartBrowser({
           )}
         </h2>
         <div className="flex items-center gap-1">
-          {!isRoot && (
+          {!readOnlyMode && !isRoot && (
             <button
               onClick={goUp}
               className="text-[10px] text-slate-500 hover:text-slate-300 px-2 py-1 rounded hover:bg-slate-700/40 flex items-center gap-1"
@@ -71,31 +81,35 @@ export default function CartBrowser({
             </button>
           )}
           <button
-            onClick={() => refreshBrowser(browserCurrentPath)}
+            onClick={() => refreshBrowser(readOnlyMode ? '' : browserCurrentPath)}
             className="text-[10px] text-slate-500 hover:text-slate-300 px-2 py-1 rounded hover:bg-slate-700/40 flex items-center gap-1"
             title="Refresh"
           >
             <RefreshCw size={10} />
           </button>
-          <button
-            onClick={() => refreshBrowser('')}
-            className="text-[10px] text-slate-500 hover:text-slate-300 px-2 py-1 rounded hover:bg-slate-700/40"
-            title="Back to saved-folders root"
-          >
-            Root
-          </button>
-          <button
-            onClick={() => setShowFolderManager(!showFolderManager)}
-            className={`text-[10px] px-2 py-1 rounded flex items-center gap-1 ${
-              showFolderManager
-                ? 'bg-purple-500/20 text-purple-300'
-                : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/40'
-            }`}
-            title="Manage saved cart folders"
-          >
-            <FolderPlus size={10} />
-            Folders ({browserFolders.length})
-          </button>
+          {!readOnlyMode && (
+            <>
+              <button
+                onClick={() => refreshBrowser('')}
+                className="text-[10px] text-slate-500 hover:text-slate-300 px-2 py-1 rounded hover:bg-slate-700/40"
+                title="Back to saved-folders root"
+              >
+                Root
+              </button>
+              <button
+                onClick={() => setShowFolderManager(!showFolderManager)}
+                className={`text-[10px] px-2 py-1 rounded flex items-center gap-1 ${
+                  showFolderManager
+                    ? 'bg-purple-500/20 text-purple-300'
+                    : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/40'
+                }`}
+                title="Manage saved cart folders"
+              >
+                <FolderPlus size={10} />
+                Folders ({browserFolders.length})
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -147,8 +161,10 @@ export default function CartBrowser({
         </div>
       )}
 
-      {/* Subdirs */}
-      {browserSubdirs.length > 0 && (
+      {/* Subdirs — hidden in read-only mode (drilling into them needs /carts?path
+          which 403s on the public droplet). Operator can still organize via the
+          saved-folders root list. */}
+      {!readOnlyMode && browserSubdirs.length > 0 && (
         <div className="divide-y divide-slate-800/60">
           {browserSubdirs.map((d) => (
             <button

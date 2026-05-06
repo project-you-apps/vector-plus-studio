@@ -267,8 +267,11 @@ export const useCartBuilderStore = create<CartBuilderState>((set, get) => ({
         cartName: resp.cart_name,
       })
       get().refreshPattern0()
+      get().pushToast('success', `Loaded ${resp.cart_name} (${resp.total_passages} passages, ${resp.total_sources} sources)`, 4000)
     } catch (e) {
+      const msg = e instanceof Error ? e.message : 'loadCart failed'
       console.error('loadCart failed', e)
+      get().pushToast('error', `Open cart failed: ${msg}`, 8000)
     }
   },
 

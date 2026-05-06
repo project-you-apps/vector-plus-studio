@@ -5,6 +5,7 @@ import {
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import CartBrowser from './CartBrowser'
+import ConfirmDialog, { type ConfirmState } from './ConfirmDialog'
 
 // CRUDScreen — first mockup for Andy to react to.
 //
@@ -56,6 +57,7 @@ export default function CRUDScreen() {
 
   const [mode, setMode] = useState<Mode>('open')
   const [activity, setActivity] = useState<ActivityEntry[]>([])
+  const [confirm, setConfirm] = useState<ConfirmState | null>(null)
 
   // Add-panel state
   const [addText, setAddText] = useState('')
@@ -121,30 +123,69 @@ export default function CRUDScreen() {
     }
   }
 
-  const handleUpdateSave = async () => {
+  const handleUpdateSave = () => {
     const idx = parseInt(updateIdx, 10)
     const text = updateText.trim()
     if (isNaN(idx) || !text) return
-    // TODO Andy: add PUT /api/patterns/{idx} for true in-place update.
-    // For now: add-new + tombstone-old (matches appStore.saveEditor).
-    const addResp = await addPassage(text)
-    if (!addResp.success) {
-      log('update', `Add-new failed: ${addResp.message}`, false)
-      return
-    }
-    await deleteResult(idx)
-    log('update', `Updated pattern #${idx} (new entry + tombstoned old)`, true)
-    setUpdateText('')
-    setUpdateIdx('')
+    setConfirm({
+      title: `Update pattern #${idx}?`,
+      body: (
+        <>
+          <p className="mb-2">
+            This adds a NEW passage with your edited text and tombstones the original
+            <code className="font-mono text-rose-300 mx-1">#{idx}</code>.
+            (True in-place update — <code className="font-mono">PUT /api/patterns/{'{idx}'}</code> — is a TODO.)
+          </p>
+          <p className="text-xs text-slate-500">
+            The new passage gets a new index assigned at the end of the cart.
+            The old idx becomes a tombstone you can Restore from below.
+          </p>
+        </>
+      ),
+      confirmLabel: 'Update',
+      destructive: true,
+      onConfirm: async () => {
+        const addResp = await addPassage(text)
+        if (!addResp.success) {
+          log('update', `Add-new failed: ${addResp.message}`, false)
+          return
+        }
+        await deleteResult(idx)
+        log('update', `Updated pattern #${idx} (new entry + tombstoned old)`, true)
+        setUpdateText('')
+        setUpdateIdx('')
+      },
+    })
   }
 
   // ── Delete ──
-  const handleDelete = async () => {
+  // Standard practice (Andy 2026-05-06): destructive actions get a
+  // confirmation modal. The modal does the actual call on confirm.
+  const handleDelete = () => {
     const idx = parseInt(deleteIdx, 10)
     if (isNaN(idx)) return
-    await deleteResult(idx)
-    log('delete', `Tombstoned pattern #${idx}`, true)
-    setDeleteIdx('')
+    setConfirm({
+      title: `Tombstone pattern #${idx}?`,
+      body: (
+        <>
+          <p className="mb-2">
+            This marks pattern <code className="font-mono text-rose-300">#{idx}</code> as deleted.
+            It stops appearing in search results and can be restored from the tombstoned list below.
+          </p>
+          <p className="text-xs text-slate-500">
+            Permanent removal happens when you Save the cart (the on-disk data is overwritten).
+            Until then, Restore brings it back.
+          </p>
+        </>
+      ),
+      confirmLabel: 'Tombstone',
+      destructive: true,
+      onConfirm: async () => {
+        await deleteResult(idx)
+        log('delete', `Tombstoned pattern #${idx}`, true)
+        setDeleteIdx('')
+      },
+    })
   }
 
   const handleRestore = async (idx: number) => {
@@ -403,6 +444,16 @@ export default function CRUDScreen() {
           </div>
         )}
       </div>
+
+      {/* Destructive-action confirmation modal — used for tombstone + update */}
+      <ConfirmDialog
+        state={confirm}
+        onCancel={() => setConfirm(null)}
+        onConfirm={async () => {
+          await confirm?.onConfirm()
+          setConfirm(null)
+        }}
+      />
     </main>
   )
 

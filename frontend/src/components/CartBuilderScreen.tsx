@@ -1,8 +1,9 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import {
-  Hammer, Upload, FileText, Save, Loader2, Info, AlertCircle,
+  Hammer, Upload, FileText, Save, Loader2, Info, AlertCircle, Lock,
   Folder, Tag, User, RefreshCw,
 } from 'lucide-react'
+import { useAppStore } from '../store/appStore'
 import { useCartBuilderStore } from '../store/cartBuilderStore'
 import CartBrowser from './CartBrowser'
 import FolderPickerModal from './FolderPickerModal'
@@ -38,6 +39,8 @@ export default function CartBuilderScreen() {
     startBuild, stopBuildPolling,
     clearWorkspace, refreshBrowser,
   } = useCartBuilderStore()
+
+  const readOnlyMode = useAppStore((s) => s.status?.read_only_mode ?? false)
 
   const [dragOver, setDragOver] = useState(false)
   const [windowDrag, setWindowDrag] = useState(false)
@@ -124,7 +127,7 @@ export default function CartBuilderScreen() {
               Drag-and-drop documents to build a Membot brain cartridge.
             </p>
           </div>
-          {files.length > 0 && (
+          {files.length > 0 && !readOnlyMode && (
             <button
               onClick={() => {
                 if (confirm('Clear workspace? Uploaded files will be removed.')) {
@@ -138,10 +141,29 @@ export default function CartBuilderScreen() {
           )}
         </div>
 
+        {/* Read-only-mode banner — Cart Builder is non-functional on the
+            public droplet (uploads, builds, load_cart, browse all 403).
+            Tell the user explicitly rather than letting them try and fail. */}
+        {readOnlyMode && (
+          <div className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 p-4 flex items-start gap-3">
+            <Lock size={16} className="text-cyan-400 flex-shrink-0 mt-0.5" />
+            <div className="text-sm">
+              <div className="text-cyan-200 font-medium mb-1">Cart Builder is read-only on this demo</div>
+              <div className="text-xs text-slate-400 leading-relaxed">
+                The public deploy refuses cart-creation writes — uploads, builds, and folder navigation are disabled.
+                To build your own carts, install Vector+ Studio locally
+                (<code className="font-mono text-slate-300">git clone …/vector-plus-studio &amp;&amp; uvicorn api.main:app --port 8000</code>).
+                You can still see the saved cart catalog below, and the Search screen lets you mount + query the public demo carts.
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Upload errors surface as toasts now (bottom-right). The store still
             keeps `uploadError` for any inline retry UI we might add later. */}
 
-        {/* Drop zone */}
+        {/* Drop zone — hidden in read-only mode (uploads 403). */}
+        {!readOnlyMode && (
         <div
           onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
           onDragLeave={() => setDragOver(false)}
@@ -177,9 +199,10 @@ export default function CartBuilderScreen() {
             PDF, DOCX, XLSX, TXT, MD, RTF
           </div>
         </div>
+        )}
 
-        {/* Workspace file list */}
-        {files.length > 0 && (
+        {/* Workspace file list — hidden in read-only mode (no uploads possible). */}
+        {files.length > 0 && !readOnlyMode && (
           <div className="rounded-lg border border-slate-700 bg-slate-800/30">
             <div className="px-4 py-2 border-b border-slate-700 flex items-center justify-between">
               <h2 className="text-xs uppercase tracking-wider text-slate-500 flex items-center gap-2">
@@ -201,7 +224,9 @@ export default function CartBuilderScreen() {
           </div>
         )}
 
-        {/* Pattern 0 preview + cart name */}
+        {/* Pattern 0 preview + cart name — hidden in read-only mode (Pattern 0
+            and build are both write-side; nothing to preview if you can't build). */}
+        {!readOnlyMode && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="rounded-lg border border-slate-700 bg-slate-800/30 p-4 space-y-3">
             <h2 className="text-xs uppercase tracking-wider text-slate-500 flex items-center gap-2">
@@ -242,11 +267,23 @@ export default function CartBuilderScreen() {
             )}
           </div>
         </div>
+        )}
 
-        {/* Cart browser embedded — also lives in Edit Carts */}
+        {/* Cart browser embedded — also lives in Edit Carts.
+            In read-only mode the click handler shows a toast instead of trying
+            to call /load_cart (which 403s). The user still gets to BROWSE the
+            catalog; they just can't open carts into the Cart Builder workspace. */}
         <CartBrowser
           headerLabel="My Carts"
           onCartClick={(cart) => {
+            if (readOnlyMode) {
+              useCartBuilderStore.getState().pushToast(
+                'info',
+                'Cart Builder is read-only on the public demo. To search this cart, mount it from the Search screen.',
+                6000,
+              )
+              return
+            }
             // Q1 = (c): one button → Cart Builder. Open loads the cart's
             // contents into THIS workspace for re-editing. To passage-edit,
             // user navigates manually to Edit Carts.
@@ -270,7 +307,8 @@ export default function CartBuilderScreen() {
         </div>
       )}
 
-      {/* Sticky build bar */}
+      {/* Sticky build bar — hidden in read-only mode (build endpoint 403s). */}
+      {!readOnlyMode && (
       <div className="fixed bottom-0 left-0 right-0 lg:left-48 px-6 py-3 border-t border-slate-700 bg-slate-900/95 backdrop-blur flex items-center gap-4 z-40">
         <div className="flex-1 min-w-0">
           {isBuilding ? (
@@ -322,6 +360,7 @@ export default function CartBuilderScreen() {
           {isBuilding ? 'Building…' : 'Build Cart'}
         </button>
       </div>
+      )}
     </main>
   )
 }
