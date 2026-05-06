@@ -122,45 +122,62 @@ export default function SearchToolbar() {
 
         {open && (
           <div className="absolute top-full mt-1 left-0 w-96 max-h-[28rem] overflow-y-auto rounded-lg border border-slate-700 bg-[var(--chrome-bg)] shadow-2xl z-30">
-            {/* Open from file system */}
-            <button
-              onClick={handleBrowse}
-              disabled={pathLoading}
-              className="w-full flex items-center gap-2 px-3 py-2.5 text-sm border-b border-slate-800 hover:bg-slate-800/50 disabled:opacity-50 transition-colors"
-            >
-              {pathLoading ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />}
-              <span className="font-medium">{pathLoading ? 'Opening…' : 'Open Cartridge…'}</span>
-            </button>
-
-            {/* Paste path fallback */}
-            <div className="border-b border-slate-800">
+            {/* Open from file system — hidden on the public demo (read-only-mode
+                server). The native PowerShell dialog can't run on the headless
+                Linux droplet, AND users can't see the server filesystem anyway,
+                so the button does nothing useful. The available-carts list below
+                still works. */}
+            {!status?.read_only_mode && (
               <button
-                onClick={() => setPathOpen(!pathOpen)}
-                className="w-full text-left px-3 py-1.5 text-[11px] text-slate-500 hover:text-slate-300 transition-colors"
+                onClick={handleBrowse}
+                disabled={pathLoading}
+                className="w-full flex items-center gap-2 px-3 py-2.5 text-sm border-b border-slate-800 hover:bg-slate-800/50 disabled:opacity-50 transition-colors"
               >
-                {pathOpen ? '▾ paste path' : '▸ or paste a path…'}
+                {pathLoading ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />}
+                <span className="font-medium">{pathLoading ? 'Opening…' : 'Open Cartridge…'}</span>
               </button>
-              {pathOpen && (
-                <div className="px-3 pb-2 space-y-1.5">
-                  <input
-                    type="text"
-                    value={pathInput}
-                    onChange={(e) => setPathInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handlePaste()}
-                    autoFocus
-                    placeholder="Paste full path to .pkl/.npz file"
-                    className="w-full px-2 py-1.5 text-xs bg-slate-800 border border-slate-700 rounded text-slate-200 placeholder-slate-600 focus:border-purple-500/50 focus:outline-none"
-                  />
-                  <button
-                    onClick={handlePaste}
-                    disabled={pathLoading || !pathInput.trim()}
-                    className="w-full text-xs py-1.5 rounded gradient-bg text-white font-medium disabled:opacity-50"
-                  >
-                    {pathLoading ? 'Mounting…' : 'Mount'}
-                  </button>
-                </div>
-              )}
-            </div>
+            )}
+
+            {/* Paste path fallback — also hidden in read-only mode. */}
+            {!status?.read_only_mode && (
+              <div className="border-b border-slate-800">
+                <button
+                  onClick={() => setPathOpen(!pathOpen)}
+                  className="w-full text-left px-3 py-1.5 text-[11px] text-slate-500 hover:text-slate-300 transition-colors"
+                >
+                  {pathOpen ? '▾ paste path' : '▸ or paste a path…'}
+                </button>
+                {pathOpen && (
+                  <div className="px-3 pb-2 space-y-1.5">
+                    <input
+                      type="text"
+                      value={pathInput}
+                      onChange={(e) => setPathInput(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handlePaste()}
+                      autoFocus
+                      placeholder="Paste full path to .pkl/.npz file"
+                      className="w-full px-2 py-1.5 text-xs bg-slate-800 border border-slate-700 rounded text-slate-200 placeholder-slate-600 focus:border-purple-500/50 focus:outline-none"
+                    />
+                    <button
+                      onClick={handlePaste}
+                      disabled={pathLoading || !pathInput.trim()}
+                      className="w-full text-xs py-1.5 rounded gradient-bg text-white font-medium disabled:opacity-50"
+                    >
+                      {pathLoading ? 'Mounting…' : 'Mount'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Public-demo notice — replaces the file-picker UI when on the
+                read-only droplet. Tells the user to pick from the list below. */}
+            {status?.read_only_mode && (
+              <div className="px-3 py-2 border-b border-slate-800 text-[11px] text-slate-500 italic flex items-center gap-2">
+                <FolderOpen size={11} className="text-slate-600 flex-shrink-0" />
+                Public demo — pick a cartridge from the list below.
+              </div>
+            )}
 
             {/* Available carts */}
             <div className="p-2 space-y-1">
