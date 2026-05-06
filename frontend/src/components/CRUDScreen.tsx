@@ -33,7 +33,11 @@ import ConfirmDialog, { type ConfirmState } from './ConfirmDialog'
 //   • Activity log persistence (currently in-component only)
 
 type Mode = 'open' | 'new'
-type OpKind = 'add' | 'update' | 'delete' | 'restore'
+// Activity log kinds. Andy 2026-05-06: mount / unmount / save / create
+// belong in the log too — any cart-state-changing action gets a row.
+// 'open' is reserved for screens like Cart Builder where loading a cart
+// into a workspace (load_cart) isn't the same as mounting it for search.
+type OpKind = 'add' | 'update' | 'delete' | 'restore' | 'mount' | 'unmount' | 'save' | 'create' | 'open'
 
 interface ActivityEntry {
   ts: string
@@ -200,7 +204,7 @@ export default function CRUDScreen() {
     //   (b) Reuse /api/forge with an empty file list (would need backend change)
     //   (c) Defer — start by mounting an existing cart, save-as later
     // For mockup: just show what the flow looks like.
-    log('add', `(stub) Would create empty cart "${newCartName}" — backend route TBD`, false)
+    log('create', `(stub) Would create empty cart "${newCartName}" — backend route TBD`, false)
   }
 
   return (
@@ -415,9 +419,10 @@ export default function CRUDScreen() {
         <CartBrowser
           headerLabel="Carts available to edit"
           onCartClick={(cart) => {
-            // Mount via the existing /api/cartridges/mount path (absolute path)
+            // Mount via the existing /api/cartridges/mount path (absolute path).
+            // Log as 'mount' (Andy 2026-05-06 — mount/unmount belong in the log).
             useAppStore.getState().mount(cart.path)
-            log('add', `Mounted ${cart.name} for editing`, true)
+            log('mount', `Mounted ${cart.name} for editing`, true)
           }}
         />
 
@@ -434,7 +439,7 @@ export default function CRUDScreen() {
             <button
               onClick={async () => {
                 const r = await saveCartridge()
-                log('add', r.message, r.success)
+                log('save', r.message, r.success)
               }}
               className="px-4 py-1.5 rounded-lg text-sm font-medium bg-purple-500/30 border border-purple-500/50 text-purple-200 hover:bg-purple-500/40"
             >
@@ -496,7 +501,11 @@ export default function CRUDScreen() {
           {readOnly ? <><Lock size={11} /> Read-only</> : <><Unlock size={11} /> Editable</>}
         </button>
         <button
-          onClick={unmount}
+          onClick={async () => {
+            const name = status?.mounted_cartridge || 'cart'
+            await unmount()
+            log('unmount', `Unmounted ${name}`, true)
+          }}
           className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800"
         >
           Unmount
@@ -597,10 +606,16 @@ function ActivityLog({ entries }: { entries: ActivityEntry[] }) {
             {e.ok
               ? <CheckCircle2 size={12} className="text-green-400 shrink-0" />
               : <AlertCircle size={12} className="text-rose-400 shrink-0" />}
-            <span className={`uppercase tracking-wider w-16 shrink-0 ${
-              e.kind === 'add' ? 'text-green-400'
-                : e.kind === 'update' ? 'text-cyan-400'
-                : e.kind === 'delete' ? 'text-rose-400'
+            <span className={`uppercase tracking-wider w-20 shrink-0 ${
+              e.kind === 'add'      ? 'text-green-400'
+                : e.kind === 'update'  ? 'text-cyan-400'
+                : e.kind === 'delete'  ? 'text-rose-400'
+                : e.kind === 'restore' ? 'text-amber-400'
+                : e.kind === 'mount'   ? 'text-purple-400'
+                : e.kind === 'unmount' ? 'text-purple-300/70'
+                : e.kind === 'save'    ? 'text-emerald-400'
+                : e.kind === 'create'  ? 'text-cyan-300'
+                : e.kind === 'open'    ? 'text-blue-400'
                 : 'text-slate-400'
             }`}>{e.kind}</span>
             <span className="flex-1 truncate text-slate-400">{e.detail}</span>
