@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>WebGPU Embedder Smoke Test — Nomic v1.5</title>
+  <style>
+    body { background: #0a0a0a; color: #ddd; font-family: 'Consolas', 'Monaco', monospace; padding: 20px; max-width: 1100px; }
+    h1 { color: #0f0; font-size: 18px; }
+    p { color: #aaa; font-size: 13px; line-height: 1.6; }
+    button { padding: 10px 24px; background: #2a2a2a; color: #ddd; border: 1px solid #444; cursor: pointer; font-family: inherit; font-size: 14px; }
+    button:hover { background: #444; border-color: #666; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    pre { background: #111; padding: 14px; overflow: auto; border: 1px solid #333; font-size: 13px; line-height: 1.5; }
+    .ok { color: #4f4; }
+    .err { color: #f44; }
+    .info { color: #4af; }
+    .dim { color: #888; }
+    .copy { color: #fc4; font-weight: bold; }
+    .progress { background: #1a1a1a; height: 6px; border-radius: 3px; margin: 8px 0; overflow: hidden; border: 1px solid #333; }
+    .progress > div { background: linear-gradient(90deg, #4af, #4f4); height: 100%; width: 0; transition: width 200ms; }
+  </style>
+</head>
+<body>
+  <h1>WebGPU Embedder Smoke Test</h1>
+  <p>
+    Tests transformers.js + Nomic Embed Text v1.5 in the browser.
+    Click <strong>Run test</strong> to load the model (one-time download, ~30-100MB), embed a fixed sentence,
+    and dump the first 10 dims + L2 norm. The output below the marker line is what to copy back to Andy/Claude
+    for parity comparison against the Python reference.
+  </p>
+
+  <button id="run">Run test</button>
+  <span id="status" style="margin-left: 16px; color: #888;"></span>
+
+  <div class="progress" id="progressBar"><div id="progressInner"></div></div>
+
+  <pre id="log">Click "Run test" to start.</pre>
+
+  <script type="module">
+    const logEl = document.getElementById('log');
+    const statusEl = document.getElementById('status');
+    const progressInner = document.getElementById('progressInner');
+    const runBtn = document.getElementById('run');
+
+    function append(msg, cls = '') {
+      const span = document.createElement('span');
+      if (cls) span.className = cls;
+      span.textContent = msg + '\n';
+      logEl.appendChild(span);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    function clear() { logEl.textContent = ''; }
+    function setStatus(s) { statusEl.textContent = s; }
+    function setProgress(pct) { progressInner.style.width = pct + '%'; }
+
+    runBtn.onclick = async () => {
+      runBtn.disabled = true;
+      clear();
+      setProgress(0);
+      try {
+        // ── Step 1: import transformers.js ──
+        append('[1/5] Importing @huggingface/transformers from CDN...', 'info');
+        setStatus('importing library...');
+        const t0 = performance.now();
+        const transformers = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.0');
+        const { pipeline, env } = transformers;
+        append(`      done in ${(performance.now() - t0).toFixed(0)}ms`, 'ok');
+        append(`      env.backends.onnx.wasm.proxy: ${env?.backends?.onnx?.wasm?.proxy}`, 'dim');
+        setProgress(15);
+
+        // ── Step 2: load Nomic Embed Text v1.5 ──
+        append('', '');
+        append('[2/5] Loading Nomic Embed Text v1.5 (nomic-ai/nomic-embed-text-v1.5)...', 'info');
+        append('      First load downloads ~30-100MB. Subsequent loads are cached.', 'dim');
+        setStatus('downloading model (this may take a moment)...');
+        const t1 = performance.now();
+
+        // Try WebGPU first; transformers.js falls back to WASM if unavailable.
+        const embedder = await pipeline(
+          'feature-extraction',
+          'nomic-ai/nomic-embed-text-v1.5',
+          {
+            device: 'webgpu',
+            dtype: 'fp32',
+            progress_callback: (data) => {
+              if (data.status === 'progress' && data.progress) {
+                const pct = 15 + Math.round((data.progress / 100) * 60);
+                setProgress(pct);
+                setStatus(`${data.file ?? 'model'}: ${data.progress.toFixed(1)}%`);
+              }
+            },
+          }
+        );
+        const loadMs = performance.now() - t1;
+        append(`      model loaded in ${(loadMs/1000).toFixed(1)}s`, loadMs < 120000 ? 'ok' : 'err');
+        // Detect actual backend
+        let backend = 'unknown';
+        try {
+          const sess = embedder?.model?.sessions ? Object.values(embedder.model.sessions)[0] : null;
+          backend = sess?.handler?._executionProviders?.join(',') ?? 'unknown';
+        } catch (_) {}
+        append(`      backend: ${backend}`, 'info');
+        setProgress(80);
+        setStatus('embedding...');
+
+        // ── Step 3: embed ──
+        append('', '');
+        append('[3/5] Embedding test sentence...', 'info');
+        const sentence = 'search_document: this is a test sentence about transformer attention';
+        append(`      sentence: ${JSON.stringify(sentence)}`, 'dim');
+        const t2 = performance.now();
+        const out = await embedder(sentence, { pooling: 'mean', normalize: false });
+        const embMs = performance.now() - t2;
+        append(`      embedded in ${embMs.toFixed(0)}ms`, 'ok');
+        setProgress(95);
+
+        // ── Step 4: inspect ──
+        append('', '');
+        append('[4/5] Inspecting output...', 'info');
+        append(`      type: ${out.constructor.name}`, 'dim');
+        append(`      dims: [${out.dims.join(', ')}]`, 'info');
+        append(`      total values: ${out.data.length}`, 'dim');
+        const first10 = Array.from(out.data.slice(0, 10)).map(v => v.toFixed(6));
+        append(`      first 10: [${first10.join(', ')}]`, 'info');
+
+        let sumSq = 0;
+        for (let i = 0; i < out.data.length; i++) sumSq += out.data[i] ** 2;
+        const norm = Math.sqrt(sumSq);
+        append(`      L2 norm: ${norm.toFixed(6)}`, 'info');
+
+        // ── Step 5: copy block ──
+        append('', '');
+        append('[5/5] DONE', 'ok');
+        setProgress(100);
+        setStatus('done');
+        append('', '');
+        append('═══ COPY EVERYTHING BELOW FOR PARITY CHECK ═══', 'copy');
+        append(`SENTENCE: ${sentence}`, 'copy');
+        append(`BACKEND: ${backend}`, 'copy');
+        append(`MODEL_LOAD_MS: ${loadMs.toFixed(0)}`, 'copy');
+        append(`EMBED_MS: ${embMs.toFixed(0)}`, 'copy');
+        append(`DIMS: [${out.dims.join(', ')}]`, 'copy');
+        append(`L2_NORM: ${norm.toFixed(6)}`, 'copy');
+        append(`FIRST_10: [${first10.join(', ')}]`, 'copy');
+        append('═══ END COPY BLOCK ═══', 'copy');
+      } catch (e) {
+        append('', '');
+        append('═══ FATAL ═══', 'err');
+        append(String(e?.stack ?? e?.message ?? e), 'err');
+        setStatus('failed');
+      } finally {
+        runBtn.disabled = false;
+      }
+    };
+  </script>
+</body>
+</html>
