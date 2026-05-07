@@ -1,5 +1,139 @@
 # Vector+ Studio Devlog
 
+## 2026-05-05 → 2026-05-06 — Cart Builder full-parity port + Edit Carts CRUD screen + three-layer RWX + public droplet deploy + WebGPU pivot smoke-tested
+
+**Two-day burst.** 18 commits, 5 new CCs, 2 feedback memories, public demo live, the entire RWX security stack designed and shipped, Cart Builder ported in full, Edit Carts (CRUD) screen built from scratch, and the WebGPU pivot for V2 Cart Builder de-risked via three smoke tests on Wed evening. The kind of stretch where the architecture you've been talking about for weeks becomes the architecture in production. Walked into Tuesday night thinking "Cart Builder Phase 1 backend port"; walked out Wednesday at 10pm with a public-facing demo, a security-sound multi-layer permissions model, and the foundations for a private-by-architecture in-browser cart-build pipeline.
+
+### Live demo URL
+
+**https://project-you.app/vps/app/** — read-only public demo, 3 curated carts (attention paper, gutenberg-poetry, neuroscience-and-AI-papers), upload-your-own-cart sandboxed flow with TTL eviction, end-to-end mount + search verified.
+
+### Commits this session (chronological)
+
+| # | Commit | What it shipped |
+|---|---|---|
+| 1 | `fe1d557` | Cart Builder Phase 1: 15 backend routes ported as `/api/cartbuilder/*` (FastAPI APIRouter mirroring the Flask app). CRUD scope explicitly removed per the 2026-05-05 IA decision. |
+| 2 | `a3f1d7b` | Markdown rendering in PassageModal — `react-markdown` + `remark-gfm` for headings/lists/tables/blockquotes/code/autolinks. Per-element Tailwind classes, no `@tailwindcss/typography` dep. |
+| 3 | `1702cdb` | Cart Builder Phase 2 scaffold — typed API client `frontend/src/api/cartbuilder.ts` wrapping all 15 routes. Tree-shaken until imported. |
+| 4 | `4a442e7` | Edit Carts (CRUD) screen mockup — first pass with two modes, three op panels, tombstone list, in-screen activity log, sticky save bar. Wired to existing endpoints. |
+| 5 | `78adebb` | **Step 1 of RWX roadmap:** `VPS_READ_ONLY` env-var server-wide lock. Every write endpoint refuses with 403; unlock specifically refuses so per-cart locks can't be cleared. |
+| 6 | `eaed301` | **Step 2a of RWX roadmap:** cart-format permissions sidecar (`<cart>.permissions.json` with `default: r/rw/rwx`, optional `owner`, `description`). `_enforce_writable` composes server flag + cart sidecar. CLI tool `bin/set_cart_permissions.py` for retrofitting. |
+| 7 | `752e3be` | Security sweep + `.gitignore` hardening — caught nested-archive `claude_sessions.txt` files that the original `cartridges/*.txt` pattern would have missed. New globals `**/claude_sessions*`, `**/session_memory*`, `**/memory_keys*`. |
+| 8 | `0512560` | Frontend `VITE_BASE` + `VITE_API_BASE` env vars for hosted deploys. Local dev unchanged; droplet build sets `/vps/app/` + `/vps/api`. |
+| 9 | `f29cc71` | `list_cartridges` discovers `.cart.npz` (membot format) too, not just `.pkl`. Caught during droplet deploy when the new carts didn't appear in the list. |
+| 10 | `5b1ac66` | **Cart Builder Phase 2: full-parity React port.** New `cartBuilderStore.ts` zustand slice, `CartBuilderScreen.tsx` rewrite, shared `CartBrowser.tsx` component embedded in BOTH Cart Builder and Edit Carts (per Q2 = both), `FolderPickerModal.tsx`. Drop zone + file metadata editor + Pattern 0 preview + sticky build bar. |
+| 11 | `6e44935` | Phase 2 polish (1/3 + 2/3): screen-wide drag-drop overlay + `Toaster` system. Window-level dragenter/dragleave with file-only filter. |
+| 12 | `dc8cd21` | Phase 2 polish (3/3): `@uiw/react-md-editor` for description fields, lazy-loaded so the ~315KB chunk only downloads when user opens Metadata. Initial bundle stayed at 140KB gzip. |
+| 13 | `1c08632` | Light-mode fix — global CSS for `html.light` flips form-field background/text/placeholder/focus. Edit Carts/Cart Builder text inputs no longer dark-on-dark. |
+| 14 | `e2e7337` | SearchToolbar: hide native file picker + paste-path on public demo (PowerShell doesn't exist on Linux droplet, users can't see server filesystem anyway). |
+| 15 | `fbc2b01` | **Sandboxed upload endpoint** for the public-demo Open Cartridge picker. `POST /api/cartridges/upload` with magic-byte validation, size cap, UUID prefix, forced read-only sidecar, TTL cleanup task running from lifespan. |
+| 16 | `4a8e22e` | Frontend Upload Cartridge picker — `<input type="file">` + auto-mount + toasts. Visible in both local and droplet deploys; chains upload → mount → toast in ~3 seconds. |
+| 17 | `fbdcf4b` | **Step 2b of RWX roadmap:** hippocampus per-pattern RWX in the reserved-area `perms_byte` (offset 29). Pivoted from the flags byte at offset 28 after discovering membot's cart_builder.py owns it for tombstone/pinned/has_parent/has_child/has_sibling/perish. CLI `bin/set_pattern_permissions.py` with range syntax. |
+| 18 | `0ae41cb` | **SECURITY** — gate `/api/cartbuilder/browse` and `/api/cartbuilder/carts?path=X` behind read-only mode. Andy discovered the public droplet was exposing arbitrary directory structure to any visitor. Closed the recon vector. |
+| 19 | `9c579dd` | Cart Builder read-only-mode UX + `ConfirmDialog` reusable component + light-mode contrast bumps for accent banners. Hide drop zone, workspace, Pattern 0, build bar, Folders button, subdir drill-down in read-only mode. |
+| 20 | `afac582` | Edit Carts activity log: proper `mount`/`unmount`/`save`/`create`/`open` kinds with color-coding. Was previously logging cart-mount as `add` (sloppy). |
+| 21 | `3b0f8c3` | Edit Carts: friction-by-design banner + zero-byte placeholder filter in `list_cartridges` + mount-failure toasts (closed a long-standing silent-fail UX hole). |
+| 22 | `600938f` | **WebGPU pivot prep** — installed `@huggingface/transformers`, `npyjs`, `jszip`, `pdfjs-dist`, `mammoth`, `xlsx`. Smoke-test artifacts moved to `tools/webgpu-smoketest/` with full README capturing Thursday/Friday plan. |
+
+### RWX three-layer security stack — the architectural piece
+
+Designed and shipped end-to-end in a single day. Composes top-down, fail-fast:
+
+1. **Server-wide flag** — `VPS_READ_ONLY=1` env var refuses ALL write endpoints. Unlock specifically refuses too, so attackers can't bypass via the per-cart lock toggle. Blanket "this server is a public demo" lock.
+2. **Cart-format sidecar** — `<cart>.permissions.json` with `default: r/rw/rwx`, optional `owner`, `description`. Loaded at mount; gates writes via `cart_permits_write()`. Backward-compat: absent sidecar → writable. **The cart self-declares its policy.**
+3. **Hippocampus per-pattern bits** — `perms_byte` at row offset 29 (NOT the flags byte at offset 28 — that's owned by membot's cart-builder for tombstone/pinned/links/perish). Bits `0x01=R / 0x02=W / 0x04=X-reserved`. `_enforce_writable(idx=…)` composes all three layers.
+
+Two CLI tools for retrofitting existing carts without rebuild: `bin/set_cart_permissions.py` for cart-wide, `bin/set_pattern_permissions.py` for per-pattern with range syntax (`--idx 5,12-15,42 --perms r`).
+
+Frontend surfaces all three: Header shows three lock states in priority order (Public read-only > Cart read-only > interactive Lock/Unlock). Result cards show LOCKED badge when `result.perms.w === false` with tooltip explaining the byte value.
+
+### Cart Builder Phase 1+2 — port complete with full parity
+
+Backend (Phase 1, commit `fe1d557`): 15 routes from `cart-builder/cart-builder/app.py` mirrored as FastAPI APIRouter at `/api/cartbuilder/*`. Late-imports `parsers`, `builder` from cart-builder source via temporary sys.path insertion (no module collisions with VPS-local). Returns 503 if cart-builder modules unavailable (which is the intentional droplet state).
+
+Frontend (Phase 2, commit `5b1ac66` + polish in `6e44935`/`dc8cd21`): zustand store `cartBuilderStore.ts`; rewritten `CartBuilderScreen.tsx` with drag-and-drop, inline file metadata editor, live Pattern 0 preview, sticky bottom build bar (matches Edit Carts save bar per Q4); shared `CartBrowser.tsx` embedded in BOTH Cart Builder and Edit Carts (per Q2); `FolderPickerModal.tsx` server-side path browser; lazy-loaded `@uiw/react-md-editor` for description fields (zero growth on initial bundle); `Toaster` system at App level; screen-wide drag-drop overlay with file-only filter and dragCounter for nested-child correctness.
+
+All four IA decisions Andy made on 2026-05-05 are baked in:
+- **Q1**: Cart Builder = canonical "open existing cart" target; Edit Carts is manual nav
+- **Q2**: CartBrowser = single shared component, two screens
+- **Q3**: Full parity (we're going to Reddit / Product Hunt with this)
+- **Q4**: Sticky bottom bar (consistent with Edit Carts save bar)
+
+### Edit Carts (CRUD) screen — friction-by-design
+
+New `CRUDScreen.tsx` (the Pencil-icon nav entry). Two modes (Open Cart / New Cart), three op panels (Add / Update / Delete), tombstoned-passages list with one-click Restore, in-screen activity log with kind-coloring (mount/unmount/save/add/update/delete/restore/create/open), sticky save bar when dirty.
+
+Andy's explicit design call (2026-05-05): **Edit Carts SHOULD be friction.** The destructive screen — passages get tombstoned, updated, deleted here, this is the rm-rf screen of VPS. Asymmetric to Search Screen (permissive mount, read-only is safe). No casual mount affordances — users either mount via Search Screen first, or use the deliberate My Carts panel embedded at the bottom.
+
+ConfirmDialog reusable component shipped with this screen — title + rich React body + destructive flag + async onConfirm. Esc-cancel, Enter-confirm. Wired into tombstone + update; future destructive actions across the app adopt the same pattern.
+
+### Public droplet deploy — went live, then immediately patched a security leak
+
+Cloned VPS into `/opt/vector-plus-studio/`, Python 3.11 venv, copied 3 carts as a curated subset (no symlink to `/opt/membot/cartridges/` because Andy correctly worried it would inherit any future personal cart that landed there), set `default: r` permissions sidecars on each, frontend built with `VITE_BASE=/vps/app/ VITE_API_BASE=/vps/api`, scp'd to droplet, systemd unit `vector-plus-studio.service` with `Environment=VPS_READ_ONLY=1`, nginx subroute added. End-to-end test mounted attention paper, ran "transformer attention" search at 593ms, verified unlock → 403.
+
+**Then Andy found the leak.** The Cart Builder folder picker, even on the public droplet, was happily walking arbitrary server paths via `/api/cartbuilder/browse` and `/api/cartbuilder/carts?path=X`. Public visitors could enumerate `/etc/`, `/opt/`, `/root/`. Closed in commit `0ae41cb` — both endpoints 403 in read-only mode (browse always; carts only when `path` query param is non-empty so the safe no-path saved-folders variant still works).
+
+Standing items filed in [`memory/concept-clusters/CC_security-sweep-and-pii-scrubber_2026-05.md`](../../memory/concept-clusters/CC_security-sweep-and-pii-scrubber_2026-05.md): audit `membot` / `membraine` / `nudges` repos with same gitignore + grep, build `cart_audit.py` for binary-cart content scanning, design PII scrubber (`${env:KEY}` pointer pattern with secrets in local `.env`).
+
+### WebGPU pivot for Cart Builder V2 — Wednesday evening smoke-tested
+
+Andy's strategic question (Wed evening): server-side build-and-download as bridge, OR pure client-side WebGPU as the proper architecture? Three counter-arguments to pure WebGPU enumerated; recommendation refined to **WebGPU primary + WASM auto-fallback (no server build path)** — `transformers.js` handles capability detection internally, the privacy pitch stays clean ("100% in your browser, fast where the GPU is, correct everywhere").
+
+Three smoke tests retired the foundational risks before betting Thursday-Friday on the pivot:
+
+| Test | Result |
+|---|---|
+| **1. WebGPU lattice engine alive** | Existing `vector-benchmark-demo/cuda/webgpu/` works in Chrome. 4096×4096 init OK. Random imprint 151ms, train 30 frames (Hebbian, learn=true) 318ms, signature gen 49ms, L4 state recall, L3 visualization render. **12ms/frame on 16.7M neurons.** |
+| **2. Embedder parity (Python vs in-browser transformers.js)** | Same sentence embedded both ways. **Drift at the 6th decimal place** — noise floor. L2 norm 21.072100 (Python) vs 21.072095 (browser). Carts built in browser will be bit-near-identical to carts built server-side. **Cross-compatibility confirmed.** |
+| **3. NPZ writer feasibility** | Membraine fetched the actual `npyjs` README — `dump()` is supported (I had a stale assumption that npyjs was read-only). Apache-2.0, maintained, every dtype we need. NPZ via JSZip. ~30-50 lines total instead of the half-day I estimated initially. |
+
+Smoke-test artifacts committed to [`tools/webgpu-smoketest/`](../tools/webgpu-smoketest/) — `embedder-test.html`, `python_reference.py`, `python_reference_full.npy`, README with Thursday/Friday five-block plan + effort estimates + canonical-code-pointers.
+
+### CCs filed today (5 new)
+
+| CC | What it captures |
+|---|---|
+| `CC_security-sweep-and-pii-scrubber_2026-05.md` | Initial sweep findings (VPS GitHub clean; membot droplet public surface clean; .gitignore hardened); standing items (audit other repos, cart_audit.py, PII scrubber design) |
+| `CC_sql-database-ingestion_2026-05.md` | V2 sketch — `.sql` files as a Cart Builder source type; rows-as-passages, schema-as-manifest, FK-as-hippo-edges; table-per-cart agent-swap angle for large enterprise DBs (extends multi_mount infrastructure already shipped) |
+| `CC_cloud-storage-for-carts_2026-05.md` | Cloudflare R2 default for cart blob storage (no egress fees, salesperson cold-contacted Andy twice in 10 days = partnership opening when ready); pluggable `CartStorage` interface; 5-phase rollout; aligns with existing Heartbeat Tier 0/1/2/3 model |
+| `CC_realtime-l4-visualization-dashboard_2026-05.md` | "When the cognition engine is running, pin the L4 grid at 24fps as a dashboard." Same engine we just smoke-tested makes this newly feasible. Evolution of Hot Stack dashboard — the lattice IS the dashboard. V1.2+ feature. |
+| Plus the existing `CC_provenance-as-feature_2026-05` — touched during the activity log + light-mode work |
+
+### Feedback rules filed (2 new)
+
+| Rule | Why |
+|---|---|
+| `feedback_check_session_cart_before_guessing.md` | When about to guess a value/path/config we've touched before (HuggingFace model paths, install commands, port numbers, API endpoints, model IDs), search session memory FIRST. The asymmetry: 3-second search vs full Andy-roundtrip on a wrong guess. Triggered by Wed-evening Xenova-vs-nomic-ai Nomic ONNX path miss. |
+| `reference_droplet_ops.md` | (Filed earlier in the week, used heavily today) — SSH key, host, deploy pattern, target paths so future sessions don't re-derive |
+
+### IA decisions locked
+
+- **Cart Builder vs Edit Carts** (Q1): one button → Cart Builder on cart click; passage editing requires manual nav to Edit Carts
+- **CartBrowser placement** (Q2): single component, embedded in both screens
+- **Phase 2 scope** (Q3): full parity (this is what gets posted to Reddit/PH)
+- **Build progress UX** (Q4): sticky bottom bar matching Edit Carts save bar
+- **Edit Carts is destructive-by-design**: friction is the feature. No casual-mount affordances.
+- **Open Cartridge on public demo** = client-side `<input type="file">` upload to sandbox + TTL eviction (not server-side path browser, which leaks filesystem)
+- **WebGPU pivot architecture**: pure client-side build, transformers.js handles WebGPU/WASM fallback automatically (NO server-side build path; preserves privacy story)
+
+### Outstanding work surfaced today
+
+- **Saturday hardening pass** (~4h): streaming uploads, per-IP rate limiting, deep magic-byte/structural NPZ check, eject-sandbox button, full security punch-list. Pinned, deadline Sat afternoon.
+- **Step 2b's natural follow-up — Step 3** (user-auth + per-user ACL, ~10-20h): defer until site-wide login is built; until then, sidecar `owner` is metadata only.
+- **Cloud storage Phase 1+** (CartStorage Protocol, R2 backend): no immediate need; pinned for when cart marketplace work spins up.
+- **WebGPU Cart Builder V2** (Thu-Fri): five-block plan in [`tools/webgpu-smoketest/README.md`](../tools/webgpu-smoketest/README.md).
+- **Cart Builder build-and-download** ABANDONED in favor of pure client-side WebGPU per Wed-evening pivot decision.
+
+### Net effect on the product
+
+Tuesday morning: VPS was a single-user local app with a buggy partial-CRUD UI.
+
+Wednesday night: VPS is a publicly-deployed read-only demo, three-layer-secure cart-format-RWX architecture, full-parity Cart Builder UI, dedicated Edit Carts screen with confirmation dialogs, sandboxed upload-your-own-cart for evaluators, and 80% of the way to a 100%-in-browser private-by-architecture cart-build pipeline that ships Friday.
+
+The product crossed a threshold from "demonstrable in a meeting" to "shareable on Reddit/HN with a URL."
+
+---
+
 ## 2026-05-04 (afternoon → past midnight) — Substrate-claim crystallization + RAG+ port + split-cart parity
 
 A long working day that landed two product upgrades, four strategic CCs, the V1 / V1.2 product-versioning frame, the CRUD-as-own-screen architecture decision, and corrected a marketing claim ($12 → $28 droplet cost) across multiple docs. Plus engaged with a NodeMind competitive-landscape discovery via /r/Rag, ran BEIR-vs-physics empirical comparisons, and tracked Dennis's first Kaggle ARC-AGI-3 reconnaissance submission (which surfaced a Kaggle-scored-env network-isolation issue blocking the SDK).
