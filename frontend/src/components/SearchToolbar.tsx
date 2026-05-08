@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Database, ChevronDown, FolderOpen, Loader2, Zap, Upload } from 'lucide-react'
+import { ChevronDown, Database, FolderOpen, Loader2, Trash2, Upload, Zap } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { useCartBuilderStore } from '../store/cartBuilderStore'
 import type { SearchMode } from '../api/types'
@@ -34,6 +34,7 @@ export default function SearchToolbar() {
   const [pathInput, setPathInput] = useState('')
   const [pathLoading, setPathLoading] = useState(false)
   const [uploadLoading, setUploadLoading] = useState(false)
+  const [ejecting, setEjecting] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const modeRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -58,6 +59,34 @@ export default function SearchToolbar() {
 
   const mounted = status?.mounted_cartridge ?? null
   const mountedCart = mounted ? cartridges.find((c) => c.name === mounted) : null
+  const isSandboxed = !!status?.mounted_is_sandboxed
+  const sandboxPath = status?.mounted_path ?? null
+
+  const pushToast = useCartBuilderStore((s) => s.pushToast)
+
+  const handleEject = async () => {
+    if (!sandboxPath || ejecting) return
+    if (!confirm('Delete this uploaded cart from the sandbox now? Unmounts and erases the file immediately.')) {
+      return
+    }
+    setEjecting(true)
+    try {
+      // Unmount first — eject endpoint refuses if currently mounted.
+      if (mounted) {
+        await unmount()
+      }
+      const res = await api.ejectCartridge(sandboxPath)
+      if (res.success) {
+        pushToast('success', 'Cart ejected — file deleted from sandbox.', 4000)
+        fetchCartridges()
+        useAppStore.getState().fetchStatus()
+      }
+    } catch (err) {
+      pushToast('error', `Eject failed: ${err instanceof Error ? err.message : 'unknown'}`, 6000)
+    } finally {
+      setEjecting(false)
+    }
+  }
 
   const handleBrowse = async () => {
     setPathLoading(true)
@@ -206,7 +235,7 @@ export default function SearchToolbar() {
               onClick={() => fileInputRef.current?.click()}
               disabled={uploadLoading}
               className="w-full flex items-center gap-2 px-3 py-2.5 text-sm border-b border-slate-800 hover:bg-slate-800/50 disabled:opacity-50 transition-colors"
-              title="Upload a .cart.npz or .pkl from your machine. Sandboxed, read-only, evicted after 1 hour."
+              title="Upload a .cart.npz from your machine. Sandboxed, read-only, evicted after 1 hour."
             >
               {uploadLoading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
               <span className="font-medium">{uploadLoading ? 'Uploading…' : 'Upload Cartridge…'}</span>
@@ -223,7 +252,7 @@ export default function SearchToolbar() {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".npz,.pkl,.cart.npz"
+              accept=".npz,.cart.npz"
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0]
@@ -288,6 +317,21 @@ export default function SearchToolbar() {
           </div>
         )}
       </div>
+
+      {/* Eject button — only shown when the mounted cart is from the upload
+          sandbox. Privacy/control feature: lets users delete their uploaded
+          cart immediately instead of waiting for the 1h TTL. */}
+      {isSandboxed && sandboxPath && (
+        <button
+          onClick={handleEject}
+          disabled={ejecting}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs border border-rose-500/40 bg-rose-500/10 text-rose-200 hover:bg-rose-500/20 disabled:opacity-50 transition-colors"
+          title="Immediately delete this uploaded cart from the sandbox (otherwise auto-deletes after 1 hour)"
+        >
+          {ejecting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+          <span className="hidden md:inline">{ejecting ? 'Ejecting…' : 'Eject upload'}</span>
+        </button>
+      )}
 
       {/* Status pill — mounted cart pattern count */}
       {status?.mounted_cartridge && (

@@ -54,6 +54,19 @@ export async function uploadCartridge(file: File): Promise<UploadResponse> {
   return res.json()
 }
 
+export async function ejectCartridge(cartPath: string): Promise<{ success: boolean; ejected: string }> {
+  const res = await fetch(
+    `${BASE}/cartridges/eject?cart_path=${encodeURIComponent(cartPath)}`,
+    { method: 'DELETE' }
+  )
+  if (!res.ok) {
+    let detail = `${res.status}`
+    try { detail = (await res.json()).detail || detail } catch { /* keep status */ }
+    throw new Error(detail)
+  }
+  return res.json()
+}
+
 export async function mountCartridge(filename: string) {
   return fetchJSON<{ success: boolean; message: string; name: string; pattern_count: number }>(
     '/cartridges/mount',

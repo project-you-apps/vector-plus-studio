@@ -84,6 +84,12 @@ export interface StatusResponse {
   // Cart-format permissions sidecar (Step 2a). Present when the cart has a
   // .permissions.json next to it. default: "r" | "rw" | "rwx".
   cart_permissions?: CartPermissions | null
+  // True when the currently-mounted cart's file lives in the upload sandbox.
+  // UI surfaces an "Eject" button to immediately delete the uploaded file
+  // instead of waiting up to 1h for TTL eviction.
+  mounted_is_sandboxed?: boolean
+  // Absolute path of the mounted cart (used as eject target). Null when nothing mounted.
+  mounted_path?: string | null
 }
 
 export interface CartPermissions {

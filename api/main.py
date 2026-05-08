@@ -206,10 +206,27 @@ app.include_router(uploads_mod.router)
 
 @app.get("/api/status", response_model=StatusResponse)
 async def get_status():
+    # Detect whether the currently-mounted cart lives inside the upload
+    # sandbox — the UI uses this to expose an "Eject" button. Path-resolved
+    # relative_to() is the canonical zero-traversal check.
+    mounted_is_sandboxed = False
+    mounted_path = engine.mounted_path
+    if mounted_path:
+        try:
+            from pathlib import Path as _Path
+            from .uploads import SANDBOX_DIR as _SANDBOX
+            target = _Path(mounted_path).resolve()
+            target.relative_to(_SANDBOX.resolve())
+            mounted_is_sandboxed = True
+        except (ValueError, OSError):
+            pass
+
     return StatusResponse(
         engine_ready=engine.engine_ready,
         gpu_available=engine.gpu_available,
         mounted_cartridge=engine.mounted_name,
+        mounted_path=mounted_path,
+        mounted_is_sandboxed=mounted_is_sandboxed,
         pattern_count=len(engine.passages),
         physics_trained=engine.physics_trained,
         training_active=engine.training_active,

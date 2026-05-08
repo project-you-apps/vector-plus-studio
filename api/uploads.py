@@ -4,16 +4,24 @@ api/uploads.py — Public-demo upload endpoint for client-side cartridge files.
 Andy 2026-05-06: when the server is in read-only mode (public droplet demo),
 users can't open the server's filesystem via the native file picker, but they
 DO want to evaluate VPS against their own carts. Solution: client uploads
-a `.cart.npz` or `.pkl` to a sandboxed temp dir; backend forces a read-only
-permissions sidecar; user mounts via the existing /api/cartridges/mount path.
+a `.cart.npz` to a sandboxed temp dir; backend forces a read-only permissions
+sidecar; user mounts via the existing /api/cartridges/mount path.
 
 Sandboxing layers:
   • Per-file UUID prefix so concurrent uploads don't collide.
   • Filename sanitized — only alphanumeric / dash / dot / underscore in the
     user-visible portion, rest stripped.
   • Size cap (default 250MB; configurable via VPS_UPLOAD_MAX_MB env var).
-  • Magic-byte check on the first 4 bytes — NPZ must be PK zip, PKL must be
-    a pickle protocol marker. Naive renamed files are rejected.
+  • Magic-byte check on the first 4 bytes — NPZ must be PK zip. Naive
+    renamed files are rejected.
+  • Deep structural NPZ validation (Andy 2026-05-08): testzip() integrity
+    check + zip-slip defense (no `..`, no absolute paths, no backslashes
+    in entry names) + zip-bomb defense (per-entry compression ratio cap +
+    total uncompressed size cap) + entry-type allowlist (`.npy` only).
+  • `.pkl` uploads INTENTIONALLY DROPPED from the public demo. Legacy pkl
+    carts unpickle at mount time which is RCE-on-mount territory for
+    untrusted uploads. Private deploys can re-enable by adding `.pkl` to
+    ALLOWED_EXTS, but the public droplet keeps it off.
   • Forced `default: r` permissions sidecar — even if the cart's own sidecar
     inside the NPZ said `rw`, the public demo enforces read-only.
   • TTL cleanup: a background task runs every UPLOAD_CLEANUP_INTERVAL_SEC
@@ -27,11 +35,13 @@ still goes through the standard mount path (which doesn't gate on writes).
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import re
 import time
 import uuid
+import zipfile
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
@@ -51,11 +61,23 @@ MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 UPLOAD_TTL_SEC = int(os.environ.get("VPS_UPLOAD_TTL_SEC", "3600"))           # 1 hour
 UPLOAD_CLEANUP_INTERVAL_SEC = int(os.environ.get("VPS_UPLOAD_CLEANUP_SEC", "600"))  # 10 min
 
-ALLOWED_EXTS = (".cart.npz", ".npz", ".pkl")
+# Public-demo upload allowlist. .pkl is intentionally OFF here — pickle
+# deserialization at mount time is an RCE vector when content is untrusted.
+# Private deploys can re-enable by extending this tuple.
+ALLOWED_EXTS = (".cart.npz", ".npz")
 
 # Magic-byte signatures — first 4 bytes of a valid file.
 NPZ_MAGIC = b"PK\x03\x04"   # zip archive (NPZ is a zip)
-PKL_MAGICS = (b"\x80\x02", b"\x80\x03", b"\x80\x04", b"\x80\x05")  # pickle protocol 2-5
+
+# Deep NPZ validation tunables.
+# Per-entry compression ratio cap — anything above this is treated as a
+# zip-bomb attempt. 200x is generous for legitimate text content; numpy
+# arrays compress at 2-10x typically.
+NPZ_MAX_COMPRESSION_RATIO = 200
+# Total-uncompressed-size cap — refuse NPZs that expand to more than this.
+# Ratio'd against the upload size cap so a 250MB upload can't expand into
+# multi-GB on disk.
+NPZ_MAX_UNCOMPRESSED_BYTES = MAX_UPLOAD_BYTES * 8
 
 # Filename sanitization — keep alphanumerics, dot, dash, underscore. Anything
 # else (spaces, slashes, unicode, etc.) is replaced with `_`. This runs on the
@@ -73,8 +95,6 @@ def _has_valid_magic(data: bytes, ext: str) -> bool:
     """Validate first bytes match the declared extension."""
     if ext in (".cart.npz", ".npz"):
         return data.startswith(NPZ_MAGIC)
-    if ext == ".pkl":
-        return any(data.startswith(m) for m in PKL_MAGICS)
     return False
 
 
@@ -84,6 +104,91 @@ def _ext_for(filename: str) -> str | None:
         if fname_lower.endswith(ext):
             return ext
     return None
+
+
+def _validate_npz_structure(blob: bytes) -> None:
+    """Deep structural validation of an NPZ container.
+
+    Defends against:
+      • Corrupt zips (testzip catches CRC mismatches).
+      • Zip-slip (entry names with `..`, absolute paths, or backslashes —
+        could escape the extraction dir if anyone ever extracts the zip).
+      • Zip-bombs (per-entry compression ratio + total uncompressed size).
+      • Smuggled non-numpy content (entries that aren't `.npy`).
+
+    Raises HTTPException(400 or 413) on any violation. Caller should NOT
+    write the blob to disk if this raises.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(blob), "r") as zf:
+            bad = zf.testzip()
+            if bad is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Corrupt zip entry: {bad!r}",
+                )
+
+            total_uncompressed = 0
+            for info in zf.infolist():
+                name = info.filename
+
+                # zip-slip defense — reject anything that could escape an
+                # extraction root if the zip were ever extracted to disk.
+                if name.startswith("/") or name.startswith("\\"):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Absolute path in zip entry: {name!r}",
+                    )
+                if "\\" in name:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Backslash in zip entry: {name!r}",
+                    )
+                parts = [p for p in name.split("/") if p]
+                if any(p == ".." for p in parts):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Path traversal in zip entry: {name!r}",
+                    )
+
+                # entry-type allowlist — NPZ files should ONLY contain .npy
+                # entries (numpy.savez_compressed semantics). Anything else
+                # is suspicious — reject rather than try to whitelist edge
+                # cases (executable smuggling, web-shells, etc.).
+                if not name.lower().endswith(".npy"):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Unexpected entry type in NPZ: {name!r}. "
+                            f"Only .npy entries are allowed."
+                        ),
+                    )
+
+                # zip-bomb defense — per-entry ratio + running total.
+                if info.compress_size > 0:
+                    ratio = info.file_size / info.compress_size
+                    if ratio > NPZ_MAX_COMPRESSION_RATIO:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                f"Zip entry {name!r} compression ratio {ratio:.0f}x "
+                                f"exceeds cap of {NPZ_MAX_COMPRESSION_RATIO}x."
+                            ),
+                        )
+                total_uncompressed += info.file_size
+                if total_uncompressed > NPZ_MAX_UNCOMPRESSED_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"Total uncompressed size exceeds "
+                            f"{NPZ_MAX_UNCOMPRESSED_BYTES // (1024 * 1024)}MB cap."
+                        ),
+                    )
+    except zipfile.BadZipFile as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File is not a valid ZIP archive: {e}",
+        ) from e
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +260,75 @@ def stop_cleanup() -> None:
 router = APIRouter(prefix="/api/cartridges", tags=["uploads"])
 
 
+@router.delete("/eject")
+async def eject_cartridge(cart_path: str):
+    """Immediately delete a sandboxed upload + its permissions sidecar.
+
+    Privacy/control feature (Andy 2026-05-08): users who uploaded a sensitive
+    cart shouldn't have to wait up to 1h for TTL eviction. This endpoint
+    deletes the file on demand.
+
+    Safety:
+      • Only files inside SANDBOX_DIR can be ejected (path-resolution check).
+        Attempts on the canonical cartridges/ catalog or any other path 403.
+      • Refuses if the file is currently mounted — caller must unmount first
+        (avoids OS-specific mounted-file delete confusion).
+
+    Response: { success: true, ejected: <absolute path> }
+    """
+    target = Path(cart_path).resolve()
+    sandbox_resolved = SANDBOX_DIR.resolve()
+    try:
+        target.relative_to(sandbox_resolved)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=403,
+            detail="Eject is only allowed for sandboxed uploads.",
+        ) from e
+
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="File not found.")
+    if not target.is_file():
+        raise HTTPException(status_code=400, detail="Path is not a file.")
+
+    # Refuse if currently mounted — caller must unmount first.
+    # We import lazily to avoid a circular import with main.py.
+    try:
+        from .engine import engine  # type: ignore
+        mounted = getattr(engine, "mounted_path", None)
+        if mounted and Path(mounted).resolve() == target:
+            raise HTTPException(
+                status_code=409,
+                detail="Cart is currently mounted. Unmount it first, then eject.",
+            )
+    except ImportError:
+        # engine not importable in this context (tests etc.) — skip the check.
+        pass
+
+    # Compute the sidecar's predicted path. Mirrors the naming used in
+    # upload_cartridge() above. If the sidecar isn't where we expect, swallow
+    # the failure — the cart file delete is the primary operation.
+    base = target.name
+    for suffix in (".cart.npz", ".npz"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    perms_path = target.with_name(f"{base}.permissions.json")
+
+    try:
+        target.unlink()
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Eject failed: {e}") from e
+
+    if perms_path.exists():
+        try:
+            perms_path.unlink()
+        except OSError as e:
+            print(f"[uploads] eject: sidecar unlink failed {perms_path}: {e}")
+
+    return {"success": True, "ejected": str(target)}
+
+
 @router.post("/upload")
 async def upload_cartridge(file: UploadFile = File(...)):
     """Upload a cart file to the sandbox dir for temporary use.
@@ -200,8 +374,13 @@ async def upload_cartridge(file: UploadFile = File(...)):
     if not _has_valid_magic(head_bytes, ext):
         raise HTTPException(
             status_code=400,
-            detail=f"File magic bytes don't match extension {ext}. Expected NPZ (zip) or PKL.",
+            detail=f"File magic bytes don't match extension {ext}. Expected NPZ (zip).",
         )
+
+    # Deep structural validation — validates the full zip BEFORE writing to
+    # disk so we never persist a malformed/hostile cart even briefly.
+    blob = b"".join(chunks)
+    _validate_npz_structure(blob)
 
     # Write to sandbox under a unique prefix
     safe_name = _sanitize_filename(raw_name)
@@ -209,14 +388,13 @@ async def upload_cartridge(file: UploadFile = File(...)):
     target = SANDBOX_DIR / f"{upload_id}_{safe_name}"
     try:
         with open(target, "wb") as f:
-            for c in chunks:
-                f.write(c)
+            f.write(blob)
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Write failed: {e}") from e
 
     # Force a read-only permissions sidecar — even if the cart claims `rw`,
     # the demo refuses writes against this upload at mount.
-    perms_path = SANDBOX_DIR / f"{upload_id}_{safe_name.replace('.cart.npz', '').replace('.npz', '').replace('.pkl', '')}.permissions.json"
+    perms_path = SANDBOX_DIR / f"{upload_id}_{safe_name.replace('.cart.npz', '').replace('.npz', '')}.permissions.json"
     try:
         with open(perms_path, "w", encoding="utf-8") as f:
             json.dump({

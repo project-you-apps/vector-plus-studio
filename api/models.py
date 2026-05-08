@@ -93,6 +93,13 @@ class StatusResponse(BaseModel):
     read_only: bool = True
     read_only_mode: bool = False  # global server-side lock (VPS_READ_ONLY env var)
     cart_permissions: dict | None = None  # cart-format RWX sidecar (Step 2a)
+    # True when the currently-mounted cart's file lives inside the upload
+    # sandbox (cartridges/_session_uploads/). UI uses this to surface an
+    # "Eject" button that immediately purges the user's uploaded cart.
+    mounted_is_sandboxed: bool = False
+    # Absolute path of the mounted cart, or None. Frontend passes this back
+    # to /api/cartridges/eject to identify which sandbox file to delete.
+    mounted_path: str | None = None
 
 class DeletedPattern(BaseModel):
     idx: int
