@@ -13,6 +13,12 @@ import type { CartBuilderFile } from '../api/cartbuilder'
 // actually opens a metadata panel (which most won't on first visit).
 const MDEditor = lazy(() => import('@uiw/react-md-editor'))
 
+// BrowserCartBuilder lazy-loaded — pulls in transformers.js (~600KB gzip),
+// pdfjs, mammoth, xlsx, npyjs, jszip, and the cart-builder-v2 pipeline.
+// Users on the Search screen never pay this cost; only Cart Builder visitors
+// trigger the ~1.5MB additional download.
+const BrowserCartBuilder = lazy(() => import('./BrowserCartBuilder'))
+
 // Heuristic: dragenter event has actual files in dataTransfer.types.
 // Without this check, dragging text selections inside the page fires
 // the overlay too. We only want the OS-level file drag.
@@ -141,20 +147,33 @@ export default function CartBuilderScreen() {
           )}
         </div>
 
-        {/* Read-only-mode banner — Cart Builder is non-functional on the
-            public droplet (uploads, builds, load_cart, browse all 403).
-            Tell the user explicitly rather than letting them try and fail. */}
+        {/* Browser-side cart builder (Block 4 of WebGPU pivot, 2026-05-08).
+            Self-contained: parses files, embeds via transformers.js (WebGPU
+            with WASM fallback), packages an NPZ + manifest + permissions.
+            Works in BOTH read-only and writable modes — privacy pitch is
+            "your data never leaves your machine." Lazy-loaded so the
+            transformers.js bundle only ships when a user opens this screen. */}
+        <Suspense
+          fallback={
+            <div className="rounded-xl border border-slate-700 bg-slate-800/30 p-5 flex items-center gap-3 text-sm text-slate-400">
+              <Loader2 size={16} className="animate-spin text-purple-300" />
+              Loading browser-side cart builder…
+            </div>
+          }
+        >
+          <BrowserCartBuilder />
+        </Suspense>
+
+        {/* Read-only-mode banner — only shown when the server-side flow is
+            disabled. Browser-side builder above stays functional regardless. */}
         {readOnlyMode && (
-          <div className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 p-4 flex items-start gap-3">
-            <Lock size={16} className="text-cyan-400 flex-shrink-0 mt-0.5" />
-            <div className="text-sm">
-              <div className="text-cyan-200 font-medium mb-1">Cart Builder is read-only on this demo</div>
-              <div className="text-xs text-slate-400 leading-relaxed">
-                The public deploy refuses cart-creation writes — uploads, builds, and folder navigation are disabled.
-                To build your own carts, install Vector+ Studio locally
-                (<code className="font-mono text-slate-300">git clone …/vector-plus-studio &amp;&amp; uvicorn api.main:app --port 8000</code>).
-                You can still see the saved cart catalog below, and the Search screen lets you mount + query the public demo carts.
-              </div>
+          <div className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 p-3 flex items-start gap-2 text-xs">
+            <Lock size={14} className="text-cyan-400 flex-shrink-0 mt-0.5" />
+            <div className="text-slate-400 leading-relaxed">
+              <span className="text-cyan-200 font-medium">Server-side cart Builder is read-only on this demo.</span>{' '}
+              The browser-side builder above runs end-to-end in your browser — use it to package your own carts.
+              For full server-side workflow, install Vector+ Studio locally
+              (<code className="font-mono text-slate-300 text-[11px]">git clone …/vector-plus-studio &amp;&amp; uvicorn api.main:app --port 8000</code>).
             </div>
           </div>
         )}
