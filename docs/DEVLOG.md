@@ -1,5 +1,64 @@
 # Vector+ Studio Devlog
 
+## 2026-05-08 — WebGPU Cart Builder V2 Blocks 1-4 ship + hardening pass + eject-sandbox feature
+
+**One-day burst.** Started the morning checking session memory + Uber TODO (Blocks 1+2 were Friday's planned scope after the angel deck took yesterday). Ended the afternoon with the entire WebGPU Cart Builder V2 pipeline shipped through Block 4, hardening pass on the upload path, an eject-sandbox feature for privacy-control, and 12 npm vulnerabilities cleaned up. The day's pace surprised me — clean specs from the Wed-evening smoke tests + tight Python-reference parsers.py made each block roughly mechanical. Block 5 (parity test) needs a browser at the keyboard; deferred to Saturday.
+
+### Live demo URL
+
+**<https://project-you.app/vps/app/>** — unchanged, still serving the three curated carts. New BrowserCartBuilder lands in this codebase but isn't deployed to the droplet yet (lands as part of the V1 launch deploy mid/end-of-next-week, Portland Startup Week).
+
+### What shipped
+
+**WebGPU Cart Builder V2 (Blocks 1–4)** — pure client-side parse → chunk → embed → write → download:
+
+- **Block 1 (parsers + chunker, ~280 LOC):** `cart-builder-v2/types.ts`, `parsers/{pdf,docx,xlsx,text}.ts`, `parsers/index.ts` (registry-style dispatch with `registerParser()` extension hook for next-week JSON/mbox/HTML adapters), `chunker.ts`. Output shape mirrors `cart-builder/cart-builder/parsers.py` (300-word/50-overlap chunks, sections include `text`/`page`/`source`/optional `part`). Small deviation: CSV included in xlsx parser (free via SheetJS, common format).
+- **Block 2 (embedder, ~200 LOC):** `embedder/loader.ts` singleton with WebGPU→WASM auto-fallback + `getActiveBackend()` introspection; `embedder/embed.ts` batch mode (default 16/batch, configurable, progress callback) + `embedQuery()` convenience with `search_query:` prefix. Nomic v1.5 prefix convention baked in. Custom callable interface around transformers.js's `pipeline()` to dodge the union-type narrowing issue. Verified at 6th-decimal parity with Python reference per the Wed smoke test.
+- **Block 3 (writer, ~370 LOC):** `writer/{npy,hippocampus,manifest,permissions,npz}.ts`. Hippocampus packer matches `api/cartridge_io.py:HIPPO_FORMAT` exactly (offsets locked, perms_byte at 29). Manifest fingerprint matches `tools/bootstrap_claude_journal.py:compute_membot_fingerprint`. Critical late discovery: **npyjs supports `<U${number}>` unicode arrays**, so passages.npy is real NPY format (no JSON sidecar workaround needed) — browser-built carts mount on the existing membot server without server-side changes.
+- **Block 4 (pipeline + UI integration):** `cart-builder-v2/pipeline.ts` orchestrator with PipelineProgress streaming events; `components/BrowserCartBuilder.tsx` self-contained UI (drop zone + cart-name + queue + progress + download). Lazy-loaded into `CartBuilderScreen` so the transformers.js bundle only ships when a user opens that screen. Defensive caps in pipeline (50MB per file, 10K chunks per build) prevent browser OOM on hostile inputs.
+
+**Bundle impact:** lazy-load split dropped main bundle from **2.28MB → 480KB** (gzip 314KB → 142KB). Cart Builder visitors get the +1.8MB transformers.js chunk on first visit; Search-only users never pay that cost. ~23MB ONNX WASM binary loads only when the user actually runs the embedder (and only on browsers without WebGPU).
+
+**Hardening pass on upload path** (`api/uploads.py`):
+
+- **Deep structural NPZ validation** (`_validate_npz_structure`): testzip integrity check + zip-slip defense (no `..`, no absolute paths, no backslashes in entry names) + zip-bomb defense (per-entry compression-ratio cap 200x + total-uncompressed cap 8× upload size) + entry-type allowlist (`.npy` only). Validates in-memory before any disk write — malformed/hostile carts never persist even briefly.
+- **`.pkl` upload dropped from public-demo allowlist.** Closes the pickle-deserialize-RCE-on-mount vector. Frontend `SearchToolbar.tsx` accept attribute + tooltip updated to match. Private deploys can re-enable by extending `ALLOWED_EXTS`.
+- **`npm audit fix`** — 12 of 13 vulnerabilities fixed (vite, rollup, postcss, picomatch, minimatch, flatted, brace-expansion, ajv). One remaining: `xlsx` (SheetJS) has prototype-pollution + ReDoS with no available fix — npm package abandoned upstream. Browser-side impact only (slow tab on hostile xlsx upload, not server-side). Launch-acceptable; follow-up to evaluate `@e965/xlsx` community fork.
+
+**Eject-sandbox feature** (privacy/control improvement):
+
+- Server: `DELETE /api/cartridges/eject?cart_path=…` endpoint with sandbox-only path validation (relative_to-resolved check), refuses-if-mounted (caller unmounts first), deletes file + `.permissions.json` sidecar.
+- API surface: `StatusResponse` extended with `mounted_is_sandboxed: bool` + `mounted_path: str | None` so the UI can detect when the current mount is a user upload.
+- Frontend: `Trash2`-icon Eject button in `SearchToolbar` next to the cart picker, only visible when `status.mounted_is_sandboxed === true`. Confirms, unmounts, ejects, refreshes status. Privacy story upgrade — users no longer wait up to 1h for TTL eviction.
+
+**Other audits:**
+
+- VPS API audit — no `.env` files in repo; CORS locked to localhost (OK if same-origin via nginx); all write routes call `_enforce_writable()`; no real credential matches in repo grep.
+- Console.log audit — all 30+ `console.error` calls are legitimate error-path logging; no chatty `console.log` clutter.
+- Security sweep on `membot`/`membraine`/`nudges` deferred (separate repos, not in this tree — needs `gh` CLI or repo clones).
+- nginx per-IP rate limiting deferred (config lives droplet-only, no committed copy in repo) — needs droplet ssh.
+
+### Strategic context
+
+Andy's stated launch target shifted today: **Portland Startup Week, middle/end of next week** (Mon-Wed window). He'll be meeting enterprise prospects at PSW and wants a finished product to demo. Engineering scope additions named for the launch: Obsidian import/export (Sunday) and 9 EnterpriseRAG-Bench source-type adapters (Slack/Gmail/Linear/Drive/HubSpot/Fireflies/GitHub/Jira/Confluence — Sunday/Monday). Droplet capacity bump from $28/mo is cost-blocked (family-finance negotiation, finished product is part of winning that conversation). Cost-of-bump is one of the few acceptable launch-delay triggers.
+
+### What's left for V1 launch
+
+Saturday: Block 4+5 completion (parity test against `attention-is-all-you-need.cart.npz` reference). Sunday/Monday: marketing artifacts (tagline, description, screenshots, demo video, Reddit drafts, ProductHunt page, HN Show-HN draft), operational readiness (privacy/terms, analytics, error monitoring, Discord/contact channel, traffic runbook), documentation (README, quickstart, FAQ, license). Mon-Tue: OAuth (Supabase Auth + Google/GitHub/Apple) as part of finishing VPS — same auth landing unblocks Membot / Membox / Heartbeat / Pattern 0 v2 Ownership Block / Cart Marketplace identity.
+
+### Memory hygiene (today's filings)
+
+Three new feedback memories in `memory/`:
+
+- `feedback_powershell_no_approval.md` — routine PowerShell/Bash commands (typecheck, dev server, builds) just run, no approval gate. Same trust level as memory autonomy. Project-level `.claude/settings.local.json` updated with `"PowerShell(*)"` allow rule via the `update-config` skill.
+- `feedback_systems_override_runaway_acceptable.md` — Andy 2026-05-08: don't default to "prevent runaway" framing for autonomous Looper/cron design. Runaway IS the goal. Brake (1985-vintage "Systems Override - User Level") is rarely-fired emergency stop, not routine governor.
+
+One project memory updated: `project_angel_deck_in_flight_2026-05-07.md` retired → `project_angel_deck_shipped_2026-05-07.md`.
+
+One CC filed: `CC_enterprise-rag-bench_2026-05.md` — 500K-doc realistic enterprise RAG benchmark from Onyx, three uses (500K cart benchmark + 9 ingestion adapters + marketplace flagship cart), plan post-VPS-ship.
+
+---
+
 ## 2026-05-05 → 2026-05-06 — Cart Builder full-parity port + Edit Carts CRUD screen + three-layer RWX + public droplet deploy + WebGPU pivot smoke-tested
 
 **Two-day burst.** 18 commits, 5 new CCs, 2 feedback memories, public demo live, the entire RWX security stack designed and shipped, Cart Builder ported in full, Edit Carts (CRUD) screen built from scratch, and the WebGPU pivot for V2 Cart Builder de-risked via three smoke tests on Wed evening. The kind of stretch where the architecture you've been talking about for weeks becomes the architecture in production. Walked into Tuesday night thinking "Cart Builder Phase 1 backend port"; walked out Wednesday at 10pm with a public-facing demo, a security-sound multi-layer permissions model, and the foundations for a private-by-architecture in-browser cart-build pipeline.
