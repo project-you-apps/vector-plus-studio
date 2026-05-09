@@ -106,8 +106,13 @@ def _ext_for(filename: str) -> str | None:
     return None
 
 
-def _validate_npz_structure(blob: bytes) -> None:
+def _validate_npz_structure(source) -> None:
     """Deep structural validation of an NPZ container.
+
+    `source` accepts:
+      • bytes — validates an in-memory blob (legacy callers)
+      • Path / str — validates a file on disk via streaming reads (preferred;
+        keeps memory footprint low when validating large uploads)
 
     Defends against:
       • Corrupt zips (testzip catches CRC mismatches).
@@ -116,11 +121,12 @@ def _validate_npz_structure(blob: bytes) -> None:
       • Zip-bombs (per-entry compression ratio + total uncompressed size).
       • Smuggled non-numpy content (entries that aren't `.npy`).
 
-    Raises HTTPException(400 or 413) on any violation. Caller should NOT
-    write the blob to disk if this raises.
+    Raises HTTPException(400 or 413) on any violation. Caller is responsible
+    for cleaning up any disk artifact on failure.
     """
+    zip_target = io.BytesIO(source) if isinstance(source, (bytes, bytearray)) else source
     try:
-        with zipfile.ZipFile(io.BytesIO(blob), "r") as zf:
+        with zipfile.ZipFile(zip_target, "r") as zf:
             bad = zf.testzip()
             if bad is not None:
                 raise HTTPException(
@@ -338,6 +344,14 @@ async def upload_cartridge(file: UploadFile = File(...)):
     catalog. The forced read-only permissions sidecar ensures the cart can't
     be written to once mounted, regardless of any sidecar inside the cart.
 
+    Streaming write architecture (Andy 2026-05-09): reads in 64KB chunks
+    directly to disk rather than buffering the full upload in memory. Memory
+    footprint per concurrent upload drops from MAX_UPLOAD_MB (250 MB) to
+    64 KB, so the droplet survives N concurrent demo-day uploads without
+    OOM. Deep structural validation runs on the disk file via zipfile's
+    streaming reads (also low-memory). Failed validation = unlink + raise
+    so we never leave a malformed cart in the sandbox after a rejection.
+
     Response shape (success):
       { success: true, message: str, cart_path: str (absolute), size_mb: float,
         ttl_sec: int }
@@ -350,47 +364,61 @@ async def upload_cartridge(file: UploadFile = File(...)):
             detail=f"Unsupported file type. Allowed: {', '.join(ALLOWED_EXTS)}",
         )
 
-    # Read with size cap. Reject early if too large.
-    chunks: list[bytes] = []
+    # Pre-allocate target path so we can stream-write directly.
+    safe_name = _sanitize_filename(raw_name)
+    upload_id = uuid.uuid4().hex[:12]
+    target = SANDBOX_DIR / f"{upload_id}_{safe_name}"
+
+    # Stream to disk in 64 KB chunks. Track size + grab the magic-byte head
+    # for the format check we'll do after streaming completes.
     total = 0
     head_bytes: bytes | None = None
-    while True:
-        chunk = await file.read(64 * 1024)
-        if not chunk:
-            break
-        if head_bytes is None:
-            head_bytes = chunk[:8]
-        chunks.append(chunk)
-        total += len(chunk)
-        if total > MAX_UPLOAD_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail=f"Upload too large. Max {MAX_UPLOAD_MB}MB.",
-            )
+    cap_exceeded = False
+    write_error: str | None = None
+    try:
+        with open(target, "wb") as f:
+            while True:
+                chunk = await file.read(64 * 1024)
+                if not chunk:
+                    break
+                if head_bytes is None:
+                    head_bytes = chunk[:8]
+                f.write(chunk)
+                total += len(chunk)
+                if total > MAX_UPLOAD_BYTES:
+                    cap_exceeded = True
+                    break
+    except OSError as e:
+        write_error = str(e)
 
+    if cap_exceeded:
+        target.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=413,
+            detail=f"Upload too large. Max {MAX_UPLOAD_MB}MB.",
+        )
+    if write_error:
+        target.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"Write failed: {write_error}")
     if total == 0 or head_bytes is None:
+        target.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="Empty file")
 
     if not _has_valid_magic(head_bytes, ext):
+        target.unlink(missing_ok=True)
         raise HTTPException(
             status_code=400,
             detail=f"File magic bytes don't match extension {ext}. Expected NPZ (zip).",
         )
 
-    # Deep structural validation — validates the full zip BEFORE writing to
-    # disk so we never persist a malformed/hostile cart even briefly.
-    blob = b"".join(chunks)
-    _validate_npz_structure(blob)
-
-    # Write to sandbox under a unique prefix
-    safe_name = _sanitize_filename(raw_name)
-    upload_id = uuid.uuid4().hex[:12]
-    target = SANDBOX_DIR / f"{upload_id}_{safe_name}"
+    # Deep structural validation — streams from disk via zipfile (low
+    # memory). Unlink on failure so a malformed cart never persists in the
+    # sandbox after a rejection.
     try:
-        with open(target, "wb") as f:
-            f.write(blob)
-    except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Write failed: {e}") from e
+        _validate_npz_structure(target)
+    except HTTPException:
+        target.unlink(missing_ok=True)
+        raise
 
     # Force a read-only permissions sidecar — even if the cart claims `rw`,
     # the demo refuses writes against this upload at mount.
