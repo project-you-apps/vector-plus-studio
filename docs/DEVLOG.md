@@ -1,5 +1,42 @@
 # Vector+ Studio Devlog
 
+## 2026-05-09 — Block 5 parity test PASSED + Saturday autonomous-crank queue
+
+**Threshold crossed.** Andy manually validated the WebGPU pivot end-to-end this morning (~9:30am):
+
+1. Built a cart in `BrowserCartBuilder` using his own `LatticeRunner-VPS-Litepaper-2026-04-29-Final Draft.pdf`
+2. Downloaded the resulting cart bundle from the browser
+3. Mounted it from `Downloads/` into VPS running on localhost:5173
+4. Ran searches in **Hamming Blend** mode → worked
+5. Ran searches in **Fast** mode → worked
+
+The unicode-NPY (`<U<n>`) passages.npy bet from Friday held. Browser-built carts mount on the existing membot server with **zero server-side changes needed**. The whole WebGPU Cart Builder V2 pipeline (parsers → chunker → embedder → writer → mount → search) is functionally validated.
+
+Andy's calibration shift, verbatim: *"we've crossed the threshold from getting a demo working into 'Holy crap this could be a viable consumer product.'"* The bar moves up. Quality matters more than speed from here.
+
+### Two issues surfaced during the parity test
+
+**1. Light-mode color contrast.** The WebGPU/WASM badges + various accent text in light mode are too pale (e.g., `text-emerald-300` against light backgrounds). Andy: *"all the Light Green text in Light Mode needs to be Dark Green. In fact, I would darken all the light colored text on Light Mode screens."* Pre-launch must-fix; doing the audit now.
+
+**2. Chunking discontinuity in passage navigation.** Clicking Next in a passage modal walks the chunk array — consecutive chunks repeat ~50 words at boundaries (the chunker's overlap window), creating a "stitched-together" feel rather than continuous reading. Andy proposed a clean display-layer fix: detect the overlap on Next-transition and **gray out the redundant prefix**, leaving the new content bright. Pure display-layer fix; zero chunker or cart-format changes. Cheaper than the sentence-aware-chunker / source-text-preservation alternatives I proposed, AND it's purely additive — survives any future chunker work. Filing CC + shipping fix today.
+
+### Saturday autonomous queue (Andy out for errands; will QA Cart Builder tonight)
+
+In priority order:
+
+1. Color audit + per-element `light:text-X-700` variants (~30-60 min)
+2. Chunker overlap-graying display fix in passage navigation component (~1-2h)
+3. Streaming uploads refactor in `api/uploads.py` (~1h) — currently buffers full 250MB upload into memory before disk-write; refactor to streaming-write with size accounting
+4. **PATTERN-ANATOMY doc consolidation** — Andy flagged this is bigger than yesterday's `§5 Pattern 0` plan: multiple Pattern 0 docs scattered (`docs/PATTERN-ANATOMY.md`, `docs/RFC/pattern-0-v2-spec.md` dated March 24, likely others). Andy's suggested approach: search session memory for "Pattern 0" rather than walking directories. Then merge + strikethrough-or-supersede.
+5. Pre-scope brain-tissue dataset for Mon's histopathology sidequest (OASIS / TCGA-GBM / Allen Brain Atlas survey for the Larry-leg requirement)
+6. Code-review pass on Friday's BrowserCartBuilder + pipeline.ts + writer/
+
+### Pre-compaction handoff filed
+
+Memory at `memory/project_saturday_launch_prep_in_flight_2026-05-09.md` so post-compaction Claude doesn't re-derive 2 days of context.
+
+---
+
 ## 2026-05-08 — WebGPU Cart Builder V2 Blocks 1-4 ship + hardening pass + eject-sandbox feature
 
 **One-day burst.** Started the morning checking session memory + Uber TODO (Blocks 1+2 were Friday's planned scope after the angel deck took yesterday). Ended the afternoon with the entire WebGPU Cart Builder V2 pipeline shipped through Block 4, hardening pass on the upload path, an eject-sandbox feature for privacy-control, and 12 npm vulnerabilities cleaned up. The day's pace surprised me — clean specs from the Wed-evening smoke tests + tight Python-reference parsers.py made each block roughly mechanical. Block 5 (parity test) needs a browser at the keyboard; deferred to Saturday.
