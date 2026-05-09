@@ -1,8 +1,33 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight, X, Loader2, FolderOpen } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useAppStore } from '../store/appStore'
+
+// Chunker overlap detection (Andy 2026-05-09 proposal). The browser-side
+// chunker produces 300-word chunks with 50-word overlap — consecutive chunks
+// share their boundary text. When user clicks Next/Prev to walk through
+// search results in source order, the overlap creates a "stitched-together"
+// feel: ~50 words repeat at every chunk boundary.
+//
+// Display-layer fix: detect the longest common suffix-of-prev that's
+// prefix-of-current (or vice versa for Prev navigation), gray it out, and
+// add a visual divider so the user understands they've already read it.
+// Pure UX-layer fix; zero chunker / cart-format changes.
+//
+// Edge cases handled cleanly: section-boundary chunks (different markdown
+// section / different file) have no overlap → algorithm returns 0 → no
+// graying. Random-access from search results clears the prevText state so
+// the first view is always full content, no false-positive graying.
+function findOverlap(suffixOf: string, prefixOf: string, maxChars = 600): number {
+  const cap = Math.min(maxChars, suffixOf.length, prefixOf.length)
+  for (let len = cap; len >= 5; len--) {
+    if (suffixOf.slice(-len) === prefixOf.slice(0, len)) {
+      return len
+    }
+  }
+  return 0
+}
 
 export default function PassageModal() {
   const modalOpen = useAppStore((s) => s.modalOpen)
@@ -16,16 +41,74 @@ export default function PassageModal() {
   const hasPrev = passage?.prev_idx != null
   const hasNext = passage?.next_idx != null
 
-  // Close on Escape key
+  // Track the previously-displayed passage's text + the navigation direction
+  // so the render pass can detect chunker overlap and gray it out. Reset on
+  // modal close (so reopening from a search result is a clean view).
+  const [prevTextForOverlap, setPrevTextForOverlap] = useState<string | null>(null)
+  const [navDirection, setNavDirection] = useState<'next' | 'prev' | null>(null)
+
+  useEffect(() => {
+    if (!modalOpen) {
+      setPrevTextForOverlap(null)
+      setNavDirection(null)
+    }
+  }, [modalOpen])
+
+  const handleNavNext = () => {
+    if (!hasNext || loading || !passage) return
+    setPrevTextForOverlap(passage.full_text)
+    setNavDirection('next')
+    navigateModal(passage.next_idx!)
+  }
+
+  const handleNavPrev = () => {
+    if (!hasPrev || loading || !passage) return
+    setPrevTextForOverlap(passage.full_text)
+    setNavDirection('prev')
+    navigateModal(passage.prev_idx!)
+  }
+
+  // Compute the [grayText, brightText] split based on detected overlap.
+  // When no overlap detected (different sections, different files, or first
+  // open from search result), grayText is empty and brightText is the full
+  // passage — i.e., default render.
+  const { grayText, brightText, overlapPosition } = useMemo(() => {
+    const fullText = passage?.full_text ?? ''
+    if (!prevTextForOverlap || !navDirection || !fullText) {
+      return { grayText: '', brightText: fullText, overlapPosition: null as 'prefix' | 'suffix' | null }
+    }
+    if (navDirection === 'next') {
+      // prev's suffix should be current's prefix (the chunker's overlap window)
+      const len = findOverlap(prevTextForOverlap, fullText)
+      if (len === 0) return { grayText: '', brightText: fullText, overlapPosition: null }
+      return {
+        grayText: fullText.slice(0, len),
+        brightText: fullText.slice(len),
+        overlapPosition: 'prefix' as const,
+      }
+    } else {
+      // 'prev' direction: current's suffix should be prev's prefix
+      const len = findOverlap(fullText, prevTextForOverlap)
+      if (len === 0) return { grayText: '', brightText: fullText, overlapPosition: null }
+      return {
+        grayText: fullText.slice(-len),
+        brightText: fullText.slice(0, -len),
+        overlapPosition: 'suffix' as const,
+      }
+    }
+  }, [prevTextForOverlap, navDirection, passage?.full_text])
+
+  // Close on Escape key + arrow-key navigation (with overlap-tracking handlers)
   useEffect(() => {
     if (!modalOpen) return
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') closeModal()
-      if (e.key === 'ArrowLeft' && hasPrev) navigateModal(passage!.prev_idx!)
-      if (e.key === 'ArrowRight' && hasNext) navigateModal(passage!.next_idx!)
+      if (e.key === 'ArrowLeft') handleNavPrev()
+      if (e.key === 'ArrowRight') handleNavNext()
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modalOpen, hasPrev, hasNext, passage, closeModal, navigateModal])
 
   if (!modalOpen || !passage) return null
@@ -64,6 +147,29 @@ export default function PassageModal() {
             </div>
           ) : passage.full_text ? (
             <div className="text-sm text-slate-300 leading-relaxed space-y-3">
+              {/* Overlap-graying (Andy 2026-05-09): when the user navigated
+                  via Next from the previous chunk, the first ~50 words of
+                  this chunk are usually the same as the last ~50 words of
+                  the previous chunk (chunker's overlap window). Gray them
+                  out + add a visual divider so the user sees clearly that
+                  it's continuation, not redundancy. */}
+              {overlapPosition === 'prefix' && grayText && (
+                <>
+                  <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-slate-500 font-mono">
+                    <span className="flex-1 h-px bg-slate-700/40"></span>
+                    continued from previous
+                    <span className="flex-1 h-px bg-slate-700/40"></span>
+                  </div>
+                  <div className="text-slate-500 opacity-70 italic whitespace-pre-wrap text-xs leading-relaxed">
+                    {grayText}
+                  </div>
+                  <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-slate-500 font-mono">
+                    <span className="flex-1 h-px bg-slate-700/40"></span>
+                    new content below
+                    <span className="flex-1 h-px bg-slate-700/40"></span>
+                  </div>
+                </>
+              )}
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
@@ -109,8 +215,23 @@ export default function PassageModal() {
                   em: ({ children }) => <em className="italic text-slate-200">{children}</em>,
                 }}
               >
-                {passage.full_text}
+                {brightText}
               </ReactMarkdown>
+              {/* Overlap-graying suffix variant — when user navigated via
+                  Prev, gray out the overlap that was the *prefix* of the
+                  chunk we just left. Symmetric treatment to the prefix case. */}
+              {overlapPosition === 'suffix' && grayText && (
+                <>
+                  <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-slate-500 font-mono">
+                    <span className="flex-1 h-px bg-slate-700/40"></span>
+                    continues into next
+                    <span className="flex-1 h-px bg-slate-700/40"></span>
+                  </div>
+                  <div className="text-slate-500 opacity-70 italic whitespace-pre-wrap text-xs leading-relaxed">
+                    {grayText}
+                  </div>
+                </>
+              )}
             </div>
           ) : (
             <div className="text-sm text-slate-500 italic">[No text available]</div>
@@ -151,7 +272,7 @@ export default function PassageModal() {
         {/* Footer with navigation */}
         <div className="flex items-center justify-between px-6 py-4 border-t border-slate-700/40">
           <button
-            onClick={() => hasPrev && navigateModal(passage.prev_idx!)}
+            onClick={handleNavPrev}
             disabled={!hasPrev || loading}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
               hasPrev && !loading
@@ -168,7 +289,7 @@ export default function PassageModal() {
           </span>
 
           <button
-            onClick={() => hasNext && navigateModal(passage.next_idx!)}
+            onClick={handleNavNext}
             disabled={!hasNext || loading}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
               hasNext && !loading
