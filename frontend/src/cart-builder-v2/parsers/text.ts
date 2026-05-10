@@ -13,6 +13,26 @@ export const textParser: Parser = {
   },
 }
 
+// Clean Notion export filenames. Notion appends a 32-char hex hash to
+// every page filename and URL-encodes spaces — so a page titled
+// "Project You" exports as "Project%20You%2018a37b25fcb44a6abc1234567890abcd.md".
+// We URL-decode and strip the hash suffix from each path component so
+// the `source` field reads cleanly. Heuristic: match a space + 16+ hex
+// chars before `.md` (or at directory boundary). Dates like "2026-05-09"
+// don't match (too short). Normal markdown filenames pass through unchanged.
+function normalizeNotionPath(path: string): string {
+  let decoded = path
+  try {
+    decoded = decodeURIComponent(path)
+  } catch {
+    // malformed URL encoding — fall through with the original
+  }
+  return decoded
+    .split('/')
+    .map((part) => part.replace(/\s+[a-f0-9]{16,}(\.md)?$/i, '$1'))
+    .join('/')
+}
+
 // Convert YAML frontmatter to a readable single-line summary.
 // Obsidian (and Jekyll/Hugo/Astro) markdown files often start with a
 // `---\n...\n---` YAML block. Without conversion the raw YAML lands at
@@ -83,7 +103,10 @@ export const markdownParser: Parser = {
     // Prefer webkitRelativePath when available (set by directory-drop) so
     // `source` carries the vault folder structure, e.g. "People/Galileo.md"
     // instead of just "Galileo.md". Falls back to file.name for normal drops.
-    const sourcePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+    // Also normalize Notion export filenames (URL-decode + strip 32-char hash
+    // suffix) so Notion-source carts read cleanly.
+    const rawPath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+    const sourcePath = normalizeNotionPath(rawPath)
 
     const sections: Section[] = []
     rawSections.forEach((section, i) => {
