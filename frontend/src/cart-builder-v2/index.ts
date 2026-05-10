@@ -76,6 +76,7 @@ export type {
 } from './pipeline'
 export {
   buildCartFromFiles,
+  buildCartFromPassages,
   DEFAULT_MAX_CHUNKS_PER_BUILD,
   DEFAULT_MAX_FILE_SIZE_BYTES,
 } from './pipeline'

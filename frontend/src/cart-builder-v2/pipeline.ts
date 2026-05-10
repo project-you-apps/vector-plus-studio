@@ -226,3 +226,125 @@ export async function buildCartFromFiles(
     throw err
   }
 }
+
+/**
+ * Build a cart from a list of typed passages — no file parsing involved.
+ *
+ * Used by the Edit Carts "New Cart" mode, where the user composes passages
+ * directly in a text box instead of importing documents. Each passage is
+ * pre-formed at chunk granularity, but we still run them through the
+ * chunker so any oversized paste (>300 words) gets split rather than
+ * landing as one giant chunk that retrieval can't grip.
+ *
+ * Same downstream stages as buildCartFromFiles — chunker, embedder,
+ * writer. Skips parsing entirely. Resulting BuiltCart is interchangeable.
+ */
+export async function buildCartFromPassages(
+  passages: string[],
+  options: PipelineOptions,
+): Promise<PipelineResult> {
+  const onProgress = options.onProgress ?? (() => {})
+
+  const cleaned = passages.map((p) => p.trim()).filter((p) => p.length > 0)
+  if (cleaned.length === 0) {
+    const err = new Error('No passages provided to pipeline')
+    onProgress({ stage: 'error', errorMessage: err.message })
+    throw err
+  }
+
+  const maxChunks = options.maxChunks ?? DEFAULT_MAX_CHUNKS_PER_BUILD
+
+  try {
+    // Wrap typed passages as Sections so the chunker + writer can consume
+    // them like any other source. `source` carries provenance back to the
+    // typed-in origin; `page` is the 1-indexed passage number.
+    const sections: Section[] = cleaned.map((text, i) => ({
+      text,
+      page: i + 1,
+      source: `typed-passage-${i + 1}`,
+    }))
+
+    onProgress({
+      stage: 'parsing',
+      filesParsed: 0,
+      filesTotal: 0,
+      sectionsTotal: sections.length,
+      message: `Composing cart from ${sections.length} typed passage${sections.length === 1 ? '' : 's'}…`,
+    })
+
+    // ── Stage 2: chunk ─────────────────────────────────────────────────
+    onProgress({
+      stage: 'chunking',
+      sectionsTotal: sections.length,
+      message: 'Splitting oversized passages…',
+    })
+    const chunks = chunkSections(sections, options.chunkOptions)
+
+    if (chunks.length > maxChunks) {
+      throw new Error(
+        `Build would produce ${chunks.length.toLocaleString()} chunks, ` +
+        `exceeds ${maxChunks.toLocaleString()}-chunk cap. ` +
+        `Trim some passages or raise maxChunks.`,
+      )
+    }
+
+    // ── Stage 3: embed ─────────────────────────────────────────────────
+    onProgress({
+      stage: 'embedding',
+      embeddingsCompleted: 0,
+      embeddingsTotal: chunks.length,
+      message: `Loading embedding model (~80MB on first run)…`,
+    })
+
+    const texts = chunks.map((c) => c.text)
+    const embedResult = await embedTexts(texts, {
+      ...options.embedOptions,
+      onProgress: (modelProgress) => {
+        onProgress({
+          stage: 'embedding',
+          embeddingsCompleted: 0,
+          embeddingsTotal: chunks.length,
+          modelStatus: modelProgress.status,
+          modelDownloadProgress: modelProgress.progress,
+          message: modelProgress.file
+            ? `Downloading ${modelProgress.file}…`
+            : `Loading model (${modelProgress.status})…`,
+        })
+      },
+      onBatch: (completed, total) => {
+        onProgress({
+          stage: 'embedding',
+          embeddingsCompleted: completed,
+          embeddingsTotal: total,
+          message: `Embedding passages… ${completed}/${total}`,
+        })
+      },
+    })
+
+    // ── Stage 4: write ─────────────────────────────────────────────────
+    onProgress({
+      stage: 'writing',
+      message: 'Building cart bundle…',
+    })
+    const cart = await buildCart(embedResult.embeddings, chunks, {
+      cartName: options.cartName,
+      ...options.buildOptions,
+    })
+
+    onProgress({
+      stage: 'done',
+      message: `Built ${cart.cartFilename}: ${chunks.length} chunks, ${embedResult.dim} dims, backend ${embedResult.backend}.`,
+    })
+
+    return {
+      cart,
+      fileCount: 0,
+      sectionCount: sections.length,
+      chunkCount: chunks.length,
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    onProgress({ stage: 'error', errorMessage: message, message })
+    throw err
+  }
+}

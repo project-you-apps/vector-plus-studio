@@ -1,11 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Pencil, Plus, Save, Trash2, RotateCcw, Lock, Unlock, FilePlus2,
   FolderOpen, Database, AlertCircle, CheckCircle2, Loader2, Info,
+  Hammer, ChevronRight, X,
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import CartBrowser from './CartBrowser'
 import ConfirmDialog, { type ConfirmState } from './ConfirmDialog'
+import {
+  buildCartFromPassages,
+  downloadBuiltCart,
+  type BuiltCart,
+  type PipelineProgress,
+} from '../cart-builder-v2'
 
 // CRUDScreen — first mockup for Andy to react to.
 //
@@ -197,15 +204,11 @@ export default function CRUDScreen() {
     log('restore', `Restored pattern #${idx}`, true)
   }
 
-  // ── New cart ──
-  const handleCreateNewCart = async () => {
-    // TODO Andy: backend route doesn't exist yet. Options:
-    //   (a) New /api/cartridges/new endpoint that creates an empty cart on disk
-    //   (b) Reuse /api/forge with an empty file list (would need backend change)
-    //   (c) Defer — start by mounting an existing cart, save-as later
-    // For mockup: just show what the flow looks like.
-    log('create', `(stub) Would create empty cart "${newCartName}" — backend route TBD`, false)
-  }
+  // New Cart is composed entirely in the browser via the cart-builder-v2
+  // pipeline (parse skipped, chunker → embedder → writer). No backend route
+  // needed for the build itself; user saves the resulting .cart.npz via the
+  // File System Access API (or Downloads fallback) and mounts it from the
+  // Search screen. See NewCartPanel below.
 
   return (
     <main className="flex-1 flex flex-col p-6 overflow-y-auto">
@@ -377,40 +380,11 @@ export default function CRUDScreen() {
 
         {/* New-cart mode body */}
         {mode === 'new' && (
-          <div className="rounded-lg border border-slate-700 bg-slate-800/30 p-6 space-y-4">
-            <h2 className="text-sm font-medium text-slate-200 flex items-center gap-2">
-              <FilePlus2 size={16} className="text-purple-400" />
-              New Cart
-            </h2>
-            <p className="text-xs text-slate-500 leading-relaxed">
-              Start with an empty cart and Add passages from scratch. For document-based ingestion,
-              use Cart Builder instead.
-            </p>
-            <div className="flex gap-2">
-              <input
-                className="flex-1 rounded-lg bg-slate-950/60 border border-slate-800 px-3 py-2 text-sm text-slate-200 font-mono focus:outline-none focus:border-purple-500/60"
-                placeholder="cart-name (alphanumeric, dashes, underscores)"
-                value={newCartName}
-                onChange={(e) => setNewCartName(e.target.value)}
-              />
-              <button
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  newCartName
-                    ? 'bg-purple-500/20 border border-purple-500/40 text-purple-300 hover:bg-purple-500/30'
-                    : 'bg-slate-800/50 border border-slate-700 text-slate-600 cursor-not-allowed'
-                }`}
-                disabled={!newCartName}
-                onClick={handleCreateNewCart}
-              >
-                Create empty cart
-              </button>
-            </div>
-            <div className="text-[10px] text-amber-400/80 italic flex items-start gap-1">
-              <Info size={11} className="mt-0.5 shrink-0" />
-              Backend route TBD — see TODO in component. For now, mount an existing cart and use
-              "Open Cart" mode.
-            </div>
-          </div>
+          <NewCartPanel
+            cartName={newCartName}
+            setCartName={setNewCartName}
+            log={log}
+          />
         )}
 
         {/* Cart browser — same component embedded in Cart Builder. From Edit
@@ -621,6 +595,348 @@ function ActivityLog({ entries }: { entries: ActivityEntry[] }) {
             <span className="flex-1 truncate text-slate-400">{e.detail}</span>
           </div>
         ))}
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NewCartPanel — compose a cart by typing passages directly.
+//
+// Routes the typed passages through the cart-builder-v2 pipeline (skip parse,
+// run chunker → embedder → writer). The output BuiltCart is saved via the
+// File System Access API (or Downloads fallback). After save the user mounts
+// the cart from Search — auto-mount lands with v1.2 alongside CLOUD mode and
+// per-user data stores.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface DraftPassage {
+  id: string
+  text: string
+}
+
+function NewCartPanel({
+  cartName,
+  setCartName,
+  log,
+}: {
+  cartName: string
+  setCartName: (v: string) => void
+  log: (kind: OpKind, detail: string, ok: boolean) => void
+}) {
+  const [passages, setPassages] = useState<DraftPassage[]>([])
+  const [activeId, setActiveId] = useState<string | null>(null)
+  const [draftText, setDraftText] = useState('')
+  const [building, setBuilding] = useState(false)
+  const [progress, setProgress] = useState<PipelineProgress | null>(null)
+  const [result, setResult] = useState<BuiltCart | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+
+  const isEditing = activeId !== null
+  const canAddOrUpdate = draftText.trim().length > 0
+  const canBuild = !building && passages.length > 0 && cartName.trim().length > 0
+  const buildPct = (() => {
+    if (!progress) return 0
+    if (progress.stage === 'done') return 100
+    if (progress.stage === 'embedding' && progress.embeddingsTotal) {
+      const done = progress.embeddingsCompleted ?? 0
+      return Math.min(95, 30 + Math.round((done / progress.embeddingsTotal) * 60))
+    }
+    if (progress.stage === 'parsing') return 10
+    if (progress.stage === 'chunking') return 20
+    if (progress.stage === 'writing') return 96
+    return 5
+  })()
+
+  const handleAddOrUpdate = () => {
+    const text = draftText.trim()
+    if (!text) return
+    if (isEditing) {
+      setPassages((prev) =>
+        prev.map((p) => (p.id === activeId ? { ...p, text } : p)),
+      )
+      setActiveId(null)
+    } else {
+      const id = crypto.randomUUID()
+      setPassages((prev) => [...prev, { id, text }])
+    }
+    setDraftText('')
+    textareaRef.current?.focus()
+  }
+
+  const handleCancelEdit = () => {
+    setActiveId(null)
+    setDraftText('')
+    textareaRef.current?.focus()
+  }
+
+  const handleSelectForEdit = (p: DraftPassage) => {
+    setActiveId(p.id)
+    setDraftText(p.text)
+    textareaRef.current?.focus()
+  }
+
+  const handleDelete = (id: string) => {
+    setPassages((prev) => prev.filter((p) => p.id !== id))
+    if (activeId === id) {
+      setActiveId(null)
+      setDraftText('')
+    }
+  }
+
+  const handleBuild = async () => {
+    setBuilding(true)
+    setProgress(null)
+    setResult(null)
+    setError(null)
+    try {
+      const sanitizedName = cartName.trim().replace(/[^A-Za-z0-9_-]/g, '_') || 'new-cart'
+      const built = await buildCartFromPassages(
+        passages.map((p) => p.text),
+        {
+          cartName: sanitizedName,
+          onProgress: setProgress,
+        },
+      )
+      setResult(built.cart)
+      log('create', `Built ${built.cart.cartFilename} (${built.chunkCount} chunks)`, true)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setError(message)
+      log('create', `Build failed: ${message}`, false)
+    } finally {
+      setBuilding(false)
+    }
+  }
+
+  const handleSave = async () => {
+    if (!result) return
+    try {
+      await downloadBuiltCart(result)
+      log('save', `Saved ${result.cartFilename} — mount from Search to start editing`, true)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      log('save', `Save failed: ${message}`, false)
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-800/30 p-5 space-y-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-medium text-slate-200 flex items-center gap-2">
+            <FilePlus2 size={16} className="text-purple-400" />
+            New Cart
+          </h2>
+          <p className="text-xs text-slate-500 leading-relaxed mt-0.5">
+            Compose passages directly — each will become one searchable chunk in the resulting cart.
+            For document-based ingestion (PDFs, Word, spreadsheets), use Cart Builder instead.
+          </p>
+        </div>
+      </div>
+
+      <div>
+        <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">
+          Cart name
+        </label>
+        <input
+          type="text"
+          value={cartName}
+          onChange={(e) => setCartName(e.target.value)}
+          placeholder="Enter cart name…"
+          disabled={building}
+          className="w-full rounded-lg bg-slate-950/60 border border-slate-800 px-3 py-1.5 text-sm text-slate-200 font-mono focus:outline-none focus:border-purple-500/60 disabled:opacity-50"
+        />
+        <div className="text-[10px] text-slate-600 mt-1 italic">
+          alphanumeric, dashes, underscores only — sanitized at build time
+        </div>
+      </div>
+
+      <div>
+        <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">
+          {isEditing ? 'Update passage' : 'Add a passage'}
+        </label>
+        <textarea
+          ref={textareaRef}
+          value={draftText}
+          onChange={(e) => setDraftText(e.target.value)}
+          placeholder={isEditing ? 'Edit this passage…' : 'Type a passage — a single thought, paragraph, or chunk of text the cart should be searchable on…'}
+          rows={5}
+          disabled={building}
+          className="w-full rounded-lg bg-slate-950/60 border border-slate-800 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-purple-500/60 disabled:opacity-50 resize-y"
+        />
+        <div className="flex items-center gap-2 mt-2">
+          <button
+            onClick={handleAddOrUpdate}
+            disabled={!canAddOrUpdate || building}
+            className={`px-4 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors ${
+              canAddOrUpdate && !building
+                ? isEditing
+                  ? 'bg-cyan-500/20 border border-cyan-500/40 text-cyan-200 hover:bg-cyan-500/30'
+                  : 'bg-purple-500/20 border border-purple-500/40 text-purple-200 hover:bg-purple-500/30'
+                : 'bg-slate-800/50 border border-slate-700 text-slate-600 cursor-not-allowed'
+            }`}
+          >
+            {isEditing ? <ChevronRight size={12} /> : <Plus size={12} />}
+            {isEditing ? 'Update passage' : 'Add passage'}
+          </button>
+          {isEditing && (
+            <button
+              onClick={handleCancelEdit}
+              disabled={building}
+              className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-700/40 flex items-center gap-1 transition-colors"
+            >
+              <X size={11} />
+              Cancel edit
+            </button>
+          )}
+          <span className="ml-auto text-[10px] text-slate-600 font-mono">
+            {draftText.trim().split(/\s+/).filter(Boolean).length} word{draftText.trim().split(/\s+/).filter(Boolean).length === 1 ? '' : 's'}
+          </span>
+        </div>
+      </div>
+
+      {/* Passages list */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-[10px] uppercase tracking-wider text-slate-500">
+            Passages ({passages.length})
+          </span>
+          {passages.length > 0 && !building && (
+            <button
+              onClick={() => {
+                if (confirm('Clear all draft passages?')) {
+                  setPassages([])
+                  setActiveId(null)
+                  setDraftText('')
+                }
+              }}
+              className="text-[10px] text-slate-500 hover:text-slate-300"
+            >
+              Clear all
+            </button>
+          )}
+        </div>
+        {passages.length === 0 ? (
+          <div className="text-xs text-slate-600 italic py-2 px-3 rounded border border-dashed border-slate-700 bg-slate-900/30">
+            No passages yet. Type one above and click <strong className="font-medium text-slate-500">Add passage</strong> to start composing your cart.
+          </div>
+        ) : (
+          <div className="rounded-lg border border-slate-700 divide-y divide-slate-800 bg-slate-900/30">
+            {passages.map((p, i) => {
+              const isActive = activeId === p.id
+              const preview = p.text.length > 140 ? p.text.slice(0, 137) + '…' : p.text
+              return (
+                <div
+                  key={p.id}
+                  className={`flex items-start gap-2 px-3 py-2 group ${
+                    isActive ? 'bg-cyan-500/10' : 'hover:bg-slate-800/40'
+                  }`}
+                >
+                  <span className="text-[10px] font-mono text-slate-600 w-6 shrink-0 mt-0.5">
+                    {String(i + 1).padStart(2, '0')}
+                  </span>
+                  <button
+                    onClick={() => handleSelectForEdit(p)}
+                    disabled={building}
+                    className="flex-1 text-left text-xs text-slate-300 hover:text-slate-100 leading-relaxed disabled:opacity-50"
+                    title="Click to edit this passage"
+                  >
+                    {preview}
+                  </button>
+                  <button
+                    onClick={() => handleDelete(p.id)}
+                    disabled={building}
+                    className="text-rose-400/60 hover:text-rose-400 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-30"
+                    title="Remove this passage"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Build progress */}
+      {building && progress && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 space-y-2">
+          <div className="flex items-center gap-2 text-xs">
+            <Loader2 size={12} className="animate-spin text-amber-400 shrink-0" />
+            <span className="text-amber-200 font-medium uppercase tracking-wider text-[10px]">
+              {progress.stage}
+            </span>
+            <span className="text-slate-400 truncate">{progress.message}</span>
+            <span className="ml-auto text-amber-300 font-mono text-[10px]">{buildPct}%</span>
+          </div>
+          <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-gradient-to-r from-amber-500 to-purple-500 transition-all duration-500"
+              style={{ width: `${buildPct}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Build error */}
+      {error && !building && (
+        <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 flex items-start gap-2 text-xs">
+          <AlertCircle size={14} className="text-rose-400 shrink-0 mt-0.5" />
+          <div className="text-rose-200">{error}</div>
+        </div>
+      )}
+
+      {/* Build result */}
+      {result && !building && (
+        <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 space-y-2">
+          <div className="flex items-center gap-2 text-sm flex-wrap">
+            <CheckCircle2 size={14} className="text-emerald-400 shrink-0" />
+            <span className="text-emerald-200 font-medium">
+              Built {result.cartFilename}
+            </span>
+            <span className="text-slate-400 font-mono text-[10px] ml-auto">
+              {result.manifest.count} chunks · fingerprint {result.manifest.fingerprint}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => { void handleSave() }}
+              className="px-3 py-1.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-200 text-xs font-medium hover:bg-emerald-500/30 flex items-center gap-1.5 transition-colors"
+              title="Pick a destination folder (Chrome/Edge/Opera 86+) or fall back to your Downloads folder (Firefox / Safari)."
+            >
+              <Save size={12} />
+              Save cart bundle…
+            </button>
+            <span className="text-[10px] text-slate-500">
+              After saving, mount the cart from Search to start editing it
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Build button — sticks at the bottom */}
+      <div className="pt-2 border-t border-slate-800">
+        <button
+          onClick={() => { void handleBuild() }}
+          disabled={!canBuild}
+          className={`w-full px-4 py-2.5 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-colors ${
+            canBuild
+              ? 'bg-purple-500/30 border border-purple-500/50 text-purple-100 hover:bg-purple-500/40'
+              : 'bg-slate-800/50 border border-slate-700 text-slate-600 cursor-not-allowed'
+          }`}
+        >
+          <Hammer size={14} />
+          {building ? 'Building…' : `Build cart (${passages.length} passage${passages.length === 1 ? '' : 's'})`}
+        </button>
+        {!canBuild && !building && (
+          <div className="text-[10px] text-slate-600 italic mt-1.5 text-center">
+            {passages.length === 0
+              ? 'Add at least one passage above to build the cart.'
+              : 'Give the cart a name above to build.'}
+          </div>
+        )}
       </div>
     </div>
   )
