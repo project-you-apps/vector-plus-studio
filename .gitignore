@@ -30,6 +30,19 @@ cartridges/**/claude_sessions*
 **/session-memory*
 **/memory_keys*
 
+# Internal docs — devlogs, planning, and pre-scope artifacts contain
+# strategic positioning, calibration quotes, and other content that
+# should not be in a public repo. Maintained in the local-only outer
+# project-you tree at docs/vps-internal/ instead. Andy 2026-05-10.
+docs/DEVLOG.md
+docs/DEVLOG-*.md
+docs/CARTBUILDER-PORT-PLAN.md
+docs/OAUTH-PRE-SCOPE.md
+docs/*-PRE-SCOPE.md
+docs/*-PLAN.md
+docs/*-SCOPE.md
+docs/internal/
+
 # IDE
 .vscode/
 .idea/
