@@ -98,6 +98,23 @@ html.light .border-cyan-500\/30   { border-color: rgb(6 182 212 / 0.6); }
 html.light .border-amber-500\/30  { border-color: rgb(245 158 11 / 0.6); }
 html.light .border-rose-500\/30   { border-color: rgb(244 63 94 / 0.6); }
 html.light .border-green-500\/30  { border-color: rgb(34 197 94 / 0.6); }
+
+/* Toggle switches (Settings page) — track and thumb need explicit light-mode
+   styling. Default `bg-slate-700` track + `bg-purple-500/60` track + `bg-white`
+   thumb works in dark mode but in light mode (a) the slate-700 track washes
+   out against white, (b) the 60%-opacity purple track over white renders
+   semi-saturated, and (c) the white thumb has no shadow so it visually fuses
+   with either track. Andy 2026-05-09 — both states looked broken in QA. */
+html.light [role="switch"] {
+  background-color: rgb(203 213 225);   /* slate-300 — soft visible off-state */
+}
+html.light [role="switch"][aria-checked="true"] {
+  background-color: rgb(168 85 247);    /* purple-500 — solid on-state */
+}
+html.light [role="switch"] > span {
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);  /* drop-shadow makes white thumb pop */
+}
+
 /* Text colors that worked on dark backgrounds need darker variants in light.
    Original overrides covered -200 shade only for some colors. Andy 2026-05-09
    spotted the WebGPU badge being too light in light mode and asked for a
