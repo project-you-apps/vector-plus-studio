@@ -117,34 +117,36 @@ export default function CartBrowser({
       {showFolderManager && (
         <div className="px-4 py-3 border-b border-slate-700 bg-slate-900/40">
           <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-2">Saved cart folders</div>
-          <div className="space-y-1.5">
-            {browserFolders.map((f) => (
-              <div key={f} className="flex items-center gap-2 text-xs font-mono">
-                <Folder size={11} className="text-slate-500" />
-                <span className="flex-1 truncate text-slate-400">{f}</span>
-                <button
-                  onClick={() => refreshBrowser(f)}
-                  className="text-[10px] text-slate-500 hover:text-slate-300 px-1 py-0.5 rounded hover:bg-slate-700/40"
-                  title="Browse this folder"
-                >
-                  Browse
-                </button>
-                <button
-                  onClick={() => {
-                    if (browserFolders.length <= 1) {
-                      alert('Keep at least one saved folder.')
-                      return
-                    }
-                    if (confirm(`Remove ${f} from saved folders?`)) removeBrowserFolder(f)
-                  }}
-                  className="text-rose-400/60 hover:text-rose-400 p-0.5 rounded"
-                  title="Remove from saved folders"
-                >
-                  <Trash2 size={10} />
-                </button>
-              </div>
-            ))}
-          </div>
+          {browserFolders.length === 0 ? (
+            <div className="text-xs text-slate-500 italic py-1.5">
+              No folders saved yet. Pick one below to start browsing.
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              {browserFolders.map((f) => (
+                <div key={f} className="flex items-center gap-2 text-xs font-mono">
+                  <Folder size={11} className="text-slate-500" />
+                  <span className="flex-1 truncate text-slate-400">{f}</span>
+                  <button
+                    onClick={() => refreshBrowser(f)}
+                    className="text-[10px] text-slate-500 hover:text-slate-300 px-1 py-0.5 rounded hover:bg-slate-700/40"
+                    title="Browse this folder"
+                  >
+                    Browse
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (confirm(`Remove ${f} from saved folders?`)) removeBrowserFolder(f)
+                    }}
+                    className="text-rose-400/60 hover:text-rose-400 p-0.5 rounded"
+                    title="Remove from saved folders"
+                  >
+                    <Trash2 size={10} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="mt-3 flex items-center gap-2">
             <button
               onClick={async () => {
