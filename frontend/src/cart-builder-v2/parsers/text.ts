@@ -13,6 +13,39 @@ export const textParser: Parser = {
   },
 }
 
+// Convert YAML frontmatter to a readable single-line summary.
+// Obsidian (and Jekyll/Hugo/Astro) markdown files often start with a
+// `---\n...\n---` YAML block. Without conversion the raw YAML lands at
+// the top of section 1, polluting the embedding and the passage preview.
+// Output: "Properties: title: Galileo Galilei. tags: people, italian.
+// aliases: Galileo." which preserves searchable signal in plain prose.
+function extractFrontmatter(text: string): { body: string; frontmatter: string | null } {
+  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/)
+  if (!match) return { body: text, frontmatter: null }
+  const yamlBody = match[1]
+  const rest = text.slice(match[0].length)
+  const lines = yamlBody.split(/\r?\n/).filter((l) => l.trim().length > 0)
+  const props: string[] = []
+  for (const line of lines) {
+    const m = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/)
+    if (!m) continue
+    const key = m[1]
+    let value = m[2].trim()
+    // Unwrap simple inline arrays: [a, b, c] -> "a, b, c"
+    if (value.startsWith('[') && value.endsWith(']')) {
+      value = value.slice(1, -1).trim()
+    }
+    // Strip surrounding quotes on simple strings
+    if ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1)
+    }
+    if (value.length > 0) props.push(`${key}: ${value}`)
+  }
+  if (props.length === 0) return { body: rest, frontmatter: null }
+  return { body: rest, frontmatter: `Properties: ${props.join('. ')}.` }
+}
+
 export const markdownParser: Parser = {
   name: 'markdown',
   accept(file: File): boolean {
@@ -24,8 +57,14 @@ export const markdownParser: Parser = {
     )
   },
   // Splits at "## " H2 headers, mirroring parsers.py:parse_markdown.
+  // Additionally strips YAML frontmatter (Obsidian / Jekyll / Hugo
+  // convention) and replaces it with a readable Properties summary at
+  // the top of section 1, so metadata stays embedded but doesn't
+  // pollute passage previews.
   async parse(file: File): Promise<Section[]> {
-    const text = await file.text()
+    const raw = await file.text()
+    const { body, frontmatter } = extractFrontmatter(raw)
+    const text = frontmatter ? `${frontmatter}\n\n${body}` : body
     const lines = text.split('\n')
     const rawSections: string[] = []
     let current: string[] = []
@@ -41,6 +80,11 @@ export const markdownParser: Parser = {
       rawSections.push(current.join('\n'))
     }
 
+    // Prefer webkitRelativePath when available (set by directory-drop) so
+    // `source` carries the vault folder structure, e.g. "People/Galileo.md"
+    // instead of just "Galileo.md". Falls back to file.name for normal drops.
+    const sourcePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+
     const sections: Section[] = []
     rawSections.forEach((section, i) => {
       const trimmed = section.trim()
@@ -48,7 +92,7 @@ export const markdownParser: Parser = {
         sections.push({
           text: trimmed,
           page: i + 1,
-          source: file.name,
+          source: sourcePath,
         })
       }
     })
