@@ -1,4 +1,79 @@
-# Vector+ Studio v1.0
+# Vector+ Studio v1.1 — Hosted Demo + Browser-Side Cart Builder
+
+> **[ANDY: voice-driven hook paragraph here — 2-3 sentences. The "try it without installing anything" angle. Mother-in-law-test framing. Hosted at https://project-you.app/vps/app — no GPU, no install, no signup.]**
+
+**What v1.1 adds on top of the desktop v1.0 product:**
+
+- **Hosted demo** at `https://project-you.app/vps/app` — search any of the bundled sample cartridges (LatticeRunner litepaper, Project You overview, etc.) from your browser
+- **Browser-side Cart Builder** — drop in PDF/DOCX/XLSX/TXT files; the page parses, chunks, embeds (WebGPU primary, WASM fallback), and downloads a `.cart.npz` ready to mount anywhere
+- **Read-only sandbox** — public users mount carts from a sandboxed directory; no writes, no edits, no leakage between sessions
+- **Eject** — bring-your-own carts can be unmounted and removed from the sandbox in one click
+- **Same physics engine** — the hosted droplet runs the same `lattice_cuda_v7.dll` as the desktop app, just behind FastAPI
+
+## Quick Start (Hosted Demo)
+
+1. Visit `https://project-you.app/vps/app`
+2. Pick a sample cartridge from the sidebar, or build your own from local files
+3. Search
+
+No install, no GPU, no signup. The droplet does the physics; your browser handles the build.
+
+## Quick Start (Browser-Side Cart Builder)
+
+> **[ANDY: voice-driven explanation of why building in the browser matters — privacy (your files never leave your machine), portability (the .cart.npz works anywhere), the "data tour" framing.]**
+
+1. Open the hosted demo or run locally
+2. Click "Build Cartridge" → drop in PDFs/DOCX/XLSX/TXT (up to 50MB total, 10K chunks)
+3. Wait — chunking is instant, embedding takes ~30s for a small doc on WebGPU, ~3-5x slower on WASM
+4. Download the `.cart.npz`
+5. Mount it locally (desktop app) or upload it to the hosted demo for sandbox-mounted search
+
+The browser build uses [transformers.js](https://github.com/xenova/transformers.js) running Nomic Embed Text v1.5 in WebGPU. Output is the same NPZ format as the desktop builder — fully cross-compatible.
+
+## Architecture
+
+```text
+Browser                                  Droplet (project-you.app/vps/app)
+─────────────────────────────────────    ─────────────────────────────────
+Cart Builder (transformers.js + WebGPU)  FastAPI ── Engine (lattice_cuda_v7.dll)
+  parse → chunk → embed → write     →    │           │
+  download .cart.npz                     │           ├── Sandbox dir (uploads)
+                                         │           ├── Bundled carts (read-only)
+Search UI (React + Zustand)         ←→   │           └── VPS_READ_ONLY=1 (no writes)
+  mount, search, eject                   │
+                                         └── nginx (reverse proxy + TLS)
+```
+
+> **[ANDY: voice-driven framing of why "build in browser, search on server" matters — separation of trust, no upload of sensitive content unless explicitly chosen, etc.]**
+
+## What v1.1 Does NOT Do (yet)
+
+- **No auth.** The sandbox is public; sample cartridges are read-only and uploaded carts are eject-able by anyone with the link. OAuth lands the week after launch.
+- **No persistent user state.** Mount/unmount and search work; saved searches, bookmarks, and per-user cart lists do not.
+- **No marketplace.** Listing/buying/sharing carts is on the roadmap but not in v1.1.
+- **WebGPU-required for fast builds.** The WASM fallback works but is 3-5× slower; on Safari (no WebGPU as of writing) builds are usable but not fast.
+
+## Browser Compatibility
+
+| Browser | Build (Cart Builder) | Search (Hosted) |
+| --- | --- | --- |
+| Chrome 113+ / Edge 113+ | WebGPU (fast) | Yes |
+| Firefox 121+ (with `dom.webgpu.enabled`) | WebGPU (fast) | Yes |
+| Safari 17+ | WASM fallback (slow) | Yes |
+| Mobile (any) | WASM fallback (slow) | Yes |
+
+## Security Model
+
+- **Server**: `VPS_READ_ONLY=1` env disables all write endpoints (add/edit/delete/save). Only mount/unmount/search/upload-to-sandbox/eject are reachable.
+- **Cart-level**: each cart carries a `.permissions.json` sidecar. Browser-built carts default to `"r"` (read).
+- **Pattern-level**: hippocampus row 29 stores per-pattern `perms_byte`. Default `0x03` (read+search) for browser-built carts.
+- **Upload validation**: streaming-to-disk with zip-slip protection, zip-bomb cap (200×), entry-type allowlist (`.npy` only). Uploads are quarantined to the sandbox dir; eject removes them.
+
+> **[ANDY: voice-driven section here on the "RAG+" framing — three-tier provenance (card preview → modal full text → source URL). Why this is different from "just another vector DB". Pull from CC_provenance-as-feature_2026-05.md and CC_substrate-validates-across-scales_2026-05.md.]**
+
+---
+
+# Vector+ Studio v1.0 — Desktop App with Real Frontend
 
 **Physics-Enhanced Semantic Search -- Now with a Real Frontend**
 

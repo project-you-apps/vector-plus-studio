@@ -39,7 +39,7 @@ export default function Header() {
           <Zap size={18} className="text-white" />
         </div>
         <h1 className="text-xl font-bold gradient-text">Vector+ Studio</h1>
-        <span className="text-xs text-slate-500 mt-1">v1.0</span>
+        <span className="text-xs text-slate-500 mt-1">v1.1</span>
       </div>
 
       <div className="flex items-center gap-4 text-sm">
