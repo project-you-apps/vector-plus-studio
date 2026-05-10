@@ -97,13 +97,50 @@ export async function buildCart(
 }
 
 /**
- * Trigger browser download of the three cart artifacts. Useful for the
- * Block 4 UI integration. Returns immediately after dispatching downloads.
+ * Save the three cart artifacts. Uses the File System Access API
+ * (`showDirectoryPicker`) when available so the user can pick a real
+ * destination folder instead of being forced into the browser's
+ * Downloads/ default — Chrome/Edge/Opera 86+ support this. Firefox and
+ * Safari fall back to the legacy three-<a download> approach.
+ *
+ * Resolves on completion (or user cancel). Rejects only on unexpected
+ * filesystem-API failure; caller should still treat a rejection as
+ * non-fatal since the user can always re-trigger the save.
  */
-export function downloadBuiltCart(cart: BuiltCart): void {
+export async function downloadBuiltCart(cart: BuiltCart): Promise<void> {
+  type DirPickerOpts = { mode?: 'read' | 'readwrite' }
+  type DirPicker = (opts?: DirPickerOpts) => Promise<FileSystemDirectoryHandle>
+  const pickerFn = (window as unknown as { showDirectoryPicker?: DirPicker }).showDirectoryPicker
+  if (typeof pickerFn === 'function') {
+    try {
+      const dir = await pickerFn({ mode: 'readwrite' })
+      await writeBlobToDir(dir, cart.cartFilename, cart.cartBlob)
+      await writeBlobToDir(dir, cart.manifestFilename, cart.manifestBlob)
+      await writeBlobToDir(dir, cart.permissionsFilename, cart.permissionsBlob)
+      return
+    } catch (err) {
+      // User cancelled the picker — bail silently, no fallback (legacy
+      // download would land files they didn't ask for).
+      if ((err as DOMException)?.name === 'AbortError') return
+      // Permission denied / quota / other API failure — fall through to
+      // the legacy path so the user still gets the cart somewhere.
+      console.warn('showDirectoryPicker failed, falling back to <a download>', err)
+    }
+  }
   triggerDownload(cart.cartBlob, cart.cartFilename)
   triggerDownload(cart.manifestBlob, cart.manifestFilename)
   triggerDownload(cart.permissionsBlob, cart.permissionsFilename)
+}
+
+async function writeBlobToDir(
+  dir: FileSystemDirectoryHandle,
+  name: string,
+  blob: Blob,
+): Promise<void> {
+  const fileHandle = await dir.getFileHandle(name, { create: true })
+  const writable = await fileHandle.createWritable()
+  await writable.write(blob)
+  await writable.close()
 }
 
 function triggerDownload(blob: Blob, filename: string): void {

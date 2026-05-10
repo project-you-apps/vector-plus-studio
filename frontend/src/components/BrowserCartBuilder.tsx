@@ -333,11 +333,12 @@ export default function BrowserCartBuilder() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <button
-              onClick={() => downloadBuiltCart(result)}
+              onClick={() => { void downloadBuiltCart(result) }}
               className="px-3 py-1.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-200 text-xs font-medium hover:bg-emerald-500/30 flex items-center gap-1.5 transition-colors"
+              title="Pick a destination folder (Chrome/Edge/Opera 86+) or fall back to your Downloads folder (Firefox / Safari)."
             >
               <Download size={12} />
-              Download cart bundle
+              Save cart bundle…
             </button>
             <span className="text-[10px] text-slate-500">
               .cart.npz + .cart_manifest.json + .permissions.json
