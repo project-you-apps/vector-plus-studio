@@ -85,17 +85,22 @@ def _active_files() -> dict[str, dict]:
 
 
 def load_cart_folders() -> list[str]:
-    default = str(BUILD_DIR.resolve())
-    folders = [default]
+    """Return the user's saved cart folders, exactly as configured.
+
+    The saved-folders list is bookmark semantics — the user curates which
+    directories they care about for cart browsing. Empty list = empty list;
+    we don't re-inject a default folder when the user has removed everything.
+    Operators of hosted instances can pre-seed SETTINGS_FILE with whatever
+    curated-cart folder they want pinned (along with VPS_READ_ONLY=1 to
+    prevent visitors from removing it). Andy 2026-05-10.
+    """
     if SETTINGS_FILE.exists():
         try:
             with open(SETTINGS_FILE) as f:
-                folders = json.load(f).get("cart_folders", [])
+                return list(json.load(f).get("cart_folders", []))
         except Exception:
             pass
-    if default not in folders:
-        folders.insert(0, default)
-    return folders
+    return []
 
 
 def save_cart_folders(folders: list[str]) -> None:
