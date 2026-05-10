@@ -138,11 +138,23 @@ export default function BrowserCartBuilder() {
               new
             </span>
             <BackendBadge status={webgpuStatus} />
+            <span
+              className="text-[10px] uppercase tracking-wider text-cyan-300 bg-cyan-500/15 border border-cyan-500/40 px-2 py-0.5 rounded font-mono"
+              title="Built carts download to your machine. CLOUD mode (carts persist in your own cloud data store — R2, S3, or your hosted Vector+ Studio instance) lands with v1.2."
+            >
+              local
+            </span>
+            <span
+              className="text-[10px] uppercase tracking-wider text-slate-500 bg-slate-700/30 border border-slate-700 px-2 py-0.5 rounded font-mono cursor-help"
+              title="CLOUD mode lands with v1.2 — finished carts persist in your own cloud data store (R2, S3, or your hosted Vector+ Studio instance). We never see your documents in either mode."
+            >
+              cloud · v1.2
+            </span>
           </h2>
           <p className="text-xs text-slate-400 mt-1 leading-relaxed">
             Your documents never leave your machine — parsing, embedding, and packaging all run client-side via WebGPU
-            (with WASM fallback). Download the built cart and mount it locally, on the public demo, or on any
-            Vector+ Studio instance you control.
+            (with WASM fallback). The finished cart downloads to your machine — mount it locally, on the public demo,
+            or on any Vector+ Studio instance you control.
           </p>
         </div>
       </div>
