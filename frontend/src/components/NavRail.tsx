@@ -1,6 +1,9 @@
-import { Search, LayoutDashboard, Hammer, Pencil, Terminal, Settings } from 'lucide-react'
+import { useState } from 'react'
+import { Search, LayoutDashboard, Hammer, Pencil, Terminal, Settings, HelpCircle, Info } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import type { ActiveScreen } from '../store/appStore'
+import AboutModal from './AboutModal'
+import HelpModal from './HelpModal'
 
 interface NavItem {
   key: ActiveScreen
@@ -23,6 +26,8 @@ const NAV_ITEMS: NavItem[] = [
 
 export default function NavRail() {
   const { activeScreen, setActiveScreen } = useAppStore()
+  const [aboutOpen, setAboutOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
 
   return (
     <nav
@@ -50,6 +55,30 @@ export default function NavRail() {
           </button>
         )
       })}
+
+      <div className="mt-auto pt-2 border-t border-slate-800/60 flex flex-col gap-1">
+        <button
+          onClick={() => setHelpOpen(true)}
+          aria-label="Help"
+          title="Getting Started + Docs"
+          className="group flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors text-left text-slate-400 hover:text-slate-200 hover:bg-slate-800/40"
+        >
+          <HelpCircle size={16} className="flex-shrink-0" />
+          <span>Help</span>
+        </button>
+        <button
+          onClick={() => setAboutOpen(true)}
+          aria-label="About"
+          title="About Vector+ Studio"
+          className="group flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors text-left text-slate-400 hover:text-slate-200 hover:bg-slate-800/40"
+        >
+          <Info size={16} className="flex-shrink-0" />
+          <span>About</span>
+        </button>
+      </div>
+
+      <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} />
+      <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
     </nav>
   )
 }
