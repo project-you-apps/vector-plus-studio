@@ -34,7 +34,7 @@ interface QueuedFile {
 }
 
 export default function BrowserCartBuilder() {
-  const [cartName, setCartName] = useState('my-cart')
+  const [cartName, setCartName] = useState('')
   const [queued, setQueued] = useState<QueuedFile[]>([])
   const [progress, setProgress] = useState<PipelineProgress | null>(null)
   const [building, setBuilding] = useState(false)
@@ -168,7 +168,7 @@ export default function BrowserCartBuilder() {
           type="text"
           value={cartName}
           onChange={(e) => setCartName(e.target.value)}
-          placeholder="my-cart"
+          placeholder="Enter cart name…"
           disabled={building}
           className="w-full rounded-lg bg-slate-950/60 border border-slate-800 px-3 py-1.5 text-sm text-slate-200 font-mono focus:outline-none focus:border-purple-500/60 disabled:opacity-50"
         />
