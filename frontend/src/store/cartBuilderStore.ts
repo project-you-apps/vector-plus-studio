@@ -54,6 +54,13 @@ interface CartBuilderState {
   pickerDirs: string[]
   pickerParent: string | null
   pickerOpen: boolean
+  // Optional completion handler set by the caller of openFolderPicker.
+  // When set, "Use this folder" calls this instead of the default
+  // addBrowserFolder. Null = legacy behavior (add to saved cart folders).
+  // Andy 2026-05-10 — needed so the New Cart destination flow can reuse
+  // the same picker without permanently adding the destination to saved
+  // folders.
+  pickerOnConfirm: ((path: string) => void) | null
 
   // ── Actions ──
   uploadFiles: (files: File[]) => Promise<void>
@@ -73,7 +80,7 @@ interface CartBuilderState {
   loadCart: (cart_path: string) => Promise<void>
   clearWorkspace: () => Promise<void>
 
-  openFolderPicker: (path?: string) => Promise<void>
+  openFolderPicker: (options?: { path?: string; onConfirm?: (path: string) => void }) => Promise<void>
   closeFolderPicker: () => void
   navigateFolderPicker: (path: string) => Promise<void>
 }
@@ -120,6 +127,7 @@ export const useCartBuilderStore = create<CartBuilderState>((set, get) => ({
   pickerDirs: [],
   pickerParent: null,
   pickerOpen: false,
+  pickerOnConfirm: null,
 
   uploadFiles: async (files) => {
     if (files.length === 0) return
@@ -284,7 +292,9 @@ export const useCartBuilderStore = create<CartBuilderState>((set, get) => ({
     }
   },
 
-  openFolderPicker: async (path?: string) => {
+  openFolderPicker: async (options) => {
+    const path = options?.path
+    const onConfirm = options?.onConfirm ?? null
     try {
       const resp = await cb.browseFolders(path ?? '')
       set({
@@ -292,13 +302,14 @@ export const useCartBuilderStore = create<CartBuilderState>((set, get) => ({
         pickerDirs: resp.dirs,
         pickerParent: resp.parent ?? null,
         pickerOpen: true,
+        pickerOnConfirm: onConfirm,
       })
     } catch (e) {
       console.error('browseFolders failed', e)
     }
   },
 
-  closeFolderPicker: () => set({ pickerOpen: false }),
+  closeFolderPicker: () => set({ pickerOpen: false, pickerOnConfirm: null }),
 
   navigateFolderPicker: async (path) => {
     try {

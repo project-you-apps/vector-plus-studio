@@ -193,3 +193,36 @@ export async function clearWorkspace(): Promise<{ ok: boolean }> {
 export async function getHasChanges(): Promise<CartBuilderHasChanges> {
   return fetchJSON('/has_changes')
 }
+
+export interface BuildToFolderResponse {
+  cart_path: string
+  mounted_filename: string
+  folder: string
+}
+
+// Write a browser-built cart bundle (cart blob + manifest blob + permissions
+// blob) to a server-side folder. Used by Edit Carts "New Cart" flow where
+// the user picks the destination folder via the server-side FolderPickerModal.
+// Server honors the user's permissions sidecar (no forced read-only). Gated
+// on the server by VPS_READ_ONLY — writable instances only.
+export async function buildToFolder(payload: {
+  cartBlob: Blob
+  manifestBlob: Blob
+  permissionsBlob: Blob
+  folder: string
+  cartName: string
+}): Promise<BuildToFolderResponse> {
+  const form = new FormData()
+  form.append('cart', payload.cartBlob, `${payload.cartName}.cart.npz`)
+  form.append('manifest', payload.manifestBlob, `${payload.cartName}.cart_manifest.json`)
+  form.append('permissions', payload.permissionsBlob, `${payload.cartName}.permissions.json`)
+  form.append('folder', payload.folder)
+  form.append('cart_name', payload.cartName)
+  const res = await fetch(`${BASE}/build-to-folder`, { method: 'POST', body: form })
+  if (!res.ok) {
+    let detail = `${res.status}`
+    try { detail = (await res.json()).detail || detail } catch { /* keep */ }
+    throw new Error(detail)
+  }
+  return res.json()
+}

@@ -150,7 +150,7 @@ export default function CartBrowser({
           <div className="mt-3 flex items-center gap-2">
             <button
               onClick={async () => {
-                await openFolderPicker(browserCurrentPath)
+                await openFolderPicker({ path: browserCurrentPath })
               }}
               className="text-xs px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200 flex items-center gap-1"
             >

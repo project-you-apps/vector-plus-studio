@@ -10,7 +10,7 @@ export default function FolderPickerModal() {
   const {
     pickerOpen, pickerPath, pickerDirs, pickerParent,
     closeFolderPicker, navigateFolderPicker, addBrowserFolder,
-    openFolderPicker,
+    openFolderPicker, pickerOnConfirm,
   } = useCartBuilderStore()
 
   useEffect(() => {
@@ -61,7 +61,7 @@ export default function FolderPickerModal() {
             </button>
           )}
           <button
-            onClick={() => openFolderPicker('')}
+            onClick={() => openFolderPicker({ path: '' })}
             className="text-xs text-slate-400 hover:text-slate-200 px-2 py-1 rounded hover:bg-slate-700/40"
           >
             Drives / root
@@ -69,7 +69,15 @@ export default function FolderPickerModal() {
           {!isRoot && (
             <button
               onClick={() => {
-                addBrowserFolder(pickerPath)
+                // If a caller registered a custom onConfirm (e.g., the New
+                // Cart destination flow), use it. Otherwise fall back to
+                // the legacy behavior of adding the picked folder to the
+                // user's saved-cart-folders bookmark list.
+                if (pickerOnConfirm) {
+                  pickerOnConfirm(pickerPath)
+                } else {
+                  addBrowserFolder(pickerPath)
+                }
                 closeFolderPicker()
               }}
               className="ml-auto text-xs px-3 py-1 rounded bg-purple-500/20 border border-purple-500/40 text-purple-300 hover:bg-purple-500/30 flex items-center gap-1"

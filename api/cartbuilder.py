@@ -484,6 +484,75 @@ async def remove_cart_folder(payload: dict):
     return {"folders": folders}
 
 
+@router.post("/build-to-folder")
+async def build_to_folder(
+    cart: UploadFile = File(...),
+    manifest: UploadFile = File(...),
+    permissions: UploadFile = File(...),
+    folder: str = Form(...),
+    cart_name: str = Form(...),
+):
+    """Write a browser-built cart bundle to a server-side folder.
+
+    Used by the Edit Carts "New Cart" flow when the user picks a destination
+    folder via the server-side FolderPickerModal — we already know the
+    absolute path, so the browser POSTs the cart + manifest + permissions
+    blobs alongside it, and the server writes all three files in place. The
+    user's own permissions sidecar is HONORED here (no forced read-only),
+    because we're on a writable instance (gated by _check_writable) and the
+    cart is going to a folder the user explicitly picked.
+
+    Distinct from /api/cartridges/upload (sandbox upload that forces
+    read-only for the public-demo case). This endpoint is intentionally
+    locked off on the droplet via VPS_READ_ONLY=1; the New Cart flow is
+    a writable-instance feature.
+
+    Andy 2026-05-10. Returns {cart_path, mounted_filename, folder} so the
+    caller can mount + switch to Open Cart mode.
+    """
+    _check_writable()
+
+    target_dir = Path(folder).resolve()
+    if not target_dir.is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Destination folder does not exist: {folder}",
+        )
+
+    safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in cart_name)
+    if not safe_name:
+        safe_name = "new-cart"
+
+    cart_filename = f"{safe_name}.cart.npz"
+    manifest_filename = f"{safe_name}.cart_manifest.json"
+    permissions_filename = f"{safe_name}.permissions.json"
+
+    cart_path = target_dir / cart_filename
+    manifest_path = target_dir / manifest_filename
+    permissions_path = target_dir / permissions_filename
+
+    try:
+        cart_bytes = await cart.read()
+        cart_path.write_bytes(cart_bytes)
+
+        manifest_bytes = await manifest.read()
+        manifest_path.write_bytes(manifest_bytes)
+
+        permissions_bytes = await permissions.read()
+        permissions_path.write_bytes(permissions_bytes)
+    except OSError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to write cart bundle: {e}",
+        )
+
+    return {
+        "cart_path": str(cart_path),
+        "mounted_filename": cart_filename,
+        "folder": str(target_dir),
+    }
+
+
 @router.get("/browse")
 async def browse_folders(path: str = ""):
     """List subdirectories at a path. Empty path → drive roots on Windows, / on Unix.
