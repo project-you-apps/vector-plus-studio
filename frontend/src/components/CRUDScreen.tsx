@@ -746,23 +746,21 @@ function NewCartPanel({
 
   const handleSaveAndMount = async () => {
     if (!result) return
-    try {
-      const sanitizedName = cartName.trim().replace(/[^A-Za-z0-9_-]/g, '_') || 'new-cart'
-      // Write the cart bundle to the server-side folder. The server honors
-      // the cart's own permissions sidecar (no forced read-only), so the
-      // mounted cart is editable immediately.
+    const sanitizedName = cartName.trim().replace(/[^A-Za-z0-9_-]/g, '_') || 'new-cart'
+
+    // Inner saver — calls buildToFolder + auto-mount + mode-switch on
+    // success. Used twice: first attempt (replace=false), then retry
+    // (replace=true) if the user confirms an overwrite.
+    const doSave = async (replace: boolean) => {
       const resp = await cb.buildToFolder({
         cartBlob: result.cartBlob,
         manifestBlob: result.manifestBlob,
         permissionsBlob: result.permissionsBlob,
         folder: destFolder,
         cartName: sanitizedName,
+        replace,
       })
-      log('save', `Saved ${resp.mounted_filename} to ${resp.folder}`, true)
-
-      // Auto-mount + switch to Open Cart mode so the user can start editing
-      // immediately. Refresh the cart browser so the new cart appears in
-      // the catalog at the bottom.
+      log('save', `${replace ? 'Replaced' : 'Saved'} ${resp.mounted_filename} to ${resp.folder}`, true)
       try {
         await mountCart(resp.cart_path)
         log('mount', `Mounted ${resp.mounted_filename} for editing`, true)
@@ -772,7 +770,31 @@ function NewCartPanel({
         const m = mountErr instanceof Error ? mountErr.message : String(mountErr)
         log('mount', `Cart saved but auto-mount failed: ${m}`, false)
       }
+    }
+
+    try {
+      await doSave(false)
     } catch (err) {
+      if (err instanceof cb.CartExistsError) {
+        // Server rejected because a cart with this name already exists in
+        // the chosen folder. Prompt the user; on confirm, retry with the
+        // replace flag set so the server overwrites this time.
+        const ok = confirm(
+          `A cart named "${sanitizedName}.cart.npz" already exists in:\n\n${destFolder}\n\nReplace it? (The existing cart's three files will be overwritten.)`,
+        )
+        if (!ok) {
+          log('save', 'Save aborted — existing cart not replaced', false)
+          return
+        }
+        try {
+          await doSave(true)
+        } catch (retryErr) {
+          const message = retryErr instanceof Error ? retryErr.message : String(retryErr)
+          log('save', `Replace failed: ${message}`, false)
+          setError(message)
+        }
+        return
+      }
       const message = err instanceof Error ? err.message : String(err)
       log('save', `Save failed: ${message}`, false)
       setError(message)

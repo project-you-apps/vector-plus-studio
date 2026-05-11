@@ -491,6 +491,7 @@ async def build_to_folder(
     permissions: UploadFile = File(...),
     folder: str = Form(...),
     cart_name: str = Form(...),
+    replace: str = Form("false"),
 ):
     """Write a browser-built cart bundle to a server-side folder.
 
@@ -530,6 +531,16 @@ async def build_to_folder(
     cart_path = target_dir / cart_filename
     manifest_path = target_dir / manifest_filename
     permissions_path = target_dir / permissions_filename
+
+    # Prevent silent clobber. Andy 2026-05-10 QA: built a cart with the same
+    # name as an existing one in the destination folder and the server
+    # overwrote without warning. Frontend handles 409 by prompting the user
+    # and retrying with replace=true if they confirm.
+    if cart_path.exists() and replace.lower() not in ("true", "1", "yes", "on"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"A cart named '{cart_filename}' already exists in {target_dir}. Set replace=true to overwrite.",
+        )
 
     try:
         cart_bytes = await cart.read()

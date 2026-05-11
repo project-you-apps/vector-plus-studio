@@ -205,12 +205,26 @@ export interface BuildToFolderResponse {
 // the user picks the destination folder via the server-side FolderPickerModal.
 // Server honors the user's permissions sidecar (no forced read-only). Gated
 // on the server by VPS_READ_ONLY — writable instances only.
+// Sentinel error subclass so the UI can disambiguate "cart already exists"
+// from other failures (network, validation, permissions) without parsing
+// error message strings. Carries the server's detail so the prompt can
+// include the path the user picked.
+export class CartExistsError extends Error {
+  readonly detail: string
+  constructor(detail: string) {
+    super(detail)
+    this.name = 'CartExistsError'
+    this.detail = detail
+  }
+}
+
 export async function buildToFolder(payload: {
   cartBlob: Blob
   manifestBlob: Blob
   permissionsBlob: Blob
   folder: string
   cartName: string
+  replace?: boolean
 }): Promise<BuildToFolderResponse> {
   const form = new FormData()
   form.append('cart', payload.cartBlob, `${payload.cartName}.cart.npz`)
@@ -218,10 +232,12 @@ export async function buildToFolder(payload: {
   form.append('permissions', payload.permissionsBlob, `${payload.cartName}.permissions.json`)
   form.append('folder', payload.folder)
   form.append('cart_name', payload.cartName)
+  form.append('replace', payload.replace ? 'true' : 'false')
   const res = await fetch(`${BASE}/build-to-folder`, { method: 'POST', body: form })
   if (!res.ok) {
     let detail = `${res.status}`
     try { detail = (await res.json()).detail || detail } catch { /* keep */ }
+    if (res.status === 409) throw new CartExistsError(detail)
     throw new Error(detail)
   }
   return res.json()
