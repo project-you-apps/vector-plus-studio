@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   Pencil, Plus, Save, Trash2, RotateCcw, Lock, Unlock, FilePlus2,
-  FolderOpen, Database, AlertCircle, CheckCircle2, Loader2, Info,
+  FolderOpen, Folder, Database, AlertCircle, CheckCircle2, Loader2, Info,
   Hammer, ChevronRight, X,
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
@@ -10,6 +10,7 @@ import ConfirmDialog, { type ConfirmState } from './ConfirmDialog'
 import {
   buildCartFromPassages,
   downloadBuiltCart,
+  saveBuiltCartToDirectory,
   type BuiltCart,
   type PipelineProgress,
 } from '../cart-builder-v2'
@@ -387,18 +388,21 @@ export default function CRUDScreen() {
           />
         )}
 
-        {/* Cart browser — same component embedded in Cart Builder. From Edit
-            Carts, clicking a cart MOUNTS it (passage-level CRUD context),
-            unlike Cart Builder which loads it into a workspace. */}
-        <CartBrowser
-          headerLabel="Carts available to edit"
-          onCartClick={(cart) => {
-            // Mount via the existing /api/cartridges/mount path (absolute path).
-            // Log as 'mount' (Andy 2026-05-06 — mount/unmount belong in the log).
-            useAppStore.getState().mount(cart.path)
-            log('mount', `Mounted ${cart.name} for editing`, true)
-          }}
-        />
+        {/* Cart browser — only relevant on Open Cart mode where the user is
+            picking an existing cart to mount + edit. Hidden on New Cart mode
+            since the user is composing from scratch; the destination folder
+            for the new cart is chosen inline in NewCartPanel. */}
+        {mode === 'open' && (
+          <CartBrowser
+            headerLabel="Carts available to edit"
+            onCartClick={(cart) => {
+              // Mount via the existing /api/cartridges/mount path (absolute path).
+              // Log as 'mount' (Andy 2026-05-06 — mount/unmount belong in the log).
+              useAppStore.getState().mount(cart.path)
+              log('mount', `Mounted ${cart.name} for editing`, true)
+            }}
+          />
+        )}
 
         {/* Activity log */}
         <ActivityLog entries={activity} />
@@ -631,11 +635,31 @@ function NewCartPanel({
   const [progress, setProgress] = useState<PipelineProgress | null>(null)
   const [result, setResult] = useState<BuiltCart | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [destDir, setDestDir] = useState<FileSystemDirectoryHandle | null>(null)
+  const [destDirName, setDestDirName] = useState<string>('')
+  const [destPickError, setDestPickError] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
+  // Folder picker is required on browsers that support it. Safari/Firefox
+  // (no showDirectoryPicker) fall back to Downloads/ at save time and the
+  // folder requirement is relaxed.
+  type DirPickerOpts = { mode?: 'read' | 'readwrite' }
+  type DirPicker = (opts?: DirPickerOpts) => Promise<FileSystemDirectoryHandle>
+  const pickerFn = (window as unknown as { showDirectoryPicker?: DirPicker }).showDirectoryPicker
+  const pickerSupported = typeof pickerFn === 'function'
+
+  // Prerequisite gating — cart name + destination folder (when supported)
+  // must be set before any passage editing. Without these, the user is
+  // adding passages to "the infinite void" (Andy 2026-05-10).
+  const prerequisiteIssue: string | null = (() => {
+    if (!cartName.trim()) return 'Enter a cart name above before adding passages.'
+    if (pickerSupported && !destDir) return 'Choose a destination folder before adding passages.'
+    return null
+  })()
+
   const isEditing = activeId !== null
-  const canAddOrUpdate = draftText.trim().length > 0
-  const canBuild = !building && passages.length > 0 && cartName.trim().length > 0
+  const canAddOrUpdate = !prerequisiteIssue && draftText.trim().length > 0
+  const canBuild = !building && passages.length > 0 && !prerequisiteIssue
   const buildPct = (() => {
     if (!progress) return 0
     if (progress.stage === 'done') return 100
@@ -710,11 +734,32 @@ function NewCartPanel({
     }
   }
 
+  const handlePickDestination = async () => {
+    if (!pickerFn) return
+    setDestPickError(null)
+    try {
+      const dir = await pickerFn({ mode: 'readwrite' })
+      setDestDir(dir)
+      setDestDirName(dir.name)
+    } catch (err) {
+      if ((err as DOMException)?.name === 'AbortError') return  // user cancelled
+      setDestPickError((err as Error)?.message ?? 'Folder picker failed.')
+    }
+  }
+
   const handleSave = async () => {
     if (!result) return
     try {
-      await downloadBuiltCart(result)
-      log('save', `Saved ${result.cartFilename} — mount from Search to start editing`, true)
+      if (destDir) {
+        // Pre-picked destination — write directly without re-prompting.
+        await saveBuiltCartToDirectory(result, destDir)
+        log('save', `Saved ${result.cartFilename} to ${destDirName} — mount from Search to start editing`, true)
+      } else {
+        // Fallback path (Firefox/Safari): legacy three-<a download> flow
+        // dumps to the browser's Downloads folder.
+        await downloadBuiltCart(result)
+        log('save', `Saved ${result.cartFilename} to Downloads — mount from Search to start editing`, true)
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       log('save', `Save failed: ${message}`, false)
@@ -736,22 +781,81 @@ function NewCartPanel({
         </div>
       </div>
 
-      <div>
-        <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">
-          Cart name
-        </label>
-        <input
-          type="text"
-          value={cartName}
-          onChange={(e) => setCartName(e.target.value)}
-          placeholder="Enter cart name…"
-          disabled={building}
-          className="w-full rounded-lg bg-slate-950/60 border border-slate-800 px-3 py-1.5 text-sm text-slate-200 font-mono focus:outline-none focus:border-purple-500/60 disabled:opacity-50"
-        />
-        <div className="text-[10px] text-slate-600 mt-1 italic">
-          alphanumeric, dashes, underscores only — sanitized at build time
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">
+            Cart name
+          </label>
+          <input
+            type="text"
+            value={cartName}
+            onChange={(e) => setCartName(e.target.value)}
+            placeholder="Enter cart name…"
+            disabled={building}
+            className="w-full rounded-lg bg-slate-950/60 border border-slate-800 px-3 py-1.5 text-sm text-slate-200 font-mono focus:outline-none focus:border-purple-500/60 disabled:opacity-50"
+          />
+          <div className="text-[10px] text-slate-600 mt-1 italic">
+            alphanumeric, dashes, underscores only — sanitized at build time
+          </div>
+        </div>
+
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">
+            Destination folder
+          </label>
+          {pickerSupported ? (
+            <>
+              <button
+                onClick={() => { void handlePickDestination() }}
+                disabled={building}
+                className={`w-full rounded-lg border px-3 py-1.5 text-sm flex items-center gap-2 transition-colors disabled:opacity-50 ${
+                  destDir
+                    ? 'bg-cyan-500/10 border-cyan-500/40 text-cyan-200 hover:bg-cyan-500/15'
+                    : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:bg-slate-900/60'
+                }`}
+                title={destDir ? `Cart will save to "${destDirName}". Click to change.` : 'Pick the folder where this cart will be saved.'}
+              >
+                {destDir ? <Folder size={14} className="text-cyan-400" /> : <FolderOpen size={14} className="text-slate-500" />}
+                <span className="flex-1 text-left truncate font-mono text-xs">
+                  {destDir ? destDirName : 'Choose destination folder…'}
+                </span>
+                {destDir && <span className="text-[10px] uppercase tracking-wider text-cyan-400/70">change</span>}
+              </button>
+              <div className="text-[10px] text-slate-600 mt-1 italic">
+                {destDir
+                  ? 'Cart will save here when built — no save dialog needed.'
+                  : 'Required — pick the folder where the .cart.npz will live.'}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="w-full rounded-lg bg-slate-950/60 border border-slate-800 px-3 py-1.5 text-xs text-slate-500 italic flex items-center gap-2">
+                <Info size={12} className="text-amber-400/70 shrink-0" />
+                Your browser doesn't support folder selection.
+              </div>
+              <div className="text-[10px] text-slate-600 mt-1 italic">
+                Cart will save to your Downloads folder when built (Firefox / Safari fallback).
+              </div>
+            </>
+          )}
         </div>
       </div>
+
+      {destPickError && (
+        <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-2 text-xs text-rose-200 flex items-start gap-2">
+          <AlertCircle size={12} className="text-rose-400 shrink-0 mt-0.5" />
+          {destPickError}
+        </div>
+      )}
+
+      {/* Prerequisite hint banner — explicit feedback when the user needs to
+          complete cart name + destination folder before composing. */}
+      {prerequisiteIssue && (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-100 flex items-start gap-2">
+          <AlertCircle size={12} className="text-amber-400 shrink-0 mt-0.5" />
+          <span>{prerequisiteIssue}</span>
+        </div>
+      )}
 
       <div>
         <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">
@@ -932,9 +1036,11 @@ function NewCartPanel({
         </button>
         {!canBuild && !building && (
           <div className="text-[10px] text-slate-600 italic mt-1.5 text-center">
-            {passages.length === 0
-              ? 'Add at least one passage above to build the cart.'
-              : 'Give the cart a name above to build.'}
+            {prerequisiteIssue
+              ? prerequisiteIssue
+              : passages.length === 0
+                ? 'Add at least one passage above to build the cart.'
+                : null}
           </div>
         )}
       </div>

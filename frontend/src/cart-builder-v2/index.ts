@@ -65,7 +65,7 @@ export {
 } from './writer/permissions'
 
 export type { BuildCartOptions, BuiltCart } from './writer/npz'
-export { buildCart, downloadBuiltCart } from './writer/npz'
+export { buildCart, downloadBuiltCart, saveBuiltCartToDirectory } from './writer/npz'
 
 // Pipeline (Block 4)
 export type {

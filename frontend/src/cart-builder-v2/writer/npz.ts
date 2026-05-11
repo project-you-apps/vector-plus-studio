@@ -143,6 +143,21 @@ async function writeBlobToDir(
   await writable.close()
 }
 
+/**
+ * Save a built cart directly to a previously-picked directory handle.
+ * Used by the New Cart flow in Edit Carts, where the user picks the
+ * destination folder BEFORE composing passages — so there's no need to
+ * re-prompt with a picker at save time.
+ */
+export async function saveBuiltCartToDirectory(
+  cart: BuiltCart,
+  dir: FileSystemDirectoryHandle,
+): Promise<void> {
+  await writeBlobToDir(dir, cart.cartFilename, cart.cartBlob)
+  await writeBlobToDir(dir, cart.manifestFilename, cart.manifestBlob)
+  await writeBlobToDir(dir, cart.permissionsFilename, cart.permissionsBlob)
+}
+
 function triggerDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
