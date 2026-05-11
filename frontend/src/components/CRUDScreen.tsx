@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from 'react'
 import {
   Pencil, Plus, Save, Trash2, RotateCcw, Lock, Unlock, FilePlus2,
   FolderOpen, Folder, Database, AlertCircle, CheckCircle2, Loader2, Info,
-  Hammer, ChevronRight, X,
+  Hammer, ChevronRight, X, List, ChevronLeft, Search,
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import CartBrowser from './CartBrowser'
 import ConfirmDialog, { type ConfirmState } from './ConfirmDialog'
+import * as api from '../api/client'
+import type { PatternListItem } from '../api/client'
 import {
   buildCartFromPassages,
   type BuiltCart,
@@ -343,6 +345,19 @@ export default function CRUDScreen() {
                 </button>
               </OpPanel>
             </div>
+
+            {/* Passage browser — click a row to populate Update + Delete IDX
+                fields above. Paginated 25-per-page with filter. Hidden when
+                no cart is mounted; refresh-keyed off patternCount so it
+                stays in sync after add/delete/restore actions. */}
+            <PassageBrowser
+              patternCount={patternCount}
+              mountedKey={status?.mounted_cartridge ?? ''}
+              onPickIdx={(idx) => {
+                setUpdateIdx(String(idx))
+                setDeleteIdx(String(idx))
+              }}
+            />
 
             {/* Tombstoned list */}
             <div className="rounded-lg border border-slate-700 bg-slate-800/30">
@@ -1058,6 +1073,232 @@ function NewCartPanel({
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PassageBrowser — paginated, filterable list of active passages in the
+// mounted cart. Click a row to populate Update + Delete IDX fields above so
+// the user doesn't have to memorize pattern indices.
+//
+// Page size 25, viewport ~6 rows visible at a time (overflow-y-auto inside
+// max-h). Filter is a case-insensitive substring search on passage text,
+// executed server-side so it works against the full cart not just the
+// current page. Pagination by Prev/Next arrows + jump-to-page input.
+//
+// Refresh triggers: filter change (300ms debounce), offset change, mount
+// switch (mountedKey changes), and any external action that changes the
+// active passage count (patternCount changes — fires on add/delete/restore).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PASSAGE_PAGE_SIZE = 25
+
+function PassageBrowser({
+  patternCount,
+  mountedKey,
+  onPickIdx,
+}: {
+  patternCount: number
+  mountedKey: string
+  onPickIdx: (idx: number) => void
+}) {
+  const [items, setItems] = useState<PatternListItem[]>([])
+  const [total, setTotal] = useState(0)
+  const [offset, setOffset] = useState(0)
+  const [filterDraft, setFilterDraft] = useState('')
+  const [filter, setFilter] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [pageJump, setPageJump] = useState('')
+
+  const totalPages = Math.max(1, Math.ceil(total / PASSAGE_PAGE_SIZE))
+  const currentPage = Math.floor(offset / PASSAGE_PAGE_SIZE) + 1
+
+  // Debounce the filter input so we don't refetch on every keystroke.
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      setFilter(filterDraft.trim())
+      setOffset(0)
+    }, 300)
+    return () => clearTimeout(handle)
+  }, [filterDraft])
+
+  // Reset to page 1 whenever the mounted cart changes.
+  useEffect(() => {
+    setOffset(0)
+    setFilterDraft('')
+    setFilter('')
+  }, [mountedKey])
+
+  // Fetch when offset / filter / mount / patternCount changes.
+  useEffect(() => {
+    if (!mountedKey) {
+      setItems([])
+      setTotal(0)
+      return
+    }
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    api
+      .listPatterns(offset, PASSAGE_PAGE_SIZE, filter || undefined)
+      .then((resp) => {
+        if (cancelled) return
+        setItems(resp.passages)
+        setTotal(resp.total)
+        // If we paged past the end (e.g., filter changed to a shorter list),
+        // bounce back to page 1.
+        if (resp.passages.length === 0 && resp.total > 0) {
+          setOffset(0)
+        }
+      })
+      .catch((e) => {
+        if (cancelled) return
+        setError(e instanceof Error ? e.message : String(e))
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [mountedKey, offset, filter, patternCount])
+
+  const goPrev = () => setOffset(Math.max(0, offset - PASSAGE_PAGE_SIZE))
+  const goNext = () => setOffset(Math.min((totalPages - 1) * PASSAGE_PAGE_SIZE, offset + PASSAGE_PAGE_SIZE))
+  const goPage = (page: number) => {
+    const clamped = Math.max(1, Math.min(totalPages, page))
+    setOffset((clamped - 1) * PASSAGE_PAGE_SIZE)
+  }
+
+  if (!mountedKey) return null
+
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-800/30">
+      <div className="px-4 py-2 border-b border-slate-700 flex items-center justify-between gap-3">
+        <h2 className="text-xs uppercase tracking-wider text-slate-500 flex items-center gap-2">
+          <List size={12} />
+          Passages
+          <span className="text-slate-400 font-mono normal-case tracking-normal">
+            ({total.toLocaleString()}{filter ? ` matching "${filter}"` : ''})
+          </span>
+        </h2>
+        <div className="flex items-center gap-2 text-[11px] text-slate-500">
+          {loading && <Loader2 size={11} className="animate-spin text-slate-400" />}
+          <span>click a row to load its IDX into Update + Delete</span>
+        </div>
+      </div>
+
+      {/* Filter input */}
+      <div className="px-4 py-2 border-b border-slate-800 flex items-center gap-2">
+        <Search size={11} className="text-slate-500 shrink-0" />
+        <input
+          type="text"
+          value={filterDraft}
+          onChange={(e) => setFilterDraft(e.target.value)}
+          placeholder="Filter by substring (case-insensitive)…"
+          className="flex-1 bg-transparent text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none"
+        />
+        {filterDraft && (
+          <button
+            onClick={() => setFilterDraft('')}
+            className="text-slate-500 hover:text-slate-300 p-0.5"
+            title="Clear filter"
+          >
+            <X size={11} />
+          </button>
+        )}
+      </div>
+
+      {/* List viewport — fixed max-height with overflow-y-auto so ~6 rows
+          show at a time and the user scrolls within the page. */}
+      <div className="max-h-[260px] overflow-y-auto divide-y divide-slate-800">
+        {error ? (
+          <div className="px-4 py-3 text-xs text-rose-300 flex items-center gap-2">
+            <AlertCircle size={12} className="text-rose-400 shrink-0" />
+            {error}
+          </div>
+        ) : items.length === 0 && !loading ? (
+          <div className="px-4 py-6 text-xs text-slate-500 italic text-center">
+            {filter
+              ? `No passages match "${filter}".`
+              : patternCount > 0
+                ? 'Page is empty — try resetting the filter.'
+                : 'This cart has no passages yet. Add one via the panel above.'}
+          </div>
+        ) : (
+          items.map((p) => (
+            <button
+              key={p.idx}
+              onClick={() => onPickIdx(p.idx)}
+              className="w-full px-4 py-2 flex items-start gap-3 hover:bg-slate-700/30 text-left transition-colors group"
+              title={`Click to load #${p.idx} into Update + Delete IDX fields above`}
+            >
+              <span className="font-mono text-[11px] text-slate-500 w-12 shrink-0 mt-0.5">
+                #{p.idx}
+              </span>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs text-slate-200 truncate">
+                  {p.title || '[empty]'}
+                </div>
+                {p.preview && (
+                  <div className="text-[10px] text-slate-500 truncate mt-0.5">
+                    {p.preview}
+                  </div>
+                )}
+              </div>
+              <span className="text-[10px] text-slate-600 font-mono shrink-0 mt-0.5">
+                {p.word_count}w
+              </span>
+            </button>
+          ))
+        )}
+      </div>
+
+      {/* Pagination controls */}
+      {total > PASSAGE_PAGE_SIZE && (
+        <div className="px-4 py-2 border-t border-slate-800 flex items-center justify-between gap-2 text-xs text-slate-500">
+          <button
+            onClick={goPrev}
+            disabled={offset === 0}
+            className="flex items-center gap-1 px-2 py-0.5 rounded hover:bg-slate-700/40 hover:text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            <ChevronLeft size={11} />
+            Prev
+          </button>
+          <div className="flex items-center gap-2">
+            <span className="font-mono">
+              Page {currentPage.toLocaleString()} of {totalPages.toLocaleString()}
+            </span>
+            <span className="text-slate-600">·</span>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                const n = parseInt(pageJump, 10)
+                if (!isNaN(n)) goPage(n)
+                setPageJump('')
+              }}
+              className="flex items-center gap-1"
+            >
+              <span className="text-[10px] uppercase tracking-wider">jump</span>
+              <input
+                type="text"
+                value={pageJump}
+                onChange={(e) => setPageJump(e.target.value)}
+                placeholder={String(currentPage)}
+                className="w-12 rounded bg-slate-950/60 border border-slate-800 px-1.5 py-0.5 text-[11px] text-slate-200 font-mono focus:outline-none focus:border-purple-500/60"
+              />
+            </form>
+          </div>
+          <button
+            onClick={goNext}
+            disabled={offset + PASSAGE_PAGE_SIZE >= total}
+            className="flex items-center gap-1 px-2 py-0.5 rounded hover:bg-slate-700/40 hover:text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            Next
+            <ChevronRight size={11} />
+          </button>
+        </div>
+      )}
     </div>
   )
 }

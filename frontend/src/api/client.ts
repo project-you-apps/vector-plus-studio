@@ -137,6 +137,31 @@ export async function getDeletedPatterns(): Promise<DeletedPattern[]> {
   return data.deleted
 }
 
+export interface PatternListItem {
+  idx: number
+  title: string
+  preview: string
+  word_count: number
+}
+
+export interface PatternListResponse {
+  passages: PatternListItem[]
+  total: number
+  offset: number
+  limit: number
+  filter: string | null
+}
+
+export async function listPatterns(
+  offset: number = 0,
+  limit: number = 25,
+  q?: string,
+): Promise<PatternListResponse> {
+  const params = new URLSearchParams({ offset: String(offset), limit: String(limit) })
+  if (q && q.trim()) params.append('q', q.trim())
+  return fetchJSON<PatternListResponse>(`/patterns?${params.toString()}`)
+}
+
 export async function addPassage(text: string) {
   return fetchJSON<{ success: boolean; message: string }>(
     '/patterns',

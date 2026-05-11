@@ -109,6 +109,19 @@ class DeletedPattern(BaseModel):
 class DeletedListResponse(BaseModel):
     deleted: list[DeletedPattern]
 
+class PatternListItem(BaseModel):
+    idx: int
+    title: str
+    preview: str
+    word_count: int
+
+class PatternListResponse(BaseModel):
+    passages: list[PatternListItem]
+    total: int          # active (non-tombstoned) passage count, post-filter
+    offset: int
+    limit: int
+    filter: str | None = None
+
 class PatternResponse(BaseModel):
     idx: int
     title: str

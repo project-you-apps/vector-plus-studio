@@ -75,7 +75,7 @@ from .models import (
     CartridgeInfo, CartridgeListResponse, MountResponse,
     SearchResult, SearchResponse, StatusResponse,
     DeletedPattern, DeletedListResponse, MessageResponse,
-    PatternResponse,
+    PatternResponse, PatternListItem, PatternListResponse,
     MemboxLockState, MemboxCartInfo, MemboxWriteEntry, MemboxStatus,
     MemboxCartListResponse, MemboxImprintRequest,
     MemboxMountRequest, MemboxUnmountRequest,
@@ -1202,6 +1202,62 @@ async def list_deleted():
                 preview=" ".join(lines[1:3])[:200] if len(lines) > 1 else "",
             ))
     return DeletedListResponse(deleted=deleted)
+
+
+@app.get("/api/patterns", response_model=PatternListResponse)
+async def list_patterns(offset: int = 0, limit: int = 25, q: str | None = None):
+    """Paginated list of active (non-tombstoned) passages with first-line
+    title + body preview. Used by the Edit Carts passage browser to give
+    users a click-to-populate IDX experience for the Update/Delete panels.
+
+    Optional `q` is a case-insensitive substring filter on the passage text.
+    Returns total count of active+matching passages for client-side
+    pagination math (page count = ceil(total / limit)).
+
+    Andy 2026-05-10. Tombstoned passages live in /api/patterns/deleted —
+    intentional separation so the browser doesn't have to filter them out.
+    """
+    if limit < 1:
+        limit = 25
+    if limit > 200:
+        limit = 200  # defensive cap so a misconfigured client can't pull 100k rows
+    if offset < 0:
+        offset = 0
+
+    needle = (q or "").strip().lower()
+    deleted = engine.deleted_ids
+
+    matching: list[tuple[int, str]] = []
+    for i, text in enumerate(engine.passages):
+        if i in deleted:
+            continue
+        if needle and needle not in (text or "").lower():
+            continue
+        matching.append((i, text or ""))
+
+    total = len(matching)
+    page = matching[offset : offset + limit]
+
+    items: list[PatternListItem] = []
+    for idx, text in page:
+        lines = text.splitlines() if text else ["[empty]"]
+        title = lines[0][:120] if lines else "[empty]"
+        preview = " ".join(lines[1:3])[:200] if len(lines) > 1 else ""
+        word_count = len((text or "").split())
+        items.append(PatternListItem(
+            idx=idx,
+            title=title,
+            preview=preview,
+            word_count=word_count,
+        ))
+
+    return PatternListResponse(
+        passages=items,
+        total=total,
+        offset=offset,
+        limit=limit,
+        filter=q if q else None,
+    )
 
 
 @app.get("/api/patterns/{idx}", response_model=PatternResponse)
