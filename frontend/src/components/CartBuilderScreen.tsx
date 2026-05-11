@@ -3,7 +3,6 @@ import { Hammer, Loader2 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { useCartBuilderStore } from '../store/cartBuilderStore'
 import CartBrowser from './CartBrowser'
-import FolderPickerModal from './FolderPickerModal'
 
 // BrowserCartBuilder lazy-loaded — pulls in transformers.js (~600KB gzip),
 // pdfjs, mammoth, xlsx, npyjs, jszip, and the cart-builder-v2 pipeline.
@@ -79,9 +78,8 @@ export default function CartBuilderScreen() {
         />
       </div>
 
-      {/* FolderPickerModal kept passive — CartBrowser may surface it for
-          add-saved-folder flows. No active state owned by this screen. */}
-      <FolderPickerModal />
+      {/* FolderPickerModal lives at App level (App.tsx) — it's store-driven
+          and used by CartBrowser from both Cart Builder AND Edit Carts. */}
     </main>
   )
 }

@@ -12,6 +12,7 @@ import OverviewScreen from './components/OverviewScreen'
 import SettingsScreen from './components/SettingsScreen'
 import CartBuilderScreen from './components/CartBuilderScreen'
 import CRUDScreen from './components/CRUDScreen'
+import FolderPickerModal from './components/FolderPickerModal'
 import Toaster from './components/Toaster'
 
 // Stub placeholders for nav-rail screens introduced in 2026-05-03 reorg.
@@ -123,6 +124,10 @@ export default function App() {
       </div>
       <PassageModal />
       <MemboxPanel />
+      {/* Folder picker is store-driven and used by CartBrowser regardless of
+          which screen the user is on (Cart Builder OR Edit Carts). Mounted at
+          app level so it renders no matter which screen owns the trigger. */}
+      <FolderPickerModal />
       <Toaster />
     </div>
   )
