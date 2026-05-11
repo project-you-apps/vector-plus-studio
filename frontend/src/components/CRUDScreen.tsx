@@ -654,11 +654,57 @@ function NewCartPanel({
   const [result, setResult] = useState<BuiltCart | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [destFolder, setDestFolder] = useState<string>('')
+  const [destFolderCarts, setDestFolderCarts] = useState<{ name: string; filename: string; size_mb: number; passages: number | string }[]>([])
+  const [destFolderLoading, setDestFolderLoading] = useState(false)
+  const [destFolderError, setDestFolderError] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
   const openFolderPicker = useCartBuilderStore((s) => s.openFolderPicker)
   const refreshBrowser = useCartBuilderStore((s) => s.refreshBrowser)
   const mountCart = useAppStore((s) => s.mount)
+
+  // Pre-flight: when a destination folder is picked, list any existing
+  // .cart.npz files there so the user sees collisions before committing
+  // the build. Andy 2026-05-10: "if there are carts already in there
+  // they can see if they chose a name that's already taken before even
+  // committing to the process."
+  useEffect(() => {
+    if (!destFolder) {
+      setDestFolderCarts([])
+      setDestFolderError(null)
+      return
+    }
+    let cancelled = false
+    setDestFolderLoading(true)
+    setDestFolderError(null)
+    cb.listCarts(destFolder)
+      .then((resp) => {
+        if (cancelled) return
+        setDestFolderCarts(resp.carts.map((c) => ({
+          name: c.name,
+          filename: c.filename,
+          size_mb: c.size_mb,
+          passages: c.passages,
+        })))
+      })
+      .catch((e) => {
+        if (cancelled) return
+        setDestFolderError(e instanceof Error ? e.message : String(e))
+      })
+      .finally(() => {
+        if (!cancelled) setDestFolderLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [destFolder])
+
+  // Sanitized cart filename for collision detection — must match server-side
+  // sanitization in api/cartbuilder.py:build_to_folder so the highlight is
+  // accurate before the actual write attempt.
+  const sanitizedFilename = (() => {
+    const safe = cartName.trim().replace(/[^A-Za-z0-9_-]/g, '_')
+    return `${safe || 'new-cart'}.cart.npz`
+  })()
+  const collisionDetected = destFolderCarts.some((c) => c.filename === sanitizedFilename)
 
   // Prerequisite gating — cart name + destination folder must be set before
   // any passage editing. Without these, the user is adding passages to
@@ -876,6 +922,66 @@ function NewCartPanel({
           </div>
         </div>
       </div>
+
+      {/* Pre-flight preview of existing carts in the destination folder.
+          Surfaces name collisions BEFORE the user commits to a build, so
+          they can rename or pick a different folder ahead of time. The
+          would-collide entry highlights amber. */}
+      {destFolder && (
+        <div className="rounded-lg border border-slate-700 bg-slate-900/30 px-3 py-2">
+          <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-slate-500 mb-1.5">
+            <Folder size={11} className="text-slate-500" />
+            Existing carts in this folder
+            <span className="font-mono normal-case tracking-normal text-slate-400">
+              ({destFolderLoading ? '…' : destFolderCarts.length})
+            </span>
+            {collisionDetected && (
+              <span className="ml-auto flex items-center gap-1 text-amber-400 normal-case tracking-normal font-medium">
+                <AlertCircle size={11} />
+                {sanitizedFilename} already exists — Save will prompt to replace
+              </span>
+            )}
+          </div>
+          {destFolderError ? (
+            <div className="text-xs text-rose-300 italic flex items-center gap-1">
+              <AlertCircle size={11} className="text-rose-400 shrink-0" />
+              {destFolderError}
+            </div>
+          ) : destFolderLoading ? (
+            <div className="text-xs text-slate-500 italic flex items-center gap-1">
+              <Loader2 size={11} className="animate-spin" />
+              Reading folder…
+            </div>
+          ) : destFolderCarts.length === 0 ? (
+            <div className="text-xs text-slate-600 italic">
+              Empty — no name collisions possible.
+            </div>
+          ) : (
+            <div className="max-h-[120px] overflow-y-auto -mx-1 divide-y divide-slate-800/60">
+              {destFolderCarts.map((c) => {
+                const isCollision = c.filename === sanitizedFilename
+                return (
+                  <div
+                    key={c.filename}
+                    className={`px-2 py-1 flex items-center gap-2 text-xs font-mono ${
+                      isCollision ? 'bg-amber-500/10 text-amber-100' : 'text-slate-400'
+                    }`}
+                  >
+                    <Folder size={10} className={isCollision ? 'text-amber-400 shrink-0' : 'text-slate-600 shrink-0'} />
+                    <span className="flex-1 truncate">{c.filename}</span>
+                    <span className="text-[10px] text-slate-600 shrink-0">
+                      {c.passages} passages
+                    </span>
+                    <span className="text-[10px] text-slate-600 shrink-0">
+                      {c.size_mb.toFixed(1)} MB
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Prerequisite hint banner — explicit feedback when the user needs to
           complete cart name + destination folder before composing. */}
