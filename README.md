@@ -1,6 +1,8 @@
 # Vector+ Studio v1.1 — Hosted Demo + Browser-Side Cart Builder
 
-> **[ANDY: voice-driven hook paragraph here — 2-3 sentences. The "try it without installing anything" angle. Mother-in-law-test framing. Hosted at https://project-you.app/vps/app — no GPU, no install, no signup.]**
+<!-- ANDY: voice-driven hook paragraph here — 2-3 sentences. The "try it without installing anything" angle. Mother-in-law-test framing. Hosted at https://project-you.app/vps/app — no GPU, no install, no signup. -->
+<!-- The HTML-comment form keeps the prompt in the source for later authoring while staying invisible in GitHub's rendered view during launch week. -->
+
 
 **What v1.1 adds on top of the desktop v1.0 product:**
 
@@ -20,7 +22,8 @@ No install, no GPU, no signup. The droplet does the physics; your browser handle
 
 ## Quick Start (Browser-Side Cart Builder)
 
-> **[ANDY: voice-driven explanation of why building in the browser matters — privacy (your files never leave your machine), portability (the .cart.npz works anywhere), the "data tour" framing.]**
+<!-- ANDY: voice-driven explanation of why building in the browser matters — privacy (your files never leave your machine), portability (the .cart.npz works anywhere), the "data tour" framing. -->
+
 
 1. Open the hosted demo or run locally
 2. Click "Build Cartridge" → drop in PDFs/DOCX/XLSX/TXT (up to 50MB total, 10K chunks)
@@ -44,7 +47,8 @@ Search UI (React + Zustand)         ←→   │           └── VPS_READ_ON
                                          └── nginx (reverse proxy + TLS)
 ```
 
-> **[ANDY: voice-driven framing of why "build in browser, search on server" matters — separation of trust, no upload of sensitive content unless explicitly chosen, etc.]**
+<!-- ANDY: voice-driven framing of why "build in browser, search on server" matters — separation of trust, no upload of sensitive content unless explicitly chosen, etc. -->
+
 
 ## What v1.1 Does NOT Do (yet)
 
@@ -69,7 +73,8 @@ Search UI (React + Zustand)         ←→   │           └── VPS_READ_ON
 - **Pattern-level**: hippocampus row 29 stores per-pattern `perms_byte`. Default `0x03` (read+search) for browser-built carts.
 - **Upload validation**: streaming-to-disk with zip-slip protection, zip-bomb cap (200×), entry-type allowlist (`.npy` only). Uploads are quarantined to the sandbox dir; eject removes them.
 
-> **[ANDY: voice-driven section here on the "RAG+" framing — three-tier provenance (card preview → modal full text → source URL). Why this is different from "just another vector DB". Pull from CC_provenance-as-feature_2026-05.md and CC_substrate-validates-across-scales_2026-05.md.]**
+<!-- ANDY: voice-driven section here on the "RAG+" framing — three-tier provenance (card preview → modal full text → source URL). Why this is different from "just another vector DB". Pull from CC_provenance-as-feature_2026-05.md and CC_substrate-validates-across-scales_2026-05.md. -->
+
 
 ---
 
