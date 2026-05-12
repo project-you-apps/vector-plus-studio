@@ -1,8 +1,6 @@
 # Vector+ Studio v1.1 — Hosted Demo + Browser-Side Cart Builder
 
-<!-- ANDY: voice-driven hook paragraph here — 2-3 sentences. The "try it without installing anything" angle. Mother-in-law-test framing. Hosted at https://project-you.app/vps/app — no GPU, no install, no signup. -->
-<!-- The HTML-comment form keeps the prompt in the source for later authoring while staying invisible in GitHub's rendered view during launch week. -->
-
+ I built Vector+ Studio (with Claude's help) to answer a specific question: what would search feel like if it found *related* ideas, not just matching words? The substrate is a neuromorphic lattice — physics-based retrieval that finds neighbors-by-meaning rather than nearest-by-distance. Try it at **https://project-you.app/vps/app** on the bundled sample carts, or drop in your own PDFs and the browser will build you a cartridge while you watch. No install, no GPU required. Sign in if you want your own private library; the demo carts are public and ready to search without signup.
 
 **What v1.1 adds on top of the desktop v1.0 product:**
 
@@ -22,8 +20,7 @@ No install, no GPU, no signup. The droplet does the physics; your browser handle
 
 ## Quick Start (Browser-Side Cart Builder)
 
-<!-- ANDY: voice-driven explanation of why building in the browser matters — privacy (your files never leave your machine), portability (the .cart.npz works anywhere), the "data tour" framing. -->
-
+The Cart Builder runs entirely in your browser. Your files never leave your machine during the build, so chunking, embedding, and writing all happen client-side via WebGPU (or WASM as a fallback). When you're done you have a `.cart.npz` file you can save locally, mount in the desktop app, or upload to the hosted demo if you want to share it. The cart format is one file; it travels anywhere and can even work without an internet connection. That's the "data tour" idea where *your* knowledge stays *yours*, in a portable artifact you can carry between machines and tools.
 
 1. Open the hosted demo or run locally
 2. Click "Build Cartridge" → drop in PDFs/DOCX/XLSX/TXT (up to 50MB total, 10K chunks)
@@ -47,8 +44,7 @@ Search UI (React + Zustand)         ←→   │           └── VPS_READ_ON
                                          └── nginx (reverse proxy + TLS)
 ```
 
-<!-- ANDY: voice-driven framing of why "build in browser, search on server" matters — separation of trust, no upload of sensitive content unless explicitly chosen, etc. -->
-
+The trust boundary is deliberate. Your files only leave your machine if *you* decide to upload the resulting cart. Chunking, embedding, and writing is all on the client-side. The server's job is to mount cartridges you've explicitly hand to it and run the physics-based search against them. We never see your raw documents unless you choose to put them in the public sandbox. (And the sandbox is exactly that: a sandbox. TTL'd, ejectable by anyone with the link, never written to the canonical catalog.)
 
 ## What v1.1 Does NOT Do (yet)
 
