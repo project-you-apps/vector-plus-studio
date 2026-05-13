@@ -1,5 +1,7 @@
 # Vector+ Studio v1.2 — Hosted Demo + Browser-Side Cart Builder + OAuth
 
+ I built Vector+ Studio (with Claude's help) to answer a specific question: what would search feel like if it found *related* ideas, not just matching words? The substrate is a neuromorphic lattice — physics-based retrieval that finds neighbors-by-meaning rather than nearest-by-distance. Try it at **https://project-you.app/vps/app** on the bundled sample carts, or drop in your own PDFs and the browser will build you a cartridge while you watch. No install, no GPU required. Sign in if you want your own private library; the demo carts are public and ready to search without signup.
+
 **What's new in v1.2:**
 
 - **Auth, per-user private libraries, and saved searches all landed** — There is now user login across all the project-you.app programs. User profiles are forthcoming soon.
@@ -11,7 +13,7 @@
 
 # Vector+ Studio v1.1 — Hosted Demo + Browser-Side Cart Builder
 
- I built Vector+ Studio (with Claude's help) to answer a specific question: what would search feel like if it found *related* ideas, not just matching words? The substrate is a neuromorphic lattice — physics-based retrieval that finds neighbors-by-meaning rather than nearest-by-distance. Try it at **https://project-you.app/vps/app** on the bundled sample carts, or drop in your own PDFs and the browser will build you a cartridge while you watch. No install, no GPU required. Sign in if you want your own private library; the demo carts are public and ready to search without signup.
+ VPS is actually the result of a decades-long research project started back in 1985. Someday I'll lay out the whole story but that's blog post material not readme material. Just know that this is built with neuroscience-inspired physics using Hebbian learning, attractor basins and energy-like values. But once a file is processed it no longer needs a neural net for access, the patterns in the cartridges are weighted and related. Search query embedding is handled by sentence-transformers on the frontend so there's no need for an LLM which should save you or your agents potentially thousands of tokens per search.
 
 **What v1.1 adds on top of the desktop v1.0 product:**
 
@@ -55,7 +57,7 @@ Search UI (React + Zustand)         ←→   │           └── VPS_READ_ON
                                          └── nginx (reverse proxy + TLS)
 ```
 
-The trust boundary is deliberate. Your files only leave your machine if *you* decide to upload the resulting cart. Chunking, embedding, and writing is all on the client-side. The server's job is to mount cartridges you explicitly hand to it and run the physics-based search against them. We never see your raw documents unless you choose to put them in the public sandbox. (And the sandbox is exactly that: a sandbox. TTL'd, ejectable by anyone with the link, never written to the canonical catalog.)
+The trust boundary is deliberate. Your files only leave your machine if *you* decide to upload the resulting cart. Chunking, embedding, and writing is all on the client-side to help protect any PII you might have in your documents. The server's job is to mount cartridges you've explicitly handed to it and run the physics-based search against them. We never see your raw documents unless you choose to put them in the public sandbox. (And the sandbox is exactly that: a sandbox. TTL'd, ejectable by anyone with the link, never written to the canonical catalog.)
 
 ## What v1.1 Does NOT Do (yet)
 
