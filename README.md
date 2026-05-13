@@ -1,3 +1,14 @@
+# Vector+ Studio v1.2 — Hosted Demo + Browser-Side Cart Builder + OAuth
+
+**What's new in v1.2:**
+
+- **Auth, per-user private libraries, and saved searches all landed** — There is now user login across all the project-you.app programs. User profiles are forthcoming soon.
+- **Multiple sign-ins** — Users can sign in at project-you.app/vps/app via Google / GitHub / email / magic link.
+- **Cookie domain is .project-you.app** — This means future Waving Cat apps share the same sign-in and we're GDPR-friendly.
+- **Mempack — per-user writable carts** — Now agents can bring their own personal backpack to carry any data they want like research, memories, anything worth keeping.
+
+---
+
 # Vector+ Studio v1.1 — Hosted Demo + Browser-Side Cart Builder
 
  I built Vector+ Studio (with Claude's help) to answer a specific question: what would search feel like if it found *related* ideas, not just matching words? The substrate is a neuromorphic lattice — physics-based retrieval that finds neighbors-by-meaning rather than nearest-by-distance. Try it at **https://project-you.app/vps/app** on the bundled sample carts, or drop in your own PDFs and the browser will build you a cartridge while you watch. No install, no GPU required. Sign in if you want your own private library; the demo carts are public and ready to search without signup.
@@ -44,14 +55,14 @@ Search UI (React + Zustand)         ←→   │           └── VPS_READ_ON
                                          └── nginx (reverse proxy + TLS)
 ```
 
-The trust boundary is deliberate. Your files only leave your machine if *you* decide to upload the resulting cart. Chunking, embedding, and writing is all on the client-side. The server's job is to mount cartridges you've explicitly hand to it and run the physics-based search against them. We never see your raw documents unless you choose to put them in the public sandbox. (And the sandbox is exactly that: a sandbox. TTL'd, ejectable by anyone with the link, never written to the canonical catalog.)
+The trust boundary is deliberate. Your files only leave your machine if *you* decide to upload the resulting cart. Chunking, embedding, and writing is all on the client-side. The server's job is to mount cartridges you explicitly hand to it and run the physics-based search against them. We never see your raw documents unless you choose to put them in the public sandbox. (And the sandbox is exactly that: a sandbox. TTL'd, ejectable by anyone with the link, never written to the canonical catalog.)
 
 ## What v1.1 Does NOT Do (yet)
 
-- **No auth.** The sandbox is public; sample cartridges are read-only and uploaded carts are eject-able by anyone with the link. OAuth lands the week after launch.
 - **No persistent user state.** Mount/unmount and search work; saved searches, bookmarks, and per-user cart lists do not.
 - **No marketplace.** Listing/buying/sharing carts is on the roadmap but not in v1.1.
 - **WebGPU-required for fast builds.** The WASM fallback works but is 3-5× slower; on Safari (no WebGPU as of writing) builds are usable but not fast.
+- **Auth, per-user private libraries, and saved searches** landing in **v1.2**.
 
 ## Browser Compatibility
 
@@ -69,8 +80,21 @@ The trust boundary is deliberate. Your files only leave your machine if *you* de
 - **Pattern-level**: hippocampus row 29 stores per-pattern `perms_byte`. Default `0x03` (read+search) for browser-built carts.
 - **Upload validation**: streaming-to-disk with zip-slip protection, zip-bomb cap (200×), entry-type allowlist (`.npy` only). Uploads are quarantined to the sandbox dir; eject removes them.
 
-<!-- ANDY: voice-driven section here on the "RAG+" framing — three-tier provenance (card preview → modal full text → source URL). Why this is different from "just another vector DB". Pull from CC_provenance-as-feature_2026-05.md and CC_substrate-validates-across-scales_2026-05.md. -->
+## RAG+ — Three-Tier Provenance
 
+Generally, a standard vector RAG returns a chunk matching as close to the embedded query as possible. But the provenance of that chunk (the document source filename, etc.) is almost always invisible to the user. This makes verification against the original document cost more work outside of the search tool. I found that frustrating because standard RAG usually lacks a place for that sort of metadata--or if it *does* exist it's tacked on in some sort of sidecar or worse a diskspace-gobbling index file that grows too large very fast.
+
+Vector+ Studio's cart format solves that issue by producing three layers of provenance for every result:
+
+1. **Card preview** — matched text snippet from the in-RAM index (~200 chars). Sub-millisecond cosine + Hamming hit on a compact binary code.
+2. **Modal full text** — complete passage from the cart's on-disk source database, fetched on click.
+3. **External link** — the canonical source URL (arXiv paper, gutenberg.org poem, original document, etc.). One click, new tab.
+
+All three layers are accessible from every result. Each has a name and a click target. They are stored on the same paired pattern as the embedded text.
+
+This is an architectural property of the split-cart format (NPZ index + SQLite text + URL field), not a feature bolted on. The pattern also holds across encoders because the LatticeRunner substrate technology underneath all of this is "dumb" which is to say it accepts any encoding format for any data stored on it. You can swap the embedding model and the three-tier shape stays identical, because provenance is a property of how the cart is structured, not how the embeddings were computed.
+
+The result: users verify against the original source without trusting the search system. This addresses the RAG-hallucination problem directly.
 
 ---
 
