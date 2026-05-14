@@ -86,10 +86,14 @@ def hamming_blend_search(q_emb: np.ndarray, embeddings: np.ndarray,
 
     Matches Membot's production search pipeline. No GPU needed.
     """
-    # Cosine similarity
-    e_norms = np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-9
-    q_norm = np.linalg.norm(q_emb) + 1e-9
-    cos_scores = np.dot(embeddings / e_norms, q_emb / q_norm)
+    # Cosine similarity (memory-efficient: no full-size float32 intermediates).
+    # The naive `np.linalg.norm(embeddings, ...)` + `embeddings / e_norms`
+    # pattern allocates two ~(N x 768) float32 temps every search — ~350MB on
+    # a 60K-passage cart, which OOMs a 4GB droplet. einsum + scalar-divide on
+    # an already-normalized query produces identical results with <1MB temp.
+    q_normalized = q_emb / (np.linalg.norm(q_emb) + 1e-9)
+    e_norms = np.sqrt(np.einsum('ij,ij->i', embeddings, embeddings)) + 1e-9
+    cos_scores = (embeddings @ q_normalized) / e_norms
 
     # Sign-zero Hamming similarity
     q_bin = (q_emb > 0).astype(np.uint8)

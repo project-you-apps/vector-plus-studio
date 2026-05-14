@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   Pencil, Plus, Save, Trash2, RotateCcw, Lock, Unlock, FilePlus2,
-  FolderOpen, Folder, Database, AlertCircle, CheckCircle2, Loader2, Info,
+  FolderOpen, Folder, Database, AlertCircle, CheckCircle2, Loader2,
   Hammer, ChevronRight, X, List, ChevronLeft, Search,
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'

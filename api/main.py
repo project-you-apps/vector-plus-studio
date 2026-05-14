@@ -8,6 +8,7 @@ Start with:
 
 import asyncio
 import os
+import re
 import sqlite3
 import time
 import threading
@@ -16,6 +17,65 @@ import numpy as np
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+
+# ---------------------------------------------------------------------------
+# Sentry error monitoring (Andy 2026-05-12).
+# DSN comes from SENTRY_DSN env var; gracefully no-ops if unset (local dev).
+# send_default_pii is ON — we collect email/avatar/user UUID which Andy
+# explicitly accepts as low-risk. The before_send hook scrubs auth headers,
+# JWT-pattern strings, and Bearer tokens before transmission so we don't
+# accidentally leak credentials in error context.
+# ---------------------------------------------------------------------------
+_SENTRY_DSN = os.environ.get("SENTRY_DSN")
+if _SENTRY_DSN:
+    import sentry_sdk
+
+    _JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
+    _BEARER_RE = re.compile(r"Bearer\s+[A-Za-z0-9_.\-]+", re.IGNORECASE)
+    _SENSITIVE_KEYS = {
+        "authorization", "cookie", "x-api-key",
+        "supabase_jwt_secret", "supabase_service_role_key",
+        "sentry_dsn",  # don't echo our own DSN back to Sentry
+    }
+
+    def _sentry_scrub_string(s):
+        if not isinstance(s, str):
+            return s
+        s = _JWT_RE.sub("[REDACTED-JWT]", s)
+        s = _BEARER_RE.sub("Bearer [REDACTED]", s)
+        return s
+
+    def _sentry_scrub_walk(obj):
+        if isinstance(obj, str):
+            return _sentry_scrub_string(obj)
+        if isinstance(obj, dict):
+            for k in list(obj.keys()):
+                if isinstance(k, str) and k.lower() in _SENSITIVE_KEYS:
+                    obj[k] = "[REDACTED]"
+                else:
+                    obj[k] = _sentry_scrub_walk(obj[k])
+            return obj
+        if isinstance(obj, list):
+            return [_sentry_scrub_walk(item) for item in obj]
+        return obj
+
+    def _sentry_before_send(event, hint):
+        try:
+            return _sentry_scrub_walk(event)
+        except Exception:
+            # If scrubbing itself errors, drop the event rather than leak.
+            return None
+
+    sentry_sdk.init(
+        dsn=_SENTRY_DSN,
+        send_default_pii=True,
+        before_send=_sentry_before_send,
+        traces_sample_rate=0.0,
+        environment=os.environ.get("VPS_ENVIRONMENT", "production"),
+    )
+    print("[Sentry] initialized with DSN scrubbing")
+else:
+    print("[Sentry] SENTRY_DSN not set — error monitoring disabled")
 
 # Global read-only mode for public deploys (e.g. droplet demo).
 # Set VPS_READ_ONLY=1 in the environment to refuse all unlock + write

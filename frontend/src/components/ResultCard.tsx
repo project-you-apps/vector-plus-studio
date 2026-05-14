@@ -141,8 +141,36 @@ export default function ResultCard({ result }: Props) {
   const query = useAppStore((s) => s.query)
   const confirmDeleteIdx = useAppStore((s) => s.confirmDeleteIdx)
   const setConfirmDeleteIdx = useAppStore((s) => s.setConfirmDeleteIdx)
+  const status = useAppStore((s) => s.status)
   const isConfirming = confirmDeleteIdx === result.idx
   const hasLinks = result.prev_idx != null || result.next_idx != null
+
+  // Compute write-availability from the same three layers Header.tsx checks:
+  //   1. Server-wide VPS_READ_ONLY env var (status.read_only_mode)
+  //   2. Cart-declared permissions sidecar (status.cart_permissions.default)
+  //   3. Per-session lock toggle (status.read_only)
+  // Plus pattern-level: result.perms.w from the hippocampus row.
+  // When any layer denies writes, Edit + Delete are disabled.
+  const cartDefault = String(status?.cart_permissions?.default ?? 'rw')
+  const cartReadOnly =
+    !!status?.read_only_mode
+    || !cartDefault.includes('w')
+    || !!status?.read_only
+  const patternLocked = !!(result.perms && !result.perms.w)
+  const writeDisabled = cartReadOnly || patternLocked
+
+  // Surface the specific reason in tooltips so the user knows WHY a button
+  // is disabled (server vs cart vs session vs pattern lock).
+  const disabledReason =
+    status?.read_only_mode
+      ? 'Server is in read-only mode (public demo).'
+    : !cartDefault.includes('w')
+      ? `Cart is read-only (.permissions.json default="${cartDefault}").`
+    : status?.read_only
+      ? 'Cart is currently locked. Click the lock icon in the header to unlock.'
+    : patternLocked
+      ? 'This pattern is locked at the hippocampus level.'
+    : null
 
   return (
     <div className="border border-slate-700/40 rounded-xl bg-slate-800/20 hover:bg-slate-800/40 transition-all overflow-hidden">
@@ -206,19 +234,27 @@ export default function ResultCard({ result }: Props) {
         <div className="shrink-0 flex items-center gap-1">
           <button
             onClick={() => openEditor(result.full_text, result.idx)}
-            className="p-2 rounded-lg hover:bg-slate-700/50 text-slate-500 hover:text-purple-400 transition-colors"
-            title="Edit passage"
+            disabled={writeDisabled}
+            className={`p-2 rounded-lg transition-colors ${
+              writeDisabled
+                ? 'text-slate-600 opacity-40 cursor-not-allowed'
+                : 'hover:bg-slate-700/50 text-slate-500 hover:text-purple-400'
+            }`}
+            title={writeDisabled ? (disabledReason ?? 'Read-only') : 'Edit passage'}
           >
             <Pencil size={16} />
           </button>
           <button
             onClick={() => setConfirmDeleteIdx(isConfirming ? null : result.idx)}
+            disabled={writeDisabled}
             className={`p-2 rounded-lg transition-colors ${
-              isConfirming
+              writeDisabled
+                ? 'text-slate-600 opacity-40 cursor-not-allowed'
+                : isConfirming
                 ? 'bg-red-500/20 text-red-400'
                 : 'hover:bg-slate-700/50 text-slate-500 hover:text-red-400'
             }`}
-            title="Delete"
+            title={writeDisabled ? (disabledReason ?? 'Read-only') : 'Delete'}
           >
             <Trash2 size={16} />
           </button>

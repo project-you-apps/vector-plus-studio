@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight, X, Loader2, FolderOpen } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import remarkBreaks from 'remark-breaks'
 import { useAppStore } from '../store/appStore'
 
 // Chunker overlap detection (Andy 2026-05-09 proposal). The browser-side
@@ -27,6 +28,33 @@ function findOverlap(suffixOf: string, prefixOf: string, maxChars = 600): number
     }
   }
   return 0
+}
+
+// Strip the chunker-prepended filename header from a passage body. The browser
+// Cart Builder's PDF chunker prepends `<filename> (part N/M)` to every chunk's
+// text. That duplicates the modal title (which already shows the same string)
+// and breaks findOverlap because the header changes per chunk (part 403/2615 →
+// part 404/2615) while the body content is what carries the ~50-word overlap
+// window. Return value: text with the header removed if present, original
+// text otherwise. Carts without this header pattern (raw text, markdown,
+// non-PDF sources) are unaffected — they don't match the regex.
+function stripChunkerHeader(text: string): string {
+  // Match either:
+  //   - PDF chunker:    `<filename> (part N/M)` followed by whitespace
+  //   - Bracketed tag:  `[Poem: "..." from ...]`, `[Note: ...]`, etc.
+  // The bracket case covers gutenberg-poetry and any other chunker that
+  // prefixes each chunk with a `[label: ...]` marker. Carts with no header
+  // pattern pass through unchanged.
+  const m = text.match(/^(?:.+?\(part \d+\/\d+\)|\[[^\]\n]*\])\s*/)
+  return m ? text.slice(m[0].length) : text
+}
+
+// Ensure verse numbers / line markers like `[5791]Some text` always have a
+// space between the closing bracket and the following word. The chunker
+// sometimes drops the line break that separated the marker from the verse
+// in the source, producing `[5791]Some` runs that read as one token.
+function spaceAfterBrackets(text: string): string {
+  return text.replace(/\](\S)/g, '] $1')
 }
 
 export default function PassageModal() {
@@ -69,30 +97,37 @@ export default function PassageModal() {
   }
 
   // Compute the [grayText, brightText] split based on detected overlap.
-  // When no overlap detected (different sections, different files, or first
-  // open from search result), grayText is empty and brightText is the full
-  // passage — i.e., default render.
+  // We work against the chunker-header-stripped body (not the raw full_text)
+  // for two reasons:
+  //   1. The header is already shown in the modal title bar above; rendering
+  //      it inline duplicates information (red highlight in 2026-05-11 QA).
+  //   2. The header differs per chunk (part 403/2615 → 404/2615), which
+  //      breaks findOverlap. Stripping reveals the actual ~50-word overlap
+  //      window at position 0 of the body (yellow highlight in QA).
+  // Carts without a chunker header pattern pass through unchanged.
   const { grayText, brightText, overlapPosition } = useMemo(() => {
     const fullText = passage?.full_text ?? ''
-    if (!prevTextForOverlap || !navDirection || !fullText) {
-      return { grayText: '', brightText: fullText, overlapPosition: null as 'prefix' | 'suffix' | null }
+    const body = spaceAfterBrackets(stripChunkerHeader(fullText))
+    if (!prevTextForOverlap || !navDirection || !body) {
+      return { grayText: '', brightText: body, overlapPosition: null as 'prefix' | 'suffix' | null }
     }
+    const prevBody = spaceAfterBrackets(stripChunkerHeader(prevTextForOverlap))
     if (navDirection === 'next') {
       // prev's suffix should be current's prefix (the chunker's overlap window)
-      const len = findOverlap(prevTextForOverlap, fullText)
-      if (len === 0) return { grayText: '', brightText: fullText, overlapPosition: null }
+      const len = findOverlap(prevBody, body)
+      if (len === 0) return { grayText: '', brightText: body, overlapPosition: null }
       return {
-        grayText: fullText.slice(0, len),
-        brightText: fullText.slice(len),
+        grayText: body.slice(0, len),
+        brightText: body.slice(len),
         overlapPosition: 'prefix' as const,
       }
     } else {
       // 'prev' direction: current's suffix should be prev's prefix
-      const len = findOverlap(fullText, prevTextForOverlap)
-      if (len === 0) return { grayText: '', brightText: fullText, overlapPosition: null }
+      const len = findOverlap(body, prevBody)
+      if (len === 0) return { grayText: '', brightText: body, overlapPosition: null }
       return {
-        grayText: fullText.slice(-len),
-        brightText: fullText.slice(0, -len),
+        grayText: body.slice(-len),
+        brightText: body.slice(0, -len),
         overlapPosition: 'suffix' as const,
       }
     }
@@ -171,7 +206,7 @@ export default function PassageModal() {
                 </>
               )}
               <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
+                remarkPlugins={[remarkGfm, remarkBreaks]}
                 components={{
                   h1: ({ children }) => <h1 className="text-xl font-semibold text-slate-100 mt-4 mb-2">{children}</h1>,
                   h2: ({ children }) => <h2 className="text-lg font-semibold text-slate-100 mt-3 mb-2">{children}</h2>,
