@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project You</title>
+<!--
+  Central auth router for the Waving Cat product stack.
+
+  Lives at https://project-you.app/ . Two jobs:
+    1. OAuth callback fan-out: Supabase Site URL points here. Each app stamps
+       `auth_return_app` in localStorage before signInWithOAuth. We read it
+       post-OAuth and redirect to /vps/app/?code=..., /membot/app/?code=...,
+       etc. Same-origin localStorage survives the roundtrip.
+    2. Manual visit: show a simple app picker.
+
+  No Supabase client loaded here on purpose — we just preserve `?code=` /
+  `#access_token=` through the redirect. The destination app's @supabase/ssr
+  client performs the code-for-session exchange and sets cookies.
+
+  Adding a new app: add to APP_ROUTES below + add the app's path to the
+  picker UI. That's it.
+
+  Source: vector-plus-studio-repo/landing/index.html
+  Deploy target: /var/www/project-you.app/index.html on the droplet,
+  served by nginx for location = /.
+-->
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: radial-gradient(ellipse at top, #1e293b 0%, #0f172a 60%, #020617 100%);
+    color: #e2e8f0;
+  }
+  .card {
+    max-width: 480px;
+    width: 100%;
+    padding: 2.5rem 2rem;
+    text-align: center;
+  }
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 1.5rem;
+  }
+  .brand-mark {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 1.1rem;
+    color: #fff;
+  }
+  .brand-name {
+    font-size: 1.25rem;
+    font-weight: 600;
+    background: linear-gradient(90deg, #a855f7 0%, #ec4899 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .spinner {
+    width: 28px;
+    height: 28px;
+    border: 3px solid #334155;
+    border-top-color: #a855f7;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin: 0 auto 1rem;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .status {
+    color: #94a3b8;
+    font-size: 0.95rem;
+  }
+  .apps {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+    margin-top: 1.5rem;
+  }
+  .app-link {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.85rem 1rem;
+    border-radius: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    background: rgba(30, 41, 59, 0.6);
+    color: #e2e8f0;
+    text-decoration: none;
+    font-size: 0.95rem;
+    transition: all 0.15s ease;
+  }
+  .app-link:hover {
+    border-color: #a855f7;
+    background: rgba(168, 85, 247, 0.1);
+  }
+  .app-name { font-weight: 500; }
+  .app-arrow { color: #64748b; }
+  .footer {
+    margin-top: 2rem;
+    font-size: 0.75rem;
+    color: #475569;
+  }
+  .footer a { color: #64748b; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="brand">
+    <div class="brand-mark">⚡</div>
+    <div class="brand-name">Project You</div>
+  </div>
+
+  <div id="loading-view">
+    <div class="spinner"></div>
+    <div class="status">Signing you in…</div>
+  </div>
+
+  <div id="picker-view" class="hidden">
+    <div class="status" style="margin-bottom: 0.5rem;">Waving Cat product stack</div>
+    <div class="apps">
+      <a class="app-link" href="/vps/app/">
+        <span class="app-name">Vector+ Studio</span>
+        <span class="app-arrow">→</span>
+      </a>
+      <!-- Add new app rows here as they come online. Mirror an entry in APP_ROUTES below. -->
+    </div>
+    <div class="footer">
+      <a href="https://wavingcat.dev" target="_blank" rel="noopener">wavingcat.dev</a>
+    </div>
+  </div>
+
+  <noscript>
+    <p>JavaScript is required for the auth router.</p>
+    <p><a href="/vps/app/" style="color:#a855f7">Continue to Vector+ Studio →</a></p>
+  </noscript>
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  // App id -> URL path. Add new apps here.
+  var APP_ROUTES = {
+    vps:    '/vps/app/',
+    membot: '/membot/app/'
+  };
+  var DEFAULT_APP = 'vps';
+  var RETURN_APP_KEY = 'auth_return_app';
+
+  var qs   = window.location.search;  // includes leading '?' if any
+  var hash = window.location.hash;    // includes leading '#' if any
+
+  // Detect OAuth callback params. Code-flow uses ?code=; implicit flow uses
+  // #access_token=; error states use ?error= or #error=.
+  var hasAuthParams = /[?&#](code|access_token|error|error_description)=/.test(qs + hash);
+
+  if (!hasAuthParams) {
+    // Manual visit (or anything that isn't an OAuth return) — show the picker.
+    // We intentionally do NOT touch localStorage here in case a sign-in is
+    // mid-flight in another tab.
+    document.getElementById('loading-view').classList.add('hidden');
+    document.getElementById('picker-view').classList.remove('hidden');
+    return;
+  }
+
+  // OAuth callback path — read return-app, clear it, route.
+  var app = null;
+  try {
+    app = localStorage.getItem(RETURN_APP_KEY);
+    localStorage.removeItem(RETURN_APP_KEY);
+  } catch (e) { /* private mode / quota — fall through to default */ }
+
+  if (!app || !APP_ROUTES[app]) {
+    app = DEFAULT_APP;
+  }
+
+  // Forward to the destination, preserving the auth params verbatim. The
+  // destination's Supabase client handles the code-for-session exchange.
+  window.location.replace(APP_ROUTES[app] + qs + hash);
+})();
+</script>
+</body>
+</html>

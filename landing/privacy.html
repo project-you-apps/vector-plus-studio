@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy — Waving Cat / Project You</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; min-height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: radial-gradient(ellipse at top, #1e293b 0%, #0f172a 60%, #020617 100%);
+    color: #e2e8f0; line-height: 1.6;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 3rem 1.5rem 6rem; }
+  .home { display: inline-flex; align-items: center; gap: 0.5rem; color: #94a3b8; text-decoration: none; font-size: 0.85rem; margin-bottom: 2rem; }
+  .home:hover { color: #a855f7; }
+  h1 { font-size: 1.8rem; margin: 0 0 0.4rem; background: linear-gradient(90deg, #a855f7 0%, #ec4899 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+  .sub { color: #64748b; font-size: 0.85rem; margin-bottom: 2rem; }
+  h2 { font-size: 1.15rem; margin: 2.2rem 0 0.7rem; color: #e2e8f0; border-top: 1px solid rgba(148, 163, 184, 0.15); padding-top: 1.5rem; }
+  h2:first-of-type { border-top: none; padding-top: 0; }
+  p, li { color: #cbd5e1; font-size: 0.95rem; }
+  ul { padding-left: 1.4rem; }
+  li { margin: 0.35rem 0; }
+  strong { color: #e2e8f0; }
+  a { color: #a855f7; }
+  code { background: rgba(168, 85, 247, 0.12); padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.85em; color: #e9d5ff; }
+  .footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid rgba(148, 163, 184, 0.15); color: #64748b; font-size: 0.8rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<a class="home" href="/vps/app/">← Vector+ Studio</a>
+
+<h1>Privacy</h1>
+<div class="sub">Last updated 2026-05-12 · v1.0</div>
+
+<p>Hey, I'm Andy. I built Vector+ Studio (with Claude's help, of course) and the other Waving Cat apps you'll find here. This page tells you exactly what data the apps collect, why, and what you can do about it. Plain English, no dark patterns.</p>
+
+<h2>What lands when you sign in</h2>
+<p>When you sign in with Google, GitHub, email/password, or a magic link, here's what lands in my systems:</p>
+<ul>
+  <li><strong>Your email address</strong> — needed to identify you across sessions and to reach you if something breaks.</li>
+  <li><strong>Your name and avatar URL</strong> — only if your provider (Google, GitHub) passed those along. Used for the small avatar in the header.</li>
+  <li><strong>A session cookie</strong> — a token that says "this browser is signed in." Set on <code>.project-you.app</code> so future Waving Cat apps share the same sign-in. Lasts about 1 hour, refreshed automatically while you're using the site.</li>
+</ul>
+<p>That's it for sign-in. No tracking pixels, no third-party ad scripts.</p>
+
+<h2>What lands when you use the apps</h2>
+<ul>
+  <li><strong>Carts you build in your browser</strong> — these are computed locally and only leave your machine if you choose to upload them.</li>
+  <li><strong>Carts you upload to the public sandbox</strong> — live temporarily on the server for up to an hour, then auto-delete. While they're there, anyone with the link can search them.</li>
+  <li><strong>Carts you upload to your private library</strong> — only you can see them. Stay until you delete them.</li>
+  <li><strong>Search queries</strong> — logged with the cart you ran them against, for debugging. Not used for ads, profiling, or anything else.</li>
+  <li><strong>IP address</strong> — nginx access logs. Kept ~30 days. Used to investigate abuse if it happens.</li>
+</ul>
+
+<h2>Who I share data with</h2>
+<ul>
+  <li><strong>Supabase</strong> handles auth. They see your email and provider IDs. Their privacy policy: <a href="https://supabase.com/privacy" target="_blank" rel="noopener">supabase.com/privacy</a>.</li>
+  <li><strong>Google / GitHub</strong> know you signed into Waving Cat. They don't see what you do inside.</li>
+  <li><strong>DigitalOcean</strong> hosts the servers and routes traffic. Their policy: <a href="https://www.digitalocean.com/legal/privacy-policy" target="_blank" rel="noopener">digitalocean.com/legal/privacy-policy</a>.</li>
+  <li><strong>No one else.</strong> No data brokers, no marketing platforms, no analytics consortiums. If that changes I'll update this page and prompt you to re-accept.</li>
+</ul>
+
+<h2>How long things stick around</h2>
+<ul>
+  <li>Profile info: until you ask me to delete it.</li>
+  <li>Sandbox carts: ~1 hour TTL, then auto-deleted.</li>
+  <li>Private carts: until you delete them or close your account.</li>
+  <li>nginx access logs: ~30 days.</li>
+  <li>Supabase audit logs: per their default retention (typically 90 days).</li>
+</ul>
+
+<h2>Your rights (GDPR list, plain English)</h2>
+<ul>
+  <li><strong>Access</strong> — ask me what I have on you. I'll send it within 30 days.</li>
+  <li><strong>Correct</strong> — ask me to fix it if anything's wrong.</li>
+  <li><strong>Delete</strong> — ask me to delete it. Account plus all your carts. Within 30 days.</li>
+  <li><strong>Export</strong> — ask me for a downloadable copy of your data.</li>
+  <li><strong>Object</strong> — tell me to stop processing your data. For most things this just means closing your account.</li>
+  <li><strong>Complain</strong> — if you think I'm doing something wrong, your local data-protection authority is the right place. (UK: ICO. EU: your member-state DPA. California: AG's office.)</li>
+</ul>
+
+<h2>How to use those rights</h2>
+<p>Email me: <a href="mailto:andy@project-you.app">andy@project-you.app</a>. I read this address myself. Response within a few days, action within 30.</p>
+
+<h2>Children</h2>
+<p>This service isn't designed for people under 16. If you are under 16, please don't sign up.</p>
+
+<h2>If this page changes</h2>
+<p>If I change anything meaningful, I'll bump the version number above and prompt you to re-accept the next time you sign in. Cosmetic edits (typo fixes, clarification) won't trigger a re-prompt.</p>
+
+<div class="footer">
+  <a href="/vps/app/">Vector+ Studio</a> · <a href="/terms.html">Terms of Service</a> · <a href="mailto:andy@project-you.app">Contact</a>
+</div>
+
+</div>
+</body>
+</html>

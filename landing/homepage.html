@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project You — Neuromorphic Memory for Agents and Humans</title>
+<!--
+  Marketing homepage for project-you.app. Drafted 2026-05-12 by Claude from
+  Andy's six decisions (see docs/HOMEPAGE-REWRITE-SCOPE-2026-05-12.md):
+    1. Lead with VPS as flagship; suite list secondary; thesis lives in About + above-fold blurb.
+    2. VPS is the product face until Heartbeat ships.
+    3. Pricing kept (3-tier freemium per CC_pitch-strategy-2026-04.md).
+    4. Pitch Deck PDF moves to Investors footer; new VPS deck pending upload.
+    5. Hero CTA = "Try Vector+ Studio"; "Watch Demo" + "Read the docs" disabled until they exist.
+    6. Login wires to /vps/app/ (SignInModal triggers there).
+
+  Sections marked [ANDY VOICE] are placeholders for Andy to edit in his voice.
+  Structural prose elsewhere is Claude-drafted scaffolding (replaces freely).
+
+  Auth-router IIFE at top of <head> preserves the OAuth callback fan-out from
+  /?code=... → /vps/app/?code=... (Block G shipped 2026-05-11).
+-->
+<script>
+(function() {
+  var qs = window.location.search, hash = window.location.hash;
+  if (!/[?&#](code|access_token|error|error_description)=/.test(qs + hash)) return;
+  var APP_ROUTES = { vps: "/vps/app/", membot: "/membot/app/" };
+  var app = null;
+  try { app = localStorage.getItem("auth_return_app"); localStorage.removeItem("auth_return_app"); } catch (e) {}
+  if (!app || !APP_ROUTES[app]) app = "vps";
+  window.location.replace(APP_ROUTES[app] + qs + hash);
+})();
+</script>
+<style>
+  :root { color-scheme: dark; --bg: #0f172a; --bg-2: #1e293b; --bg-3: #334155; --fg: #e2e8f0; --fg-dim: #94a3b8; --fg-mute: #64748b; --accent: #a855f7; --accent-2: #ec4899; --border: rgba(148, 163, 184, 0.2); }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: radial-gradient(ellipse at top, var(--bg-2) 0%, var(--bg) 60%, #020617 100%);
+    color: var(--fg); line-height: 1.6; min-height: 100vh;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { color: var(--accent-2); }
+  code { background: rgba(168, 85, 247, 0.12); padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.85em; color: #e9d5ff; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 0 1.5rem; }
+  .gradient-text { background: linear-gradient(90deg, var(--accent) 0%, var(--accent-2) 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+  .gradient-bg { background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%); }
+
+  /* Nav */
+  nav.top { position: sticky; top: 0; z-index: 10; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(8px); border-bottom: 1px solid var(--border); }
+  nav.top .wrap { display: flex; align-items: center; justify-content: space-between; padding-top: 1rem; padding-bottom: 1rem; }
+  .brand { display: inline-flex; align-items: center; gap: 0.6rem; font-weight: 600; font-size: 1.1rem; }
+  .brand-mark { width: 32px; height: 32px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-weight: 700; color: #fff; }
+  .nav-links { display: flex; gap: 1.5rem; font-size: 0.9rem; }
+  .nav-links a { color: var(--fg-dim); }
+  .nav-links a:hover { color: var(--fg); }
+  .nav-cta { display: flex; gap: 0.6rem; }
+  .btn { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.55rem 1.1rem; border-radius: 8px; font-size: 0.9rem; font-weight: 500; border: 1px solid var(--border); color: var(--fg); transition: all 0.15s ease; cursor: pointer; }
+  .btn:hover { border-color: var(--accent); color: var(--fg); }
+  .btn.primary { background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%); border-color: transparent; color: #fff; }
+  .btn.primary:hover { opacity: 0.9; color: #fff; }
+  .btn.disabled { opacity: 0.4; cursor: not-allowed; color: var(--fg-mute); }
+  .btn.disabled:hover { border-color: var(--border); color: var(--fg-mute); }
+  @media (max-width: 720px) { .nav-links { display: none; } }
+
+  /* Hero */
+  section.hero { padding: 5rem 0 3rem; text-align: center; }
+  section.hero h1 { font-size: clamp(2rem, 5vw, 3.4rem); line-height: 1.15; margin: 0 0 1.2rem; font-weight: 700; }
+  section.hero .lead { font-size: 1.15rem; color: var(--fg-dim); max-width: 720px; margin: 0 auto 1rem; }
+  section.hero .thesis { font-size: 0.95rem; color: var(--fg-mute); max-width: 680px; margin: 0 auto 2.5rem; font-style: italic; }
+  section.hero .cta-row { display: flex; gap: 0.8rem; justify-content: center; flex-wrap: wrap; }
+  section.hero .cta-row .btn { padding: 0.85rem 1.6rem; font-size: 1rem; }
+  section.hero .arrow { transition: transform 0.2s ease; }
+  section.hero .btn.primary:hover .arrow { transform: translateX(3px); }
+
+  /* Apps grid */
+  section.apps { padding: 4rem 0; }
+  section.apps h2 { font-size: 1.8rem; margin: 0 0 0.5rem; text-align: center; }
+  section.apps .section-sub { text-align: center; color: var(--fg-dim); margin: 0 0 2.5rem; }
+  .app-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.2rem; }
+  .app-card { padding: 1.5rem; border: 1px solid var(--border); border-radius: 12px; background: rgba(30, 41, 59, 0.4); transition: all 0.15s ease; }
+  .app-card:hover { border-color: var(--accent); background: rgba(30, 41, 59, 0.6); }
+  .app-card h3 { margin: 0 0 0.3rem; font-size: 1.15rem; display: flex; align-items: center; gap: 0.6rem; }
+  .app-card .status { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; padding: 0.15rem 0.5rem; border-radius: 4px; font-weight: 600; }
+  .status.live { background: rgba(34, 197, 94, 0.15); color: #4ade80; }
+  .status.building { background: rgba(168, 85, 247, 0.15); color: #c084fc; }
+  .status.next { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
+  .app-card p { color: var(--fg-dim); font-size: 0.9rem; margin: 0.5rem 0 1rem; }
+  .app-card .app-cta { font-size: 0.85rem; font-weight: 500; }
+
+  /* Mempack deep-dive */
+  section.mempack { padding: 4rem 0; border-top: 1px solid var(--border); }
+  section.mempack h2 { font-size: 1.8rem; margin: 0 0 0.5rem; text-align: center; }
+  section.mempack .section-sub { text-align: center; color: var(--fg-dim); margin: 0 0 2.5rem; }
+  .mempack-content { max-width: 780px; margin: 0 auto; color: var(--fg-dim); font-size: 1rem; line-height: 1.7; }
+  .mempack-content p { margin: 0 0 1rem; }
+  .mempack-content strong { color: var(--fg); font-weight: 600; }
+  .pattern-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin: 1.5rem 0 2rem; }
+  .pattern-card { padding: 1.2rem; border: 1px solid var(--border); border-radius: 10px; background: rgba(30, 41, 59, 0.4); }
+  .pattern-card h4 { margin: 0 0 0.4rem; font-size: 0.95rem; color: var(--accent); font-family: ui-monospace, SFMono-Regular, monospace; }
+  .pattern-card p { margin: 0; font-size: 0.88rem; color: var(--fg-dim); line-height: 1.5; }
+
+  /* Why */
+  section.why { padding: 4rem 0; border-top: 1px solid var(--border); }
+  section.why h2 { font-size: 1.8rem; margin: 0 0 1.5rem; text-align: center; }
+  .why-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; }
+  .why-card h3 { font-size: 1.05rem; margin: 0 0 0.5rem; color: var(--fg); }
+  .why-card p { color: var(--fg-dim); font-size: 0.95rem; margin: 0; }
+
+  /* Pricing */
+  section.pricing { padding: 4rem 0; border-top: 1px solid var(--border); }
+  section.pricing h2 { font-size: 1.8rem; margin: 0 0 0.5rem; text-align: center; }
+  section.pricing .section-sub { text-align: center; color: var(--fg-dim); margin: 0 0 2.5rem; }
+  .price-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.2rem; }
+  .price-card { padding: 2rem 1.5rem; border: 1px solid var(--border); border-radius: 12px; background: rgba(30, 41, 59, 0.4); display: flex; flex-direction: column; }
+  .price-card.featured { border-color: var(--accent); position: relative; }
+  .price-card.featured::before { content: 'Most Popular'; position: absolute; top: -0.7rem; left: 50%; transform: translateX(-50%); background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%); color: #fff; padding: 0.2rem 0.8rem; border-radius: 12px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+  .price-card h3 { margin: 0 0 0.3rem; font-size: 1.3rem; }
+  .price-card .price { font-size: 2.2rem; font-weight: 700; margin: 0.5rem 0 0.2rem; }
+  .price-card .price-sub { color: var(--fg-mute); font-size: 0.85rem; margin: 0 0 1.5rem; }
+  .price-card ul { padding: 0; margin: 0 0 1.5rem; list-style: none; flex: 1; }
+  .price-card li { padding: 0.4rem 0; color: var(--fg-dim); font-size: 0.9rem; display: flex; gap: 0.6rem; }
+  .price-card li::before { content: '✓'; color: #4ade80; flex-shrink: 0; }
+
+  /* About */
+  section.about { padding: 4rem 0; border-top: 1px solid var(--border); }
+  section.about h2 { font-size: 1.8rem; margin: 0 0 1.5rem; text-align: center; }
+  .about-content { max-width: 720px; margin: 0 auto; color: var(--fg-dim); font-size: 1rem; line-height: 1.7; }
+  .about-content p { margin: 0 0 1rem; }
+
+  /* Footer */
+  footer { padding: 3rem 0 2rem; border-top: 1px solid var(--border); margin-top: 2rem; }
+  footer .wrap { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 2rem; }
+  .foot-col h4 { margin: 0 0 0.8rem; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--fg-mute); }
+  .foot-col a { display: block; padding: 0.3rem 0; font-size: 0.9rem; color: var(--fg-dim); }
+  .foot-col a:hover { color: var(--accent); }
+  .foot-bottom { text-align: center; color: var(--fg-mute); font-size: 0.8rem; padding-top: 2rem; margin-top: 2rem; border-top: 1px solid var(--border); }
+</style>
+</head>
+<body>
+
+<nav class="top">
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <div class="brand-mark gradient-bg">⚡</div>
+      <span class="gradient-text">Project You</span>
+    </a>
+    <div class="nav-links">
+      <a href="#apps">Apps</a>
+      <a href="#why">Why</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#about">About</a>
+    </div>
+    <div class="nav-cta">
+      <a class="btn" href="/vps/app/">Login</a>
+      <a class="btn primary" href="/vps/app/">Get Started</a>
+    </div>
+  </div>
+</nav>
+
+<section class="hero" id="top">
+  <div class="wrap">
+    <h1>Search that finds what <em>relates</em>, not just what matches.</h1>
+
+    <p class="lead">
+      I built Vector+ Studio (with Claude's help) to answer a specific question: what would search feel like if it found <em>related</em> ideas, not just matching words? The substrate is a neuromorphic lattice, a physics-based retrieval that finds neighbors-by-meaning rather than nearest-by-distance. Try it on the bundled sample carts, or drop in your own PDFs and the browser will build you a cartridge while you watch.
+    </p>
+
+    <p class="thesis">We're not betting on a model. We're betting on the substrate that holds across models.</p>
+
+    <div class="cta-row">
+      <a class="btn primary" href="/vps/app/">
+        Try Vector+ Studio <span class="arrow">→</span>
+      </a>
+      <span class="btn disabled" title="Coming soon">Watch Demo</span>
+      <span class="btn disabled" title="Coming soon">Read the docs</span>
+    </div>
+  </div>
+</section>
+
+<section class="apps" id="apps">
+  <div class="wrap">
+    <h2>The Waving Cat suite</h2>
+    <p class="section-sub">One substrate. Multiple surfaces for it.</p>
+    <div class="app-grid">
+
+      <div class="app-card">
+        <h3>Vector+ Studio <span class="status live">Live · v1.2</span></h3>
+        <p>Neuromorphic search with three-tier provenance (RAG+). Browser-side Cart Builder, hosted demo, OAuth.</p>
+        <a class="app-cta" href="/vps/app/">Open the app →</a>
+      </div>
+
+      <div class="app-card">
+        <h3>Mempack <span class="status building">Shipping</span></h3>
+        <p>Per-user writable carts: a portable memory backpack for AI agents. Pattern-based identity, three-tier provenance, MCP-native.</p>
+        <a class="app-cta" href="#mempack">Learn more →</a>
+      </div>
+
+      <div class="app-card">
+        <h3>Membot <span class="status live">Live</span></h3>
+        <p>The MCP server underneath. Mount brain cartridges, search with cosine + Hamming + keyword blend, store via standard tool calls.</p>
+        <a class="app-cta" href="https://github.com/project-you-apps/membot">GitHub →</a>
+      </div>
+
+      <div class="app-card">
+        <h3>Heartbeat <span class="status next">Next</span></h3>
+        <p>Capture conversations from web AI tools (Claude, ChatGPT, Gemini, Copilot) and stream them into your Mempack. Chrome extension, alpha-ready.</p>
+        <a class="app-cta" href="#about">Notify me →</a>
+      </div>
+
+      <div class="app-card">
+        <h3>Membraine <span class="status live">Live</span></h3>
+        <p>Secure web fetch for LLM agents. Five-layer defense pipeline against prompt injection, SSE-transport MCP server.</p>
+        <a class="app-cta" href="https://github.com/project-you-apps/membraine">GitHub →</a>
+      </div>
+
+      <div class="app-card">
+        <h3>OpenClaw MCP Adapter <span class="status live">Live</span></h3>
+        <p>OpenClaw plugin that exposes MCP server tools as native agent tools. Membot et al. drop straight into the OpenClaw runtime.</p>
+        <a class="app-cta" href="https://github.com/project-you-apps/openclaw-mcp-adapter">GitHub →</a>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section class="mempack" id="mempack">
+  <div class="wrap">
+    <h2>Mempack: A memory backpack for AI agents</h2>
+    <p class="section-sub">Portable, writable, MCP-native. The agent carries it from host to host.</p>
+    <div class="mempack-content">
+      <p>
+        A <strong>Mempack</strong> is a per-agent brain cartridge the agent owns and writes to itself. Same lattice substrate as a knowledge cart, same RAG+ provenance, same physics-based recall, but with three reserved slots that turn a static document into a living memory: a manifest at <strong>Pattern 0</strong>, behavioral instructions at <strong>Pattern I</strong>, and everything the agent has learned at <strong>Pattern N+</strong>. When an agent mounts its Mempack, the briefing and behavior load automatically. No prompt-stuffing, no per-session re-briefing at all. The cart bootstraps the agent.
+      </p>
+
+      <div class="pattern-grid">
+        <div class="pattern-card">
+          <h4>Pattern 0 — manifest</h4>
+          <p>Briefing, ownership block, perms, encoder fingerprint. Loads at mount time so the agent knows whose memory this is and what it's for.</p>
+        </div>
+        <div class="pattern-card">
+          <h4>Pattern I — instructions</h4>
+          <p>The agent's behavioral seed at reserved index 1. Voice, persona, operating rules, hard nots. Editable by the owner; surfaced on every mount.</p>
+        </div>
+        <div class="pattern-card">
+          <h4>Pattern N+ — memory</h4>
+          <p>Everything the agent learns. Conversations, decisions, source links. Stored via <code>memory_store</code>, searched via cosine + Hamming + keyword blend.</p>
+        </div>
+      </div>
+
+      <p>
+        Because the format is one file and the access surface is MCP, a Mempack travels. Mount it in Claude Code today, in a Cursor session tomorrow, in a custom OpenClaw agent next week...The memory and the agent's behavior come along. Provenance survives the trip: every passage still resolves back to its source. The agent doesn't start over each time it changes hosts.
+      </p>
+
+      <p>
+        Where this is headed: <strong>perpetual agents on long arcs.</strong> Launch a research agent with a Mempack as its only persistent state, point it at the internet, and let it run a Wanderjahr. It records what it learns, builds its own associative index, and returns with a cart you can search the same way you'd search any other. The substrate is general; the use case is up to whoever pulls a Mempack down.
+      </p>
+
+      <p style="text-align: center; margin-top: 2rem;">
+        <a class="btn primary" href="/vps/app/">Try it in Vector+ Studio <span class="arrow">→</span></a>
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="why" id="why">
+  <div class="wrap">
+    <h2>Why this is different</h2>
+    <div class="why-grid">
+
+      <div class="why-card">
+        <h3>Finds what relates, not just what matches</h3>
+        <p>The substrate is a 16M-neuron Hopfield lattice where queries settle into attractor basins shaped by everything the cart has learned. Same operation a brain uses for associative recall.</p>
+      </div>
+
+      <div class="why-card">
+        <h3>Three-tier provenance (RAG+)</h3>
+        <p>Every result carries three layers: in-RAM preview, full passage from the cart's source database, canonical external URL. No black box. No "where did this come from."</p>
+      </div>
+
+      <div class="why-card">
+        <h3>The substrate is encoder-agnostic</h3>
+        <p>Swap Nomic for BGE-M3 tomorrow and the cart format doesn't change. Provenance, ownership, agent-memory primitives are properties of the cart, not the embedding model.</p>
+      </div>
+
+      <div class="why-card">
+        <h3>Your data stays yours</h3>
+        <p>Build cartridges in your browser; files never leave your machine during the build. Upload only what you decide to share. The cart format is one file; it travels anywhere.</p>
+      </div>
+
+      <div class="why-card">
+        <h3>No LLM in the search loop</h3>
+        <p>Embeddings come from a 137M-param sentence transformer. Retrieval is binary math + lattice physics. The reasoning happens in the substrate, not in an inference call you have to pay for every query.</p>
+      </div>
+
+      <div class="why-card">
+        <h3>MCP-native for agents</h3>
+        <p>Every product speaks Model Context Protocol. Claude Code, Cursor, Windsurf, custom MCP clients — drop the cart server into your host config and your agent has memory.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section class="pricing" id="pricing">
+  <div class="wrap">
+    <h2>Pricing</h2>
+    <p class="section-sub">Free during alpha. Paid tiers below are <strong>tentative</strong> — final numbers locked when we exit alpha.</p>
+    <div class="price-grid">
+
+      <div class="price-card">
+        <h3>Free</h3>
+        <p class="price">$0</p>
+        <p class="price-sub">forever, with caps</p>
+        <ul>
+          <li>Browser-side Cart Builder, unlimited local builds</li>
+          <li>Mount sample carts + your own carts</li>
+          <li>Public sandbox uploads (TTL)</li>
+          <li>Sign in across all Waving Cat apps</li>
+          <li>1 personal Mempack (when Mempack ships)</li>
+          <li>Rate-limited cloud search</li>
+        </ul>
+        <a class="btn" href="/vps/app/">Get Started</a>
+      </div>
+
+      <div class="price-card featured">
+        <h3>Pro</h3>
+        <p class="price">$19<span style="font-size: 1rem; color: var(--fg-mute); font-weight: 400;">/mo</span></p>
+        <p class="price-sub">tentative</p>
+        <ul>
+          <li>Everything in Free</li>
+          <li>Multiple Mempacks per user</li>
+          <li>Higher cloud rate limits</li>
+          <li>Cross-device sync</li>
+          <li>Full physics search modes</li>
+          <li>Priority email support</li>
+        </ul>
+        <span class="btn disabled" title="Available at alpha exit">Coming soon</span>
+      </div>
+
+      <div class="price-card">
+        <h3>Enterprise</h3>
+        <p class="price">Custom</p>
+        <p class="price-sub">talk to us</p>
+        <ul>
+          <li>Private Membot deployment</li>
+          <li>Full-corpus document ingestion → cart pipeline</li>
+          <li>Per-user / per-team controls</li>
+          <li>SLA + dedicated support</li>
+          <li>On-prem option</li>
+          <li>Custom encoder integration</li>
+        </ul>
+        <a class="btn" href="mailto:andy@project-you.app?subject=Enterprise%20inquiry">Contact us</a>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section class="about" id="about">
+  <div class="wrap">
+    <h2>About</h2>
+    <div class="about-content">
+      <p>
+        I'm Andy Grossberg, founder of Waving Cat Learning Systems. We're a small Portland-based shop building neuromorphic memory primitives for AI agents and the humans who run them. I've been working on AI since 1985, and the thesis I keep coming back to is this: <em>deliberation quality is dominantly a context-engineering problem, not a model-capability problem</em>. The cheapest LLM plus good context beats the biggest LLM plus poor context. So we build the substrate that ships the good context.
+      </p>
+      <p>
+        The substrate is a 16-million neuron Hopfield lattice. Queries don't just match, they <em>settle</em> through learned attractor basins, the same operation the brain uses for associative recall. No GPU at search time. No LLM in the search loop. Embeddings come from a sentence transformer; retrieval is binary math plus physics. Validated empirically across two independent threads (pathology imaging at 23× scale and ARC-AGI-3 game-play at 6.5× model-size sweep), both showing the architecture is the constant when everything else swept.
+      </p>
+      <p>
+        Built with Claude as research partner. Vector+ Studio is the flagship surface; Mempack, Membot, and Heartbeat are different ways of touching the same primitives: agent memory, MCP server, browser-side capture. The whole stack speaks one cart format. Bring your data in once, search it forever, take it anywhere.
+      </p>
+      <p>
+        <strong>Where we are now:</strong> Vector+ Studio v1.2 just shipped with OAuth + private libraries. Mempack ships this week. Heartbeat alpha is the focus next week. By end of next week the whole suite should be in testable shape. If any of this sounds like something you want to use or talk about, the contact link below is the right place.
+      </p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-col">
+      <h4>Project You</h4>
+      <a href="#apps">Apps</a>
+      <a href="#why">Why</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#about">About</a>
+    </div>
+    <div class="foot-col">
+      <h4>Apps</h4>
+      <a href="/vps/app/">Vector+ Studio</a>
+      <a href="https://github.com/project-you-apps/membot">Membot</a>
+      <a href="#mempack">Mempack</a>
+      <a href="#apps">Heartbeat</a>
+      <a href="https://github.com/project-you-apps/membraine">Membraine</a>
+      <a href="https://github.com/project-you-apps/openclaw-mcp-adapter">OpenClaw Adapter</a>
+    </div>
+    <div class="foot-col">
+      <h4>Investors</h4>
+      <a href="assets/LRPitchDeck-05-07-2026-final.pdf" target="_blank" rel="noopener" download>Pitch Deck (May 2026)</a>
+      <a href="mailto:andy@project-you.app?subject=Investment%20inquiry">Contact</a>
+    </div>
+    <div class="foot-col">
+      <h4>Legal</h4>
+      <a href="/privacy.html">Privacy</a>
+      <a href="/terms.html">Terms</a>
+      <a href="mailto:andy@project-you.app">Contact</a>
+    </div>
+    <div class="foot-col">
+      <h4>Project</h4>
+      <a href="https://wavingcat.dev" target="_blank" rel="noopener">wavingcat.dev</a>
+      <a href="https://github.com/project-you-apps" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </div>
+  <div class="wrap foot-bottom">
+    © 2026 Waving Cat Learning Systems · Portland, Oregon
+  </div>
+</footer>
+
+</body>
+</html>

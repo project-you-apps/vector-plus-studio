@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useAppStore } from './store/appStore'
+import { useAuthStore } from './store/authStore'
 import Header from './components/Header'
 import NavRail from './components/NavRail'
 import SearchToolbar from './components/SearchToolbar'
@@ -13,6 +14,8 @@ import SettingsScreen from './components/SettingsScreen'
 import CartBuilderScreen from './components/CartBuilderScreen'
 import CRUDScreen from './components/CRUDScreen'
 import FolderPickerModal from './components/FolderPickerModal'
+import SignInModal from './components/SignInModal'
+import CookieBanner from './components/CookieBanner'
 import Toaster from './components/Toaster'
 
 // Stub placeholders for nav-rail screens introduced in 2026-05-03 reorg.
@@ -28,7 +31,13 @@ function ScreenStub({ title, body }: { title: string; body: string }) {
 
 export default function App() {
   const { fetchStatus, status, editorOpen, activeScreen } = useAppStore()
+  const initAuth = useAuthStore((s) => s.init)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => {
+    // Bootstrap Supabase session from cookies + subscribe to auth state changes.
+    initAuth()
+  }, [initAuth])
 
   useEffect(() => {
     fetchStatus()
@@ -128,6 +137,8 @@ export default function App() {
           which screen the user is on (Cart Builder OR Edit Carts). Mounted at
           app level so it renders no matter which screen owns the trigger. */}
       <FolderPickerModal />
+      <SignInModal />
+      <CookieBanner />
       <Toaster />
     </div>
   )

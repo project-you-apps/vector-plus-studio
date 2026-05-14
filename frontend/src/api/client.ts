@@ -3,14 +3,23 @@ import type {
   SearchMode, PatternResponse,
   MemboxCartInfo, MemboxStatus, MemboxImprintRequest, MemboxMountRequest,
 } from './types'
+import { useAuthStore } from '../store/authStore'
 
 // Set VITE_API_BASE at build time for hosted deploys (e.g. '/vps/api'). Local
 // dev uses '/api' which the Vite proxy routes to localhost:8000.
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) || '/api'
 
+// Reads the current Supabase access token from the auth store (kept in sync via
+// onAuthStateChange in authStore.init). Returns an empty object when signed out
+// so anonymous endpoints (sandbox uploads, public mounts) still work.
+function authHeaders(): Record<string, string> {
+  const session = useAuthStore.getState().session
+  return session ? { Authorization: `Bearer ${session.access_token}` } : {}
+}
+
 async function fetchJSON<T>(url: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${url}`, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     ...opts,
   })
   if (!res.ok) {
@@ -45,7 +54,11 @@ export interface UploadResponse {
 export async function uploadCartridge(file: File): Promise<UploadResponse> {
   const form = new FormData()
   form.append('file', file)
-  const res = await fetch(`${BASE}/cartridges/upload`, { method: 'POST', body: form })
+  const res = await fetch(`${BASE}/cartridges/upload`, {
+    method: 'POST',
+    body: form,
+    headers: authHeaders(),
+  })
   if (!res.ok) {
     let detail = `${res.status}`
     try { detail = (await res.json()).detail || detail } catch { /* keep status */ }
@@ -57,7 +70,7 @@ export async function uploadCartridge(file: File): Promise<UploadResponse> {
 export async function ejectCartridge(cartPath: string): Promise<{ success: boolean; ejected: string }> {
   const res = await fetch(
     `${BASE}/cartridges/eject?cart_path=${encodeURIComponent(cartPath)}`,
-    { method: 'DELETE' }
+    { method: 'DELETE', headers: authHeaders() }
   )
   if (!res.ok) {
     let detail = `${res.status}`
@@ -207,7 +220,11 @@ export async function forgeCartridge(name: string, files: File[]) {
   for (const f of files) {
     form.append('files', f)
   }
-  const res = await fetch(`${BASE}/forge`, { method: 'POST', body: form })
+  const res = await fetch(`${BASE}/forge`, {
+    method: 'POST',
+    body: form,
+    headers: authHeaders(),
+  })
   if (!res.ok) throw new Error(`Forge failed: ${res.status}`)
   return res.json() as Promise<{ success: boolean; message: string }>
 }

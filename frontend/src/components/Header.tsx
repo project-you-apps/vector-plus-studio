@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Activity, Cpu, Lock, LockOpen, Moon, Save, Sun, Zap } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
+import AuthChip from './AuthChip'
 
 export default function Header() {
   const status = useAppStore((s) => s.status)
@@ -140,6 +141,8 @@ export default function Header() {
         >
           {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
         </button>
+
+        <AuthChip />
       </div>
     </header>
   )

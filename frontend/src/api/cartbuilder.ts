@@ -3,14 +3,24 @@
 // request / response shapes. Used by the future Cart Builder screen
 // (Phase 2 frontend port).
 
+import { useAuthStore } from '../store/authStore'
+
 // Set VITE_API_BASE at build time for hosted deploys (e.g. '/vps/api'). Local
 // dev uses '/api' which the Vite proxy routes to localhost:8000.
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) || '/api'
 const BASE = `${API_BASE}/cartbuilder`
 
+// Mirror of client.ts authHeaders() — reads current Supabase token from the
+// auth store. Returns empty object when signed out so anonymous builders still
+// work end-to-end against sandbox endpoints.
+function authHeaders(): Record<string, string> {
+  const session = useAuthStore.getState().session
+  return session ? { Authorization: `Bearer ${session.access_token}` } : {}
+}
+
 async function fetchJSON<T>(url: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${url}`, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     ...opts,
   })
   if (!res.ok) {
@@ -119,7 +129,11 @@ export interface CartBuilderLoadCartResponse {
 export async function uploadFiles(files: File[]): Promise<{ files: CartBuilderFile[] }> {
   const form = new FormData()
   for (const f of files) form.append('files', f)
-  const res = await fetch(`${BASE}/upload`, { method: 'POST', body: form })
+  const res = await fetch(`${BASE}/upload`, {
+    method: 'POST',
+    body: form,
+    headers: authHeaders(),
+  })
   if (!res.ok) {
     const text = await res.text()
     throw new Error(`Upload failed ${res.status}: ${text}`)
@@ -233,7 +247,11 @@ export async function buildToFolder(payload: {
   form.append('folder', payload.folder)
   form.append('cart_name', payload.cartName)
   form.append('replace', payload.replace ? 'true' : 'false')
-  const res = await fetch(`${BASE}/build-to-folder`, { method: 'POST', body: form })
+  const res = await fetch(`${BASE}/build-to-folder`, {
+    method: 'POST',
+    body: form,
+    headers: authHeaders(),
+  })
   if (!res.ok) {
     let detail = `${res.status}`
     try { detail = (await res.json()).detail || detail } catch { /* keep */ }
