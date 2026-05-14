@@ -22,14 +22,22 @@ from .engine import engine, TextRegionEncoder
 #   parent_ptr(I) child_ptr(I) sibling_ptr(I) source_hash(I)
 #   sequence_num(H) timestamp(I) flags(B) perms_byte(B) reserved(34s)
 #
+# This is the canonical 64-byte H-block (NPZ-stored hippocampus) format —
+# one struct per pattern in the cart NPZ's `hippocampus` array.
+# Full spec: docs/PATTERN-ANATOMY.md §3 "The Hippocampus: H-row and H-block".
+#
 # Step 2b update (Andy 2026-05-06): broke the first byte of the previously-35-byte
 # `reserved` field out into a dedicated `perms_byte` for our RWX semantics.
 # The original `flags` byte at offset 28 is fully claimed by membot's
 # cartridge_builder.py for {tombstone, pinned, has_parent, has_child,
-# has_sibling, perishability-class}. Stomping on it would corrupt every
+# has_sibling, perish_class (2 bits)}. Stomping on it would corrupt every
 # pre-Step-2b cart on the droplet. The first reserved byte (offset 29) is
 # explicitly written as 0 by membot (`b'\x00' * 35`), so it's safe to repurpose.
 # Field count now 11 (was 10): vals[9]=flags, vals[10]=perms_byte, vals[11]=reserved-34.
+#
+# NOTE (2026-05-13): membot/cartridge_builder.py is still on the LEGACY 11-field
+# format ('<I B B I I I I H I B 35s', no perms_byte). Format-version field at
+# offset 4 discriminates. Migration to canonical pending across legacy paths.
 HIPPO_FORMAT = '<I B B I I I I H I B B 34s'
 HIPPO_SIZE = 64
 
