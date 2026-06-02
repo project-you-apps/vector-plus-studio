@@ -3,6 +3,12 @@ import { Activity, Cpu, Lock, LockOpen, Moon, Save, Sun, Zap } from 'lucide-reac
 import { useAppStore } from '../store/appStore'
 import AuthChip from './AuthChip'
 
+// Feature flag: Membox visualizer is gated off while we're not actively
+// developing Membox. Flip to `true` (or wire to env / settings) when ready to
+// expose the panel again. The panel component itself still mounts (App.tsx)
+// in case any in-flight work needs to reach it via the store toggle.
+const SHOW_MEMBOX_TOGGLE = false
+
 export default function Header() {
   const status = useAppStore((s) => s.status)
   const saveCartridge = useAppStore((s) => s.saveCartridge)
@@ -122,17 +128,19 @@ export default function Header() {
           </span>
         </div>
 
-        <button
-          onClick={toggleMemboxPanel}
-          className={`p-2 rounded-lg transition-colors ${
-            memboxPanelOpen
-              ? 'bg-purple-500/20 text-purple-300'
-              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
-          }`}
-          title="Toggle Membox visualizer"
-        >
-          <Activity size={16} />
-        </button>
+        {SHOW_MEMBOX_TOGGLE && (
+          <button
+            onClick={toggleMemboxPanel}
+            className={`p-2 rounded-lg transition-colors ${
+              memboxPanelOpen
+                ? 'bg-purple-500/20 text-purple-300'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+            }`}
+            title="Toggle Membox visualizer"
+          >
+            <Activity size={16} />
+          </button>
+        )}
 
         <button
           onClick={toggleTheme}

@@ -10,7 +10,6 @@
 - **Mempack — per-user writable carts** — Now agents can bring their own personal backpack to carry any data they want like research, memories, anything worth keeping.
 
 ---
-
 # Vector+ Studio v1.1 — Hosted Demo + Browser-Side Cart Builder
 
  VPS is actually the result of a decades-long research project started back in 1985. Someday I'll lay out the whole story but that's blog post material not readme material. Just know that this is built with neuroscience-inspired physics using Hebbian learning, attractor basins and energy-like values. But once a file is processed it no longer needs a neural net for access, the patterns in the cartridges are weighted and related. Search query embedding is handled by sentence-transformers on the frontend so there's no need for an LLM which should save you or your agents potentially thousands of tokens per search.

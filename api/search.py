@@ -16,6 +16,19 @@ _assoc_session = None
 _assoc_corpus_hash = None
 _ASSOC_DLL_AVAILABLE = False
 
+# 2026-05-30: Route the Associate Python fallback through the two-sided v83
+# algorithm. The pre-existing one-sided code (query through physics; candidates
+# are static stored sign vectors) was identified as a refactor regression that
+# produces fixed-attractor failure (~50% sign preservation). The two-sided path
+# below re-imprints each cosine-pre-filter candidate through physics independently
+# and scores via cosine in analog-region-mean decoded space — matches the v83
+# Reed-Richards / Beatles-Divorce algorithm.
+#
+# Flip to False to fall back to the old one-sided path for A/B testing.
+# Receipts file: experiments/walk-test-2026-05-29/walk_compare_2026-05-30_104357.txt
+USE_TWO_SIDED_ASSOCIATE = True
+ASSOCIATE_CANDIDATE_POOL = 50  # cosine-pre-filter before per-candidate physics
+
 
 # ---------------------------------------------------------------------------
 # Keyword helpers
@@ -435,6 +448,12 @@ def associate_search(q_emb: np.ndarray, embeddings: np.ndarray,
         print("[Associate] No brain file found, falling back to Hamming")
         return hamming_blend_search(q_emb, embeddings, passages, top_k, keywords)
 
+    # ── Two-sided v83 algorithm (the working path; restored 2026-05-30) ──
+    if USE_TWO_SIDED_ASSOCIATE:
+        return _associate_search_two_sided(
+            q_emb, embeddings, passages, brain_path, top_k, keywords,
+        )
+
     n_dims = embeddings.shape[1]  # 768
 
     # Pre-compute stored sign vectors
@@ -520,6 +539,226 @@ def associate_search(q_emb: np.ndarray, embeddings: np.ndarray,
         results = _keyword_rerank(results, keywords, passages)
     results.sort(key=lambda x: x['score'], reverse=True)
     return results[:top_k]
+
+
+# ---------------------------------------------------------------------------
+# Two-sided Associate (v83 algorithm — the algorithm that produced the historic
+# Reed Richards / Beatles-Divorce / Paris-Idaho receipts)
+# ---------------------------------------------------------------------------
+#
+# Both the query AND each cosine-pre-filter candidate go through reset + imprint
+# + settle + decode independently. Lattice Hebbian weights modulate each
+# candidate's settled state; cosine in analog-region-mean decoded space scores
+# the query-to-candidate semantic distance AFTER physics.
+#
+# The pre-2026-05-30 code path (above) compared a single settled-query sign
+# vector against pre-computed static stored sign vectors. That one-sided path
+# produces fixed-attractor failures when the query settles to a brain-dominated
+# attractor (~50% sign preservation). The two-sided path stays in the working
+# regime because every candidate gets its own settled state.
+#
+# Receipts: experiments/walk-test-2026-05-29/walk_compare_2026-05-30_104357.txt
+#           experiments/walk-test-2026-05-29/walk_compare_2026-05-30_120856.txt
+
+
+def _ab_encode_region_fill(emb: np.ndarray, n_dims: int = 768) -> np.ndarray:
+    """Region-fill encode: each positive Nomic dim fills its 64x64 region."""
+    grid = np.zeros((64, 64, 64, 64), dtype=np.float32)
+    for i in range(n_dims):
+        if emb[i] > 0:
+            grid[i // 64, i % 64, :, :] = 1.0
+    return grid.reshape(4096, 4096)
+
+
+def _ab_decode_region_fill_analog(lattice: np.ndarray, n_dims: int = 768) -> np.ndarray:
+    """Decode settled lattice to ANALOG region-mean vector in [0,1].
+
+    Critical: binary > 0.5 thresholding collapses sparse settled states to
+    all-zero vectors (cosine of all-zero = 0). Raw region-mean preserves
+    continuous activation signal — matches v83's thermometer decode
+    (active_bits / region_size).
+    """
+    if lattice.ndim == 1:
+        lattice = lattice.reshape(4096, 4096)
+    grid = lattice.reshape(64, 64, 64, 64)
+    out = np.zeros(n_dims, dtype=np.float32)
+    for i in range(n_dims):
+        region = grid[i // 64, i % 64, :, :]
+        out[i] = float(np.mean(region))
+    return out
+
+
+def _associate_search_two_sided(q_emb: np.ndarray, embeddings: np.ndarray,
+                                 passages: list, brain_path: str,
+                                 top_k: int, keywords: list | None):
+    """v83 two-sided Associate. Returns same shape as legacy associate_search."""
+    from multi_lattice_wrapper_v7 import MultiLatticeCUDAv7
+    n_dims = embeddings.shape[1]
+
+    # Init lattice ONCE, reuse across the candidate loop
+    temp_ml = MultiLatticeCUDAv7(lattice_size=4096, verbose=0)
+    temp_ml.set_profile("quality")
+    temp_ml.set_row_physics(63, temp_ml.ROW_FULLY_PROTECTED)  # HIPPO_ROW
+    temp_ml.load_brain(brain_path)
+
+    # Query through physics
+    q_pattern = _ab_encode_region_fill(q_emb, n_dims)
+    temp_ml.reset()
+    temp_ml.imprint_pattern(q_pattern)
+    temp_ml.settle(frames=ASSOCIATE_SETTLE_FRAMES, learn=False)
+    settled_q = temp_ml.recall()
+    q_decoded = _ab_decode_region_fill_analog(settled_q, n_dims)
+    q_unit = q_decoded / (float(np.linalg.norm(q_decoded)) + 1e-9)
+
+    # Sign preservation diagnostic (still using binary decode for the metric)
+    q_signs = (q_emb > 0).astype(np.uint8)
+    q_decoded_bin = (q_decoded > 0.5).astype(np.uint8)
+    sign_pres = float(np.mean(q_signs == q_decoded_bin))
+    print(f"[Associate v83] Sign preservation: {sign_pres:.1%}")
+
+    # Cosine pre-filter to bound per-candidate physics cost
+    q_normalized = q_emb / (float(np.linalg.norm(q_emb)) + 1e-9)
+    e_norms = np.sqrt(np.einsum('ij,ij->i', embeddings, embeddings)) + 1e-9
+    cosine_sims = (embeddings @ q_normalized) / e_norms
+    pool_size = min(ASSOCIATE_CANDIDATE_POOL, len(embeddings))
+    pool_idx = np.argpartition(-cosine_sims, pool_size - 1)[:pool_size]
+
+    # Per-candidate physics
+    physics_scores: dict[int, float] = {}
+    cosine_lookup: dict[int, float] = {}
+    for idx in pool_idx:
+        idx = int(idx)
+        if idx in engine.deleted_ids:
+            continue
+        cand_pattern = _ab_encode_region_fill(embeddings[idx], n_dims)
+        temp_ml.reset()
+        temp_ml.imprint_pattern(cand_pattern)
+        temp_ml.settle(frames=ASSOCIATE_SETTLE_FRAMES, learn=False)
+        settled_c = temp_ml.recall()
+        c_decoded = _ab_decode_region_fill_analog(settled_c, n_dims)
+        c_unit = c_decoded / (float(np.linalg.norm(c_decoded)) + 1e-9)
+        physics_scores[idx] = float(np.dot(q_unit, c_unit))
+        cosine_lookup[idx] = float(cosine_sims[idx])
+
+    del temp_ml
+
+    # Assemble result records in the same shape as the legacy path
+    results = [
+        {
+            'idx': idx,
+            'score': score,
+            'cosine_score': cosine_lookup[idx],
+            'physics_score': score,
+            'from_lattice': True,
+        }
+        for idx, score in physics_scores.items()
+    ]
+
+    if keywords:
+        results = _keyword_rerank(results, keywords, passages)
+    results.sort(key=lambda x: x['score'], reverse=True)
+    return results[:top_k]
+
+
+# ---------------------------------------------------------------------------
+# Associate + Walk: layer "you may have missed" associations on top of Associate
+# ---------------------------------------------------------------------------
+
+# Cache for normalized embeddings (keyed by id(embeddings) so a fresh cart
+# triggers re-normalization; bounded size to handle multiple mounted carts).
+_NORM_CACHE: dict[int, np.ndarray] = {}
+
+
+def _get_normed_embeddings(embeddings: np.ndarray) -> np.ndarray:
+    """Return L2-normalized embeddings, cached by id(embeddings)."""
+    key = id(embeddings)
+    if key in _NORM_CACHE:
+        return _NORM_CACHE[key]
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    norms[norms < 1e-9] = 1.0
+    normed = embeddings / norms
+    _NORM_CACHE[key] = normed
+    # Cap cache size to avoid leak across many cart mounts
+    while len(_NORM_CACHE) > 4:
+        _NORM_CACHE.pop(next(iter(_NORM_CACHE)))
+    return normed
+
+
+def associate_search_with_walk(q_emb: np.ndarray, embeddings: np.ndarray,
+                               passages: list[str], top_k: int = 10,
+                               walk_top_k: int = 10, walk_min_hits: int = 2,
+                               walk_max_show: int = 10,
+                               keywords: list[str] | None = None) -> list[dict]:
+    """
+    Associate search + walk-the-results layer.
+
+    Runs the standard `associate_search()` to get primary results via lattice
+    physics (the editorial-association engine — Divorce-between-John-and-Paul,
+    NASA/Philip-K-Dick for Reed Richards). Then performs a "walk" hop: for each
+    primary item, computes its cosine-nearest neighbors in raw embedding space.
+    Items walked-to multiple times but absent from primary surface as "you may
+    have missed".
+
+    Returns a flat list: primary items first (with 'from_walk'=False), then
+    walked items (with 'from_walk'=True and 'walk_count' set). Existing
+    associate_search() is untouched; this is opt-in via a new search mode.
+
+    Walk hop uses cosine for speed. Running full physics per primary item
+    (the "physics walk") would multiply query time by ~top_k and require
+    GPU access for every hop — cosine walk is ~50ms for 100k corpus on CPU
+    and surfaces depth that pure physics-Associate misses.
+    """
+    # 1) Primary via full Associate (physics)
+    primary = associate_search(q_emb, embeddings, passages, top_k=top_k, keywords=keywords)
+    primary_ids = {r['idx'] for r in primary}
+
+    # 2) Walk hop: cosine-nearest from each primary item
+    embeddings_n = _get_normed_embeddings(embeddings)
+
+    walk_counts: dict[int, int] = {}
+    walk_score_sum: dict[int, float] = {}
+
+    for r in primary:
+        idx = r['idx']
+        if idx < 0 or idx >= len(embeddings_n):
+            continue
+        item_vec = embeddings_n[idx]
+        sims = embeddings_n @ item_vec
+        sims[idx] = -np.inf  # exclude self
+        top_idx = np.argpartition(-sims, walk_top_k)[:walk_top_k]
+        for nidx in top_idx:
+            nidx = int(nidx)
+            if nidx in engine.deleted_ids:
+                continue
+            walk_counts[nidx] = walk_counts.get(nidx, 0) + 1
+            walk_score_sum[nidx] = walk_score_sum.get(nidx, 0.0) + float(sims[nidx])
+
+    # 3) Filter: items appearing >= walk_min_hits times, not in primary
+    walked = []
+    for idx, cnt in walk_counts.items():
+        if idx in primary_ids:
+            continue
+        if cnt < walk_min_hits:
+            continue
+        avg_score = walk_score_sum[idx] / cnt
+        walked.append({
+            'idx': idx,
+            'score': float(avg_score),
+            'cosine_score': float(avg_score),
+            'physics_score': 0.0,
+            'from_lattice': False,
+            'from_walk': True,
+            'walk_count': cnt,
+        })
+    walked.sort(key=lambda x: (-x['walk_count'], -x['score']))
+    walked = walked[:walk_max_show]
+
+    # 4) Mark primary items as not from walk and emit combined list
+    for r in primary:
+        r.setdefault('from_walk', False)
+        r.setdefault('walk_count', 0)
+
+    return primary + walked
 
 
 # ---------------------------------------------------------------------------
