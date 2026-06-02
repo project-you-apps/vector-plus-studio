@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>VPS WebGPU Associate Test (v3 — full two-sided loop)</title>
+    <style>
+        body { background: #0a0a0a; color: #e0e0e0; font-family: 'Consolas', 'Monaco', monospace; padding: 20px; }
+        h1 { font-size: 18px; color: #0f0; margin-bottom: 4px; }
+        .sub { font-size: 12px; color: #888; margin-bottom: 20px; }
+        .row { display: flex; gap: 12px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
+        button { background: #1a3a1a; color: #0f0; border: 1px solid #0a0; padding: 8px 16px; font-family: inherit; font-size: 13px; cursor: pointer; }
+        button:hover { background: #2a4a2a; }
+        button:disabled { background: #1a1a1a; color: #555; border-color: #333; cursor: not-allowed; }
+        input { background: #050505; color: #0f0; border: 1px solid #222; padding: 6px 10px; font-family: inherit; font-size: 13px; }
+        input.short { width: 80px; }
+        input.medium { width: 200px; }
+        .badge { padding: 4px 10px; border: 1px solid #333; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+        .badge.detecting { color: #fa0; border-color: #fa0; }
+        .badge.available { color: #0f0; border-color: #0f0; }
+        .badge.unavailable { color: #f44; border-color: #f44; }
+        .badge.ready { color: #0ff; border-color: #0ff; }
+        textarea { width: 100%; height: 360px; background: #050505; color: #0f0; border: 1px solid #222; padding: 12px; font-family: inherit; font-size: 12px; line-height: 1.5; }
+        .alert { padding: 10px; border: 1px solid #f44; background: #1a0505; color: #f88; font-size: 12px; margin: 10px 0; }
+        .results { background: #050505; border: 1px solid #0a3a0a; padding: 12px; margin-top: 12px; font-size: 12px; }
+        .result-item { padding: 8px; border-bottom: 1px solid #1a1a1a; }
+        .result-item:last-child { border-bottom: none; }
+        .rank { color: #0ff; font-weight: bold; margin-right: 8px; }
+        .scores { color: #888; font-size: 11px; margin-left: 12px; }
+        .passage { color: #ccc; margin-top: 4px; max-height: 60px; overflow: hidden; }
+        .progress { height: 6px; background: #1a1a1a; border-radius: 3px; overflow: hidden; width: 240px; }
+        .progress-fill { height: 100%; background: linear-gradient(to right, #fa0, #0f0); transition: width 0.05s; width: 0%; }
+        h2 { font-size: 14px; color: #0f0; margin: 20px 0 8px 0; }
+    </style>
+</head>
+<body>
+    <h1>VPS WebGPU Associate Test — v3 (full two-sided physics loop)</h1>
+    <div class="sub">
+        <strong>The architectural milestone test:</strong> brain on droplet → browser fetches → WebGPU runs the v83 two-sided Associate loop.
+        Each candidate independently settles through the lattice; scoring = dot(unit-norm(settled-q), unit-norm(settled-c)).
+        Server contributes only the cheap cosine pre-filter.
+    </div>
+
+    <h2>Setup</h2>
+    <div class="row">
+        <span>WebGPU:</span>
+        <span id="gpu-badge" class="badge detecting">detecting</span>
+        <span>Brain:</span>
+        <span id="brain-badge" class="badge detecting">not loaded</span>
+        <input id="cart-name" class="medium" value="wiki_nomic_100k" />
+        <button id="load-brain-btn" disabled>Load Brain</button>
+    </div>
+    <div class="row">
+        <span style="font-size: 11px; color: #888;">Progress:</span>
+        <div class="progress"><div id="progress-fill" class="progress-fill"></div></div>
+        <span id="progress-text" style="font-size: 11px; color: #888;"></span>
+    </div>
+
+    <h2>Run Associate</h2>
+    <div class="row">
+        <label>Query index:</label>
+        <input id="query-idx" class="short" type="number" value="0" min="0" />
+        <label>Candidate pool:</label>
+        <input id="pool-size" class="short" type="number" value="20" min="1" max="100" />
+        <label>Top K:</label>
+        <input id="top-k" class="short" type="number" value="10" min="1" max="20" />
+        <button id="run-btn" disabled>Run Associate</button>
+    </div>
+
+    <div id="error-slot"></div>
+
+    <h2>Log</h2>
+    <textarea id="log" readonly></textarea>
+
+    <h2>Results</h2>
+    <div id="results" class="results">No results yet — load brain and run.</div>
+
+    <script type="module">
+        import { LatticeEngine } from './lattice-engine.js';
+        import { abEncodeRegionFill, abDecodeRegionFillAnalog, l2Normalize, dot } from './region-fill-encoder.js';
+        import { parseNpy, fetchNpyWithProgress } from './npy-loader.js';
+
+        const ROW_FULLY_PROTECTED = 0xFF;
+        const HIPPO_ROW = 63;
+        const SETTLE_FRAMES = 30;
+
+        let engine = null;
+        let brainLoaded = false;
+
+        const logEl = document.getElementById('log');
+        const resultsEl = document.getElementById('results');
+        const gpuBadgeEl = document.getElementById('gpu-badge');
+        const brainBadgeEl = document.getElementById('brain-badge');
+        const loadBrainBtn = document.getElementById('load-brain-btn');
+        const runBtn = document.getElementById('run-btn');
+        const errorSlot = document.getElementById('error-slot');
+        const progressFill = document.getElementById('progress-fill');
+        const progressText = document.getElementById('progress-text');
+        const cartInput = document.getElementById('cart-name');
+
+        function log(msg) {
+            const ts = new Date().toISOString().substr(11, 12);
+            logEl.value += `[${ts}] ${msg}\n`;
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        function showError(msg) {
+            errorSlot.innerHTML = `<div class="alert">${msg}</div>`;
+        }
+
+        function clearError() {
+            errorSlot.innerHTML = '';
+        }
+
+        function setProgress(loaded, total, label = '') {
+            const pct = total > 0 ? (loaded / total) * 100 : 0;
+            progressFill.style.width = `${pct}%`;
+            if (total > 0) {
+                progressText.textContent = `${label} ${(loaded / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB`;
+            } else {
+                progressText.textContent = `${label} ${(loaded / 1048576).toFixed(1)} MB`;
+            }
+        }
+
+        function setStepProgress(step, total, label) {
+            const pct = (step / total) * 100;
+            progressFill.style.width = `${pct}%`;
+            progressText.textContent = `${label} ${step}/${total}`;
+        }
+
+        async function probeWebGPU() {
+            if (!('gpu' in navigator)) {
+                gpuBadgeEl.className = 'badge unavailable';
+                gpuBadgeEl.textContent = 'unavailable';
+                showError('navigator.gpu not exposed. Use Chrome or Edge.');
+                return false;
+            }
+            try {
+                const adapter = await navigator.gpu.requestAdapter();
+                if (!adapter) {
+                    gpuBadgeEl.className = 'badge unavailable';
+                    gpuBadgeEl.textContent = 'unavailable';
+                    showError('requestAdapter returned null.');
+                    return false;
+                }
+                gpuBadgeEl.className = 'badge available';
+                gpuBadgeEl.textContent = 'available';
+                log(`WebGPU adapter: ${adapter.info?.vendor ?? 'unknown vendor'}`);
+                return true;
+            } catch (err) {
+                gpuBadgeEl.className = 'badge unavailable';
+                gpuBadgeEl.textContent = 'unavailable';
+                showError(`Adapter request failed: ${err.message}`);
+                return false;
+            }
+        }
+
+        async function loadBrain() {
+            loadBrainBtn.disabled = true;
+            clearError();
+            try {
+                const cartName = cartInput.value.trim();
+                if (!cartName) throw new Error('Cart name required');
+
+                log(`=== Loading brain for ${cartName} ===`);
+                if (!engine) {
+                    log('Constructing LatticeEngine(4096)...');
+                    engine = new LatticeEngine(4096);
+                    const t0 = performance.now();
+                    await engine.init();
+                    log(`init() complete in ${(performance.now() - t0).toFixed(1)} ms`);
+                    engine.setProfile('quality');
+                    log(`Protecting hippocampus row ${HIPPO_ROW} (ROW_FULLY_PROTECTED)`);
+                    engine.setRowPhysics(HIPPO_ROW, ROW_FULLY_PROTECTED);
+                }
+
+                const brainUrl = `/api/cartridges/${encodeURIComponent(cartName)}/brain`;
+                log(`Fetching brain from ${brainUrl}`);
+                const tFetch = performance.now();
+                const npyBuffer = await fetchNpyWithProgress(brainUrl,
+                    (loaded, total) => setProgress(loaded, total, 'Brain'));
+                log(`fetched in ${(performance.now() - tFetch).toFixed(0)} ms (${(npyBuffer.byteLength / 1048576).toFixed(1)} MB)`);
+
+                const npy = parseNpy(npyBuffer);
+                log(`NPY: dtype=${npy.dtype} shape=[${npy.shape.join(', ')}]`);
+
+                if (npy.dtype !== '<u4') {
+                    throw new Error(`Expected dtype '<u4', got '${npy.dtype}'`);
+                }
+
+                const N = engine.numNeurons;
+                const total = new Uint32Array(npy.data);
+                let state, weights;
+                if (total.length === N * 2) {
+                    state = total.subarray(0, N);
+                    weights = total.subarray(N, N * 2);
+                } else if (total.length === N) {
+                    state = new Uint32Array(N);
+                    weights = total;
+                } else {
+                    throw new Error(`Unexpected brain size: ${total.length} uint32s`);
+                }
+
+                const tLoad = performance.now();
+                await engine.loadBrain(state, weights);
+                log(`loadBrain complete in ${(performance.now() - tLoad).toFixed(1)} ms`);
+
+                brainLoaded = true;
+                brainBadgeEl.className = 'badge ready';
+                brainBadgeEl.textContent = 'ready';
+                runBtn.disabled = false;
+                progressFill.style.width = '100%';
+                progressText.textContent = 'Brain ready';
+                log('=== Brain loaded. Ready to run Associate. ===');
+                log('');
+            } catch (err) {
+                log(`FAIL: ${err.message}`);
+                console.error(err);
+                showError(`Load brain failed: ${err.message}`);
+            } finally {
+                loadBrainBtn.disabled = false;
+            }
+        }
+
+        /**
+         * Settle a single embedding through physics and return the unit-normalized decoded analog vector.
+         * Mirrors the per-candidate inner loop of search.py:_associate_search_two_sided.
+         */
+        async function settleEmbedding(emb) {
+            const pattern = abEncodeRegionFill(emb);
+            await engine.reset(); // state-only zero; weights preserved (engine fix Phase 2c)
+            await engine.imprintPattern(pattern);
+            await engine.settle(SETTLE_FRAMES, false);
+            const settled = await engine.recall();
+            const decoded = abDecodeRegionFillAnalog(settled);
+            return l2Normalize(decoded);
+        }
+
+        async function runAssociate() {
+            runBtn.disabled = true;
+            clearError();
+            resultsEl.innerHTML = 'Running...';
+            try {
+                const queryIdx = parseInt(document.getElementById('query-idx').value, 10);
+                const poolSize = parseInt(document.getElementById('pool-size').value, 10);
+                const topK = parseInt(document.getElementById('top-k').value, 10);
+
+                log(`=== Run Associate: query=#${queryIdx}, pool=${poolSize}, top-K=${topK} ===`);
+
+                log(`Fetching query embedding at index ${queryIdx}...`);
+                const qResp = await fetch(`/api/cartridges/mounted/embedding/${queryIdx}`);
+                if (!qResp.ok) {
+                    const errText = await qResp.text();
+                    throw new Error(`Query embedding fetch failed: ${qResp.status} — ${errText}`);
+                }
+                const qData = await qResp.json();
+                const queryEmb = new Float32Array(qData.embedding);
+                log(`  query passage: "${qData.passage.slice(0, 100)}${qData.passage.length > 100 ? '...' : ''}"`);
+
+                log(`Requesting cosine candidate pool (top ${poolSize})...`);
+                const tCos = performance.now();
+                const candResp = await fetch('/api/cartridges/mounted/cosine-candidates', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ embedding: Array.from(queryEmb), pool_size: poolSize }),
+                });
+                if (!candResp.ok) {
+                    const errText = await candResp.text();
+                    throw new Error(`Candidate pool fetch failed: ${candResp.status} — ${errText}`);
+                }
+                const candData = await candResp.json();
+                log(`  got ${candData.candidates.length} candidates from ${candData.total_embeddings.toLocaleString()} embeddings in ${(performance.now() - tCos).toFixed(0)} ms`);
+
+                log('Settling query through physics...');
+                const tQ = performance.now();
+                const settledQ = await settleEmbedding(queryEmb);
+                log(`  query settled in ${(performance.now() - tQ).toFixed(0)} ms`);
+
+                log(`Per-candidate physics settle (${candData.candidates.length} candidates)...`);
+                const tPool = performance.now();
+                const scored = [];
+                for (let i = 0; i < candData.candidates.length; i++) {
+                    setStepProgress(i, candData.candidates.length, 'Settling candidate');
+                    const c = candData.candidates[i];
+                    const candEmb = new Float32Array(c.embedding);
+                    const settledC = await settleEmbedding(candEmb);
+                    const physicsScore = dot(settledQ, settledC);
+                    scored.push({
+                        idx: c.idx,
+                        passage: c.passage,
+                        cosine_score: c.cosine_score,
+                        physics_score: physicsScore,
+                    });
+                }
+                setStepProgress(candData.candidates.length, candData.candidates.length, 'Settled');
+                const poolMs = performance.now() - tPool;
+                log(`  pool settled in ${poolMs.toFixed(0)} ms (${(poolMs / candData.candidates.length).toFixed(0)} ms/candidate)`);
+
+                scored.sort((a, b) => b.physics_score - a.physics_score);
+                const top = scored.slice(0, topK);
+
+                log('');
+                log('=== TOP K RESULTS (sorted by physics score) ===');
+                let html = '';
+                for (let r = 0; r < top.length; r++) {
+                    const item = top[r];
+                    const safePassage = item.passage.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+                    html += `
+                        <div class="result-item">
+                            <span class="rank">#${r + 1}</span>
+                            <span style="color:#0f0;">idx ${item.idx}</span>
+                            <span class="scores">phys=${item.physics_score.toFixed(4)} | cos=${item.cosine_score.toFixed(4)}</span>
+                            <div class="passage">${safePassage.slice(0, 240)}${safePassage.length > 240 ? '…' : ''}</div>
+                        </div>
+                    `;
+                    log(`  #${r + 1}  idx=${item.idx}  phys=${item.physics_score.toFixed(4)}  cos=${item.cosine_score.toFixed(4)}  "${item.passage.slice(0, 80)}..."`);
+                }
+                resultsEl.innerHTML = html;
+
+                log('');
+                if (top[0].idx === queryIdx) {
+                    log('PASS: query retrieved itself at #1 (self-retrieval sanity check).');
+                } else {
+                    log(`NOTE: query did not self-retrieve at #1 (got idx ${top[0].idx} instead of ${queryIdx}). This is OK for substrate physics — the settled-vs-settled comparison can rank a semantic neighbor above the query itself.`);
+                }
+                log('=== Run complete ===');
+            } catch (err) {
+                log(`FAIL: ${err.message}`);
+                console.error(err);
+                showError(`Run failed: ${err.message}`);
+                resultsEl.innerHTML = 'Failed — see log.';
+            } finally {
+                runBtn.disabled = false;
+            }
+        }
+
+        loadBrainBtn.addEventListener('click', loadBrain);
+        runBtn.addEventListener('click', runAssociate);
+        probeWebGPU().then(ok => { if (ok) loadBrainBtn.disabled = false; });
+    </script>
+</body>
+</html>

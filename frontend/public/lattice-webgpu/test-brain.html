@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>VPS WebGPU Brain Test (v2 — real brain settle)</title>
+    <style>
+        body { background: #0a0a0a; color: #e0e0e0; font-family: 'Consolas', 'Monaco', monospace; padding: 20px; }
+        h1 { font-size: 18px; color: #0f0; margin-bottom: 4px; }
+        .sub { font-size: 12px; color: #888; margin-bottom: 20px; }
+        .row { display: flex; gap: 12px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
+        button { background: #1a3a1a; color: #0f0; border: 1px solid #0a0; padding: 8px 16px; font-family: inherit; font-size: 13px; cursor: pointer; }
+        button:hover { background: #2a4a2a; }
+        button:disabled { background: #1a1a1a; color: #555; border-color: #333; cursor: not-allowed; }
+        input { background: #050505; color: #0f0; border: 1px solid #222; padding: 6px 10px; font-family: inherit; font-size: 13px; width: 200px; }
+        .badge { padding: 4px 10px; border: 1px solid #333; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+        .badge.detecting { color: #fa0; border-color: #fa0; }
+        .badge.available { color: #0f0; border-color: #0f0; }
+        .badge.unavailable { color: #f44; border-color: #f44; }
+        textarea { width: 100%; height: 500px; background: #050505; color: #0f0; border: 1px solid #222; padding: 12px; font-family: inherit; font-size: 12px; line-height: 1.5; }
+        .alert { padding: 10px; border: 1px solid #f44; background: #1a0505; color: #f88; font-size: 12px; margin: 10px 0; }
+        .progress { height: 6px; background: #1a1a1a; border-radius: 3px; overflow: hidden; width: 300px; }
+        .progress-fill { height: 100%; background: linear-gradient(to right, #fa0, #0f0); transition: width 0.1s; width: 0%; }
+    </style>
+</head>
+<body>
+    <h1>VPS WebGPU Brain Test — v2 (real brain fetched from backend)</h1>
+    <div class="sub">
+        Probe WebGPU → fetch brain.npy from <code>/api/cartridges/{name}/brain</code> → parse NPY → loadBrain → imprint → settle → recall.
+        Expected: settle produces non-zero output (weights anchor the pattern). Compare against v1 which decayed to zero.
+    </div>
+
+    <div class="row">
+        <span>WebGPU:</span>
+        <span id="gpu-badge" class="badge detecting">detecting</span>
+        <span>Cart name:</span>
+        <input id="cart-name" value="gutenberg-poetry" />
+        <button id="run-btn" disabled>Run Test</button>
+    </div>
+    <div class="row">
+        <span style="font-size: 11px; color: #888;">Download progress:</span>
+        <div class="progress"><div id="progress-fill" class="progress-fill"></div></div>
+        <span id="progress-text" style="font-size: 11px; color: #888;"></span>
+    </div>
+
+    <div id="error-slot"></div>
+    <textarea id="log" readonly></textarea>
+
+    <script type="module">
+        import { LatticeEngine } from './lattice-engine.js';
+        import { abEncodeRegionFill, abDecodeRegionFillAnalog } from './region-fill-encoder.js';
+        import { parseNpy, fetchNpyWithProgress } from './npy-loader.js';
+
+        const logEl = document.getElementById('log');
+        const badgeEl = document.getElementById('gpu-badge');
+        const runBtn = document.getElementById('run-btn');
+        const errorSlot = document.getElementById('error-slot');
+        const cartInput = document.getElementById('cart-name');
+        const progressFill = document.getElementById('progress-fill');
+        const progressText = document.getElementById('progress-text');
+
+        function log(msg) {
+            const ts = new Date().toISOString().substr(11, 12);
+            logEl.value += `[${ts}] ${msg}\n`;
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        function showError(msg) {
+            errorSlot.innerHTML = `<div class="alert">${msg}</div>`;
+        }
+
+        function setBadge(state) {
+            badgeEl.className = `badge ${state}`;
+            badgeEl.textContent = state;
+        }
+
+        function setProgress(loaded, total) {
+            if (total > 0) {
+                const pct = (loaded / total) * 100;
+                progressFill.style.width = `${pct}%`;
+                progressText.textContent = `${(loaded / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB`;
+            } else {
+                progressText.textContent = `${(loaded / 1048576).toFixed(1)} MB`;
+            }
+        }
+
+        async function probeWebGPU() {
+            if (!('gpu' in navigator)) {
+                setBadge('unavailable');
+                showError('navigator.gpu not exposed. Use Chrome or Edge.');
+                return false;
+            }
+            try {
+                const adapter = await navigator.gpu.requestAdapter();
+                if (!adapter) {
+                    setBadge('unavailable');
+                    showError('requestAdapter returned null — no working GPU adapter.');
+                    return false;
+                }
+                setBadge('available');
+                log(`WebGPU adapter acquired: ${adapter.info?.vendor ?? 'unknown vendor'}`);
+                return true;
+            } catch (err) {
+                setBadge('unavailable');
+                showError(`Adapter request failed: ${err.message}`);
+                return false;
+            }
+        }
+
+        async function runTest() {
+            runBtn.disabled = true;
+            errorSlot.innerHTML = '';
+            try {
+                const cartName = cartInput.value.trim();
+                if (!cartName) throw new Error('Cart name required');
+
+                log('=== Test v2: real brain settle ===');
+                log(`Cart: ${cartName}`);
+
+                log('Constructing LatticeEngine(4096)...');
+                const engine = new LatticeEngine(4096);
+                log('Calling init()...');
+                const t0 = performance.now();
+                await engine.init();
+                log(`init() complete in ${(performance.now() - t0).toFixed(1)} ms`);
+                engine.setProfile('quality');
+
+                const brainUrl = `/api/cartridges/${encodeURIComponent(cartName)}/brain`;
+                log(`Fetching brain from ${brainUrl}`);
+                const tFetch = performance.now();
+                const npyBuffer = await fetchNpyWithProgress(brainUrl, setProgress);
+                log(`fetched in ${(performance.now() - tFetch).toFixed(0)} ms — ${(npyBuffer.byteLength / 1048576).toFixed(1)} MB`);
+
+                log('Parsing NPY header...');
+                const npy = parseNpy(npyBuffer);
+                log(`  dtype: ${npy.dtype}`);
+                log(`  shape: [${npy.shape.join(', ')}]`);
+                log(`  fortran_order: ${npy.fortranOrder}`);
+                log(`  data offset: ${npy.dataOffset} bytes`);
+
+                if (npy.dtype !== '<u4') {
+                    throw new Error(`Expected dtype '<u4' (uint32 LE), got '${npy.dtype}'. This test only handles the legacy 128 MB brain format.`);
+                }
+
+                const N = engine.numNeurons;
+                const total = new Uint32Array(npy.data);
+                log(`  parsed ${total.length.toLocaleString()} uint32 values (expected ${(N * 2).toLocaleString()} for legacy 128 MB)`);
+
+                let state, weights;
+                if (total.length === N * 2) {
+                    state = total.subarray(0, N);
+                    weights = total.subarray(N, N * 2);
+                    log('Format: LEGACY (state + weights, 128 MB)');
+                } else if (total.length === N) {
+                    state = new Uint32Array(N);
+                    weights = total;
+                    log('Format: COMPACT (weights only, 64 MB)');
+                } else {
+                    throw new Error(`Unexpected brain size: ${total.length} uint32s. Expected ${N} (compact) or ${N * 2} (legacy).`);
+                }
+
+                log(`Loading brain into engine: state=${state.length.toLocaleString()} u32, weights=${weights.length.toLocaleString()} u32`);
+                const tLoad = performance.now();
+                await engine.loadBrain(state, weights);
+                log(`loadBrain complete in ${(performance.now() - tLoad).toFixed(1)} ms`);
+
+                log('Building synthetic query: dims 0..99 = +1.0, rest = -1.0');
+                const queryEmb = new Float32Array(768);
+                for (let i = 0; i < 100; i++) queryEmb[i] = 1.0;
+                for (let i = 100; i < 768; i++) queryEmb[i] = -1.0;
+
+                const pattern = abEncodeRegionFill(queryEmb);
+                const activeBefore = pattern.reduce((a, b) => a + b, 0);
+                log(`Encoded pattern: ${activeBefore.toLocaleString()} active cells (${(100 * activeBefore / pattern.length).toFixed(2)}%)`);
+
+                log('reset() — note: this clears state but preserves weights? Check engine behavior...');
+                // The engine's reset() zeros BOTH state and weights — that would defeat the brain load.
+                // For real Associate flow we'd skip reset and let the imprint overwrite state directly.
+                // Verify by NOT calling reset:
+                log('Skipping reset() so the loaded brain weights are preserved.');
+                log('imprintPattern() — uploading pattern to state buffer');
+                await engine.imprintPattern(pattern);
+
+                log('settle(frames=30, learn=false) — physics with trained weights');
+                const tSettle = performance.now();
+                await engine.settle(30, false);
+                log(`settle complete in ${(performance.now() - tSettle).toFixed(1)} ms`);
+
+                log('recall()');
+                const settled = await engine.recall();
+                const activeAfter = settled.reduce((a, b) => a + b, 0);
+                log(`settled state: ${activeAfter.toLocaleString()} active cells (${(100 * activeAfter / settled.length).toFixed(2)}%)`);
+
+                if (activeAfter === 0) {
+                    log('UNEXPECTED: settled to zero even with brain loaded. Possible issues: (a) brain weights are zero, (b) imprint cleared by load, (c) settle param mismatch.');
+                } else {
+                    log('PASS: brain weights anchored the pattern through settle (non-zero result).');
+                }
+
+                const decoded = abDecodeRegionFillAnalog(settled);
+                const first20 = Array.from(decoded.slice(0, 20)).map(v => v.toFixed(3)).join(', ');
+                log(`decoded[0..19] = [${first20}]`);
+
+                const minVal = Math.min(...decoded);
+                const maxVal = Math.max(...decoded);
+                const meanVal = decoded.reduce((a, b) => a + b, 0) / decoded.length;
+                log(`decoded stats: min=${minVal.toFixed(3)}, max=${maxVal.toFixed(3)}, mean=${meanVal.toFixed(3)}`);
+
+                log('');
+                log('=== Test v2 complete ===');
+            } catch (err) {
+                log(`FAIL: ${err.message}`);
+                log(err.stack ?? '(no stack)');
+                showError(`Test failed: ${err.message}`);
+            } finally {
+                runBtn.disabled = false;
+            }
+        }
+
+        runBtn.addEventListener('click', runTest);
+        probeWebGPU().then(ok => { if (ok) runBtn.disabled = false; });
+    </script>
+</body>
+</html>

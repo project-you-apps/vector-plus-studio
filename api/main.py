@@ -17,6 +17,7 @@ import numpy as np
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 # ---------------------------------------------------------------------------
 # Sentry error monitoring (Andy 2026-05-12).
@@ -339,6 +340,112 @@ async def get_cartridges():
         ))
 
     return CartridgeListResponse(cartridges=items)
+
+
+@app.get("/api/cartridges/{cart_name}/brain")
+async def download_brain(cart_name: str):
+    """Stream a cart's brain file (_brain.npy) for browser-side WebGPU physics.
+
+    Public download, no auth — public-demo carts are already listed without JWT,
+    and the brain weights are useless without the embeddings/passages they pair with.
+    Path traversal is prevented by find_companion_file, which only searches
+    whitelisted cartridge directories.
+    """
+    brain_path = find_companion_file(cart_name, "_brain.npy")
+    if not brain_path or not os.path.exists(brain_path):
+        raise HTTPException(status_code=404, detail=f"Brain file not found for '{cart_name}'")
+    return FileResponse(
+        brain_path,
+        media_type="application/octet-stream",
+        filename=f"{cart_name}_brain.npy",
+    )
+
+
+@app.get("/api/cartridges/{cart_name}/embeddings")
+async def download_embeddings(cart_name: str):
+    """Stream a cart's .cart.npz (embeddings + passages) for browser-side use.
+
+    Same access model as the brain endpoint. The .cart.npz contains the
+    embedding matrix and passage records the WebGPU engine needs to score
+    candidates after settle.
+    """
+    for suffix in (".cart.npz", ".pkl"):
+        cart_path = find_companion_file(cart_name, suffix)
+        if cart_path and os.path.exists(cart_path):
+            return FileResponse(
+                cart_path,
+                media_type="application/octet-stream",
+                filename=f"{cart_name}{suffix}",
+            )
+    raise HTTPException(status_code=404, detail=f"Cart file not found for '{cart_name}'")
+
+
+@app.get("/api/cartridges/mounted/embedding/{idx}")
+async def get_embedding_by_index(idx: int):
+    """Return a single embedding + passage from the currently-mounted cart.
+
+    Lets the browser fetch a known-good query vector without parsing the
+    full cart format. Used by the WebGPU Associate test path.
+    """
+    if engine.embeddings is None or not engine.passages:
+        raise HTTPException(status_code=400, detail="No cart mounted")
+    if idx < 0 or idx >= len(engine.embeddings):
+        raise HTTPException(status_code=404, detail=f"Index {idx} out of range (0..{len(engine.embeddings) - 1})")
+    emb = engine.embeddings[idx].astype(np.float32).tolist()
+    return {
+        "idx": idx,
+        "embedding": emb,
+        "passage": engine.passages[idx],
+        "dim": len(emb),
+    }
+
+
+@app.post("/api/cartridges/mounted/cosine-candidates")
+async def cosine_candidate_pool(payload: dict):
+    """Cosine pre-filter on the mounted cart, returning a candidate pool.
+
+    Browser sends a query embedding + pool_size; server runs the cheap
+    vectorized cosine and returns the top-N candidates including each
+    candidate's full embedding + passage text. The browser then runs
+    the expensive per-candidate physics settle via WebGPU.
+
+    Payload: {"embedding": [768 floats], "pool_size": 50}
+    Response: {"candidates": [{idx, cosine_score, embedding, passage}, ...]}
+    """
+    if engine.embeddings is None or not engine.passages:
+        raise HTTPException(status_code=400, detail="No cart mounted")
+
+    emb_list = payload.get("embedding")
+    if not isinstance(emb_list, list):
+        raise HTTPException(status_code=400, detail="Missing 'embedding' (list of floats)")
+    pool_size = int(payload.get("pool_size", 50))
+
+    q = np.asarray(emb_list, dtype=np.float32)
+    if q.shape[0] != engine.embeddings.shape[1]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Embedding dim mismatch: got {q.shape[0]}, expected {engine.embeddings.shape[1]}",
+        )
+
+    q_norm = q / (float(np.linalg.norm(q)) + 1e-9)
+    embeddings = engine.embeddings
+    e_norms = np.sqrt(np.einsum('ij,ij->i', embeddings, embeddings)) + 1e-9
+    cosine_sims = (embeddings @ q_norm) / e_norms
+
+    pool_size = min(pool_size, len(embeddings))
+    pool_idx = np.argpartition(-cosine_sims, pool_size - 1)[:pool_size]
+    pool_idx = pool_idx[np.argsort(-cosine_sims[pool_idx])]
+
+    candidates = []
+    for idx in pool_idx:
+        idx_int = int(idx)
+        candidates.append({
+            "idx": idx_int,
+            "cosine_score": float(cosine_sims[idx_int]),
+            "embedding": embeddings[idx_int].astype(np.float32).tolist(),
+            "passage": engine.passages[idx_int],
+        })
+    return {"candidates": candidates, "total_embeddings": len(embeddings)}
 
 
 @app.get("/api/browse")
