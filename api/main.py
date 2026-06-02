@@ -380,55 +380,90 @@ async def download_embeddings(cart_name: str):
     raise HTTPException(status_code=404, detail=f"Cart file not found for '{cart_name}'")
 
 
-@app.get("/api/cartridges/mounted/embedding/{idx}")
-async def get_embedding_by_index(idx: int):
-    """Return a single embedding + passage from the currently-mounted cart.
+# ---------------------------------------------------------------------------
+# Cart embeddings cache — lets the cart_name-keyed routes serve queries
+# without requiring the cart be mounted in the engine. Tiny LRU so memory
+# stays bounded across multiple cart lookups in one session.
+# ---------------------------------------------------------------------------
+_CART_CACHE: dict[str, tuple[np.ndarray, list[str]]] = {}
+_CART_CACHE_ORDER: list[str] = []
+_CART_CACHE_MAX = 3
 
-    Lets the browser fetch a known-good query vector without parsing the
-    full cart format. Used by the WebGPU Associate test path.
+
+def _load_cart_cached(cart_name: str) -> tuple[np.ndarray, list[str]]:
+    """Return (embeddings, passages) for a cart, mounting-free.
+
+    Prefers the engine's already-loaded copy when the cart is mounted (avoids
+    a redundant disk read). Otherwise loads via load_cartridge / a small NPZ
+    fall-through and caches the result.
     """
-    if engine.embeddings is None or not engine.passages:
-        raise HTTPException(status_code=400, detail="No cart mounted")
-    if idx < 0 or idx >= len(engine.embeddings):
-        raise HTTPException(status_code=404, detail=f"Index {idx} out of range (0..{len(engine.embeddings) - 1})")
-    emb = engine.embeddings[idx].astype(np.float32).tolist()
-    return {
-        "idx": idx,
-        "embedding": emb,
-        "passage": engine.passages[idx],
-        "dim": len(emb),
-    }
+    if engine.mounted_name == cart_name and engine.embeddings is not None and engine.passages:
+        return engine.embeddings, engine.passages
+
+    cached = _CART_CACHE.get(cart_name)
+    if cached is not None:
+        return cached
+
+    pkl_path = find_companion_file(cart_name, ".pkl")
+    npz_path = find_companion_file(cart_name, ".cart.npz")
+
+    emb: np.ndarray | None = None
+    passages: list[str] | None = None
+
+    if pkl_path and os.path.exists(pkl_path):
+        cart_data = load_cartridge(pkl_path)
+        if cart_data and cart_data.get("embeddings") is not None:
+            emb = cart_data["embeddings"]
+            passages = list(cart_data["passages"])
+
+    if emb is None and npz_path and os.path.exists(npz_path):
+        data = np.load(npz_path, allow_pickle=True)
+        if "embeddings" in data.files:
+            emb = data["embeddings"]
+            if "passages" in data.files:
+                passages = [str(p) for p in data["passages"]]
+            elif "snippets" in data.files:
+                passages = [str(s) for s in data["snippets"]]
+        data.close()
+
+    if emb is None or passages is None:
+        raise HTTPException(status_code=404, detail=f"Cart '{cart_name}' not found or has no embeddings")
+
+    _CART_CACHE[cart_name] = (emb, passages)
+    _CART_CACHE_ORDER.append(cart_name)
+    while len(_CART_CACHE_ORDER) > _CART_CACHE_MAX:
+        evict = _CART_CACHE_ORDER.pop(0)
+        _CART_CACHE.pop(evict, None)
+    return emb, passages
 
 
-@app.post("/api/cartridges/mounted/cosine-candidates")
-async def cosine_candidate_pool(payload: dict):
-    """Cosine pre-filter on the mounted cart, returning a candidate pool.
+@app.post("/api/embed")
+async def embed_query(payload: dict):
+    """Return the Nomic embedding for a query string.
 
-    Browser sends a query embedding + pool_size; server runs the cheap
-    vectorized cosine and returns the top-N candidates including each
-    candidate's full embedding + passage text. The browser then runs
-    the expensive per-candidate physics settle via WebGPU.
-
-    Payload: {"embedding": [768 floats], "pool_size": 50}
-    Response: {"candidates": [{idx, cosine_score, embedding, passage}, ...]}
+    Used by browser-side WebGPU Associate: the browser sends the user's text,
+    we run the SentenceTransformer query encoder server-side (cheap, ~80 ms),
+    and return the 768-dim vector. Browser then runs the per-candidate physics
+    settle locally on its own GPU.
     """
-    if engine.embeddings is None or not engine.passages:
-        raise HTTPException(status_code=400, detail="No cart mounted")
+    text = payload.get("query")
+    if not isinstance(text, str) or not text.strip():
+        raise HTTPException(status_code=400, detail="Missing 'query' (non-empty string)")
+    emb = engine.embed_query(text).astype(np.float32)
+    return {"embedding": emb.tolist(), "dim": int(emb.shape[0])}
 
-    emb_list = payload.get("embedding")
+
+def _cosine_candidates(emb_list, pool_size, embeddings, passages):
+    """Shared cosine-prefilter implementation used by both /mounted and /{name} routes."""
     if not isinstance(emb_list, list):
         raise HTTPException(status_code=400, detail="Missing 'embedding' (list of floats)")
-    pool_size = int(payload.get("pool_size", 50))
-
     q = np.asarray(emb_list, dtype=np.float32)
-    if q.shape[0] != engine.embeddings.shape[1]:
+    if q.shape[0] != embeddings.shape[1]:
         raise HTTPException(
             status_code=400,
-            detail=f"Embedding dim mismatch: got {q.shape[0]}, expected {engine.embeddings.shape[1]}",
+            detail=f"Embedding dim mismatch: got {q.shape[0]}, expected {embeddings.shape[1]}",
         )
-
     q_norm = q / (float(np.linalg.norm(q)) + 1e-9)
-    embeddings = engine.embeddings
     e_norms = np.sqrt(np.einsum('ij,ij->i', embeddings, embeddings)) + 1e-9
     cosine_sims = (embeddings @ q_norm) / e_norms
 
@@ -443,9 +478,56 @@ async def cosine_candidate_pool(payload: dict):
             "idx": idx_int,
             "cosine_score": float(cosine_sims[idx_int]),
             "embedding": embeddings[idx_int].astype(np.float32).tolist(),
-            "passage": engine.passages[idx_int],
+            "passage": passages[idx_int],
         })
     return {"candidates": candidates, "total_embeddings": len(embeddings)}
+
+
+@app.get("/api/cartridges/mounted/embedding/{idx}")
+async def get_embedding_by_index(idx: int):
+    """Return a single embedding + passage from the currently-mounted cart.
+
+    Convenience wrapper around the cart_name-keyed route; serves the test
+    pages that don't know which cart is mounted.
+    """
+    if engine.embeddings is None or not engine.passages:
+        raise HTTPException(status_code=400, detail="No cart mounted")
+    if idx < 0 or idx >= len(engine.embeddings):
+        raise HTTPException(status_code=404, detail=f"Index {idx} out of range (0..{len(engine.embeddings) - 1})")
+    emb = engine.embeddings[idx].astype(np.float32).tolist()
+    return {"idx": idx, "embedding": emb, "passage": engine.passages[idx], "dim": len(emb)}
+
+
+@app.post("/api/cartridges/mounted/cosine-candidates")
+async def cosine_candidate_pool_mounted(payload: dict):
+    """Cosine pre-filter on the mounted cart. Kept for back-compat with the
+    test pages; production UI uses the cart_name-keyed route below."""
+    if engine.embeddings is None or not engine.passages:
+        raise HTTPException(status_code=400, detail="No cart mounted")
+    pool_size = int(payload.get("pool_size", 50))
+    return _cosine_candidates(payload.get("embedding"), pool_size, engine.embeddings, engine.passages)
+
+
+@app.get("/api/cartridges/{cart_name}/embedding/{idx}")
+async def get_cart_embedding_by_index(cart_name: str, idx: int):
+    """Mount-free version: lazy-loads the cart from disk (cached) and returns
+    a single embedding + passage. Lets the WebGPU Associate path survive
+    backend hot-reloads and engine restarts."""
+    embeddings, passages = _load_cart_cached(cart_name)
+    if idx < 0 or idx >= len(embeddings):
+        raise HTTPException(status_code=404, detail=f"Index {idx} out of range (0..{len(embeddings) - 1})")
+    emb = embeddings[idx].astype(np.float32).tolist()
+    return {"idx": idx, "embedding": emb, "passage": passages[idx], "dim": len(emb)}
+
+
+@app.post("/api/cartridges/{cart_name}/cosine-candidates")
+async def cosine_candidate_pool_for_cart(cart_name: str, payload: dict):
+    """Mount-free cosine pre-filter for the named cart. Loads embeddings on
+    demand with a small LRU cache so the WebGPU Associate path doesn't
+    depend on which cart the engine happens to have mounted."""
+    embeddings, passages = _load_cart_cached(cart_name)
+    pool_size = int(payload.get("pool_size", 50))
+    return _cosine_candidates(payload.get("embedding"), pool_size, embeddings, passages)
 
 
 @app.get("/api/browse")

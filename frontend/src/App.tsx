@@ -30,7 +30,7 @@ function ScreenStub({ title, body }: { title: string; body: string }) {
 }
 
 export default function App() {
-  const { fetchStatus, status, editorOpen, activeScreen } = useAppStore()
+  const { fetchStatus, status, editorOpen, activeScreen, detectWebGpuOnce } = useAppStore()
   const initAuth = useAuthStore((s) => s.init)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -38,6 +38,13 @@ export default function App() {
     // Bootstrap Supabase session from cookies + subscribe to auth state changes.
     initAuth()
   }, [initAuth])
+
+  useEffect(() => {
+    // Probe WebGPU once on app load. Result lives in the store and gates
+    // browser-side Associate when the server lacks CUDA. Safe to call repeatedly;
+    // the underlying detector dedupes on the first call.
+    void detectWebGpuOnce()
+  }, [detectWebGpuOnce])
 
   useEffect(() => {
     fetchStatus()

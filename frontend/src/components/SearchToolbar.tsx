@@ -26,7 +26,16 @@ export default function SearchToolbar() {
     searchMode, blendAlpha,
     fetchCartridges, mount, unmount,
     setSearchMode, setBlendAlpha,
+    webgpuStatus, webgpuBrainLoading, webgpuBrainProgress,
   } = useAppStore()
+
+  // WebGPU Associate gating (Phase 2e). When the server has no CUDA but the
+  // browser has WebGPU and the mounted cart has a brain on disk, Associate
+  // is available via browser-side physics.
+  const mountedName = status?.mounted_cartridge ?? null
+  const mountedCartHasBrain = !!cartridges.find((c) => c.name === mountedName)?.has_brain
+  const webgpuAssociateAvailable =
+    webgpuStatus === 'available' && !status?.gpu_available && !!mountedName && mountedCartHasBrain
 
   const [open, setOpen] = useState(false)
   const [modeOpen, setModeOpen] = useState(false)
@@ -359,8 +368,12 @@ export default function SearchToolbar() {
               const needsFullBrain = m.key === 'smart' || m.key === 'associate'
               const needsSigs = m.key === 'pure_brain'
               const stillTraining = !!status?.training_active
+              // Associate has a second path: browser-side WebGPU when the
+              // server lacks CUDA. Smart Search still needs server CUDA
+              // because the blend ranges are server-only for now.
+              const webgpuViable = m.key === 'associate' && webgpuAssociateAvailable
               const isDisabled =
-                (needsFullBrain && !status?.gpu_available) ||
+                (needsFullBrain && !status?.gpu_available && !webgpuViable) ||
                 (needsFullBrain && status?.gpu_available && (!status?.physics_trained || stillTraining)) ||
                 (needsSigs && !status?.signatures_loaded)
               const isTraining =
@@ -368,9 +381,11 @@ export default function SearchToolbar() {
                 (needsSigs && !status?.signatures_loaded && stillTraining)
               const isReady =
                 (needsFullBrain && status?.physics_trained && !stillTraining) ||
-                (needsSigs && status?.signatures_loaded)
+                (needsSigs && status?.signatures_loaded) ||
+                webgpuViable
               let subtitle = m.desc
-              if (needsFullBrain && !status?.gpu_available) subtitle = 'Requires GPU'
+              if (webgpuViable) subtitle = 'Browser GPU (WebGPU)'
+              else if (needsFullBrain && !status?.gpu_available) subtitle = 'Requires GPU'
               else if (needsSigs && !status?.signatures_loaded && stillTraining) subtitle = 'Building signatures…'
               else if (needsSigs && !status?.signatures_loaded) subtitle = 'Signatures not available'
               else if (needsFullBrain && stillTraining) subtitle = 'Training — available soon'
@@ -424,6 +439,26 @@ export default function SearchToolbar() {
           </div>
         )}
       </div>
+
+      {webgpuBrainLoading && webgpuBrainProgress && (
+        <div className="flex items-center gap-2 px-3 py-1 rounded-lg border border-cyan-500/40 bg-cyan-500/5 text-xs">
+          <Loader2 size={12} className="text-cyan-400 animate-spin shrink-0" />
+          <span className="text-cyan-200 uppercase tracking-wider text-[10px]">{webgpuBrainProgress.stage}</span>
+          {webgpuBrainProgress.total > 0 && (
+            <>
+              <div className="h-1 w-24 bg-slate-800 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-cyan-500 to-purple-500"
+                  style={{ width: `${(webgpuBrainProgress.loaded / webgpuBrainProgress.total) * 100}%` }}
+                />
+              </div>
+              <span className="text-cyan-300 font-mono shrink-0">
+                {(webgpuBrainProgress.loaded / 1048576).toFixed(0)} / {(webgpuBrainProgress.total / 1048576).toFixed(0)} MB
+              </span>
+            </>
+          )}
+        </div>
+      )}
 
       <div className="flex-1" />
     </div>

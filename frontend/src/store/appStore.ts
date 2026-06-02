@@ -4,6 +4,7 @@ import type {
   MemboxCartInfo, MemboxStatus,
 } from '../api/types'
 import * as api from '../api/client'
+import { detectWebGPU, runWebGpuAssociate, loadBrainForCart, isBrainLoadedFor } from '../lib/webgpuAssociate'
 
 // Top-level screen state (nav rail picks which screen renders in the main area).
 // 'search' is the default; the original VPS 1.0 search/CRUD experience. Other
@@ -42,6 +43,15 @@ interface AppState {
 
   // Add passage
   addingPassage: boolean
+
+  // WebGPU Associate (browser-side physics — Phase 2e). When the server
+  // doesn't have CUDA but the user has WebGPU + the mounted cart has a brain
+  // on disk, Associate runs in the browser on the user's GPU.
+  webgpuStatus: 'detecting' | 'available' | 'unavailable'
+  webgpuBrainLoading: boolean
+  webgpuBrainLoadedFor: string | null
+  webgpuBrainProgress: { loaded: number; total: number; stage: string } | null
+  detectWebGpuOnce: () => Promise<void>
 
   // Strict keyword filter
   strictMode: boolean
@@ -124,6 +134,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   searchModeLabel: '',
   searchElapsed: 0,
   searching: false,
+
+  webgpuStatus: 'detecting',
+  webgpuBrainLoading: false,
+  webgpuBrainLoadedFor: null,
+  webgpuBrainProgress: null,
+  detectWebGpuOnce: async () => {
+    const available = await detectWebGPU()
+    set({ webgpuStatus: available ? 'available' : 'unavailable' })
+  },
 
   deletedPatterns: [],
 
@@ -382,9 +401,52 @@ export const useAppStore = create<AppState>((set, get) => ({
   setTopK: (k) => set({ topK: k }),
 
   doSearch: async (query: string) => {
-    const { searchMode, blendAlpha, topK } = get()
+    const { searchMode, blendAlpha, topK, status, webgpuStatus, webgpuBrainLoadedFor, cartridges } = get()
     set({ searching: true, query })
+
+    // Decide whether browser-side WebGPU Associate should handle this call.
+    // Conditions: associate mode + WebGPU available + server lacks CUDA +
+    // a cart is mounted + that cart has a brain file we can fetch.
+    const mountedName = status?.mounted_cartridge ?? null
+    const mountedCart = mountedName ? cartridges.find((c) => c.name === mountedName) : null
+    const cartHasBrain = !!mountedCart?.has_brain
+    const useWebGpu =
+      searchMode === 'associate' &&
+      webgpuStatus === 'available' &&
+      !status?.gpu_available &&
+      !!mountedName &&
+      cartHasBrain
+
     try {
+      if (useWebGpu) {
+        try {
+          const t0 = performance.now()
+          if (webgpuBrainLoadedFor !== mountedName && !isBrainLoadedFor(mountedName!)) {
+            set({ webgpuBrainLoading: true, webgpuBrainProgress: null })
+            await loadBrainForCart(mountedName!, (p) => {
+              set({ webgpuBrainProgress: { loaded: p.loaded, total: p.total, stage: p.stage } })
+            })
+            set({ webgpuBrainLoading: false, webgpuBrainLoadedFor: mountedName, webgpuBrainProgress: null })
+          }
+          const results = await runWebGpuAssociate({
+            query,
+            cartName: mountedName!,
+            topK,
+            poolSize: 50,
+            onStatus: (msg) => set({ searchModeLabel: msg }),
+          })
+          set({
+            results,
+            searchModeLabel: 'Associate · WebGPU (30f settle)',
+            searchElapsed: Math.round(performance.now() - t0),
+          })
+          return
+        } catch (e) {
+          console.error('WebGPU Associate failed, falling back to server:', e)
+          set({ webgpuBrainLoading: false, webgpuBrainProgress: null })
+        }
+      }
+
       const resp = await api.search(query, searchMode, blendAlpha, topK)
       set({
         results: resp.results,
