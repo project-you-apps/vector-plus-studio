@@ -35,6 +35,12 @@ export interface SearchResult {
   // via /api/patterns/{idx} when the user clicks the CTA.
   source_db?: string | null
   paper_id?: string | null
+  // Provenance v1 sidecar — per-pattern source filename. Populated for
+  // local-mounted carts where the cart .npz contains a source_paths.npy
+  // entry (browser-built carts 2026-06-15+). undefined for legacy carts;
+  // ResultCard hides the source line when undefined. See
+  // CC_cart-provenance-schema_2026-06-15 for v2 schema upgrade plan.
+  source_path?: string | null
   // Step 2b: per-pattern RWX from the hippocampus row's perms_byte.
   // null when the cart has no hippocampus data; otherwise an object with
   // r/w/x bools and the raw byte value.

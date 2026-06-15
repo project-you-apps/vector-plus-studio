@@ -16,6 +16,13 @@ export interface LocalCart {
   embeddings: Float32Array      // flat N*768 row-major
   embeddingsShape: number[]     // [N, 768]
   passages: string[]            // length N
+  // Provenance v1 sidecar — source filename per pattern. Populated for
+  // browser-built carts 2026-06-15+ that include source_paths.npy in their
+  // .cart.npz. null for legacy server-built carts; cosineSearchLocal will
+  // skip populating SearchResult.source_path in that case, and ResultCard
+  // will hide the source line. See CC_cart-provenance-schema_2026-06-15
+  // for v2 schema upgrade plan (h-row source_idx + strings table).
+  sourcePaths: string[] | null  // length N or null
   sizeBytes: number
   mountedAt: number             // performance.now() timestamp
   // Figures embedded in the .cart.npz under 'figures/<hash>.<ext>'. Keyed by

@@ -62,6 +62,13 @@ export async function buildCart(
 
   const passages = sections.map((s) => s.text)
   const compressed_texts = passages // v1: no compression
+  // Provenance v1 sidecar — per-pattern source filename so result cards can
+  // display "this came from foo.py" without needing to reverse the FNV-1a
+  // source_hash in the hippocampus row. v2 will replace this with a proper
+  // strings table + source_idx field in h-row; tracked in
+  // CC_cart-provenance-schema_2026-06-15 as a v2 pilot blocker. See ALSO
+  // the "Provenance: v1 sidecar (alpha)" badge in the UI.
+  const source_paths = sections.map((s) => s.source)
   const hippocampus = packHippocampus(sections, options.hippocampus)
   const manifest = await buildManifest(embeddings, count, NOMIC_DIM)
   const permissions = buildPermissions(options.permissions)
@@ -71,6 +78,7 @@ export async function buildCart(
   zip.file('hippocampus.npy', dumpUint8(hippocampus, [count, 64]))
   zip.file('passages.npy', dumpUnicode(passages, [count]))
   zip.file('compressed_texts.npy', dumpUnicode(compressed_texts, [count]))
+  zip.file('source_paths.npy', dumpUnicode(source_paths, [count]))
 
   const cartBlob = await zip.generateAsync({
     type: 'blob',

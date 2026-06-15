@@ -289,6 +289,16 @@ export default function ResultCard({ result }: Props) {
 
         {/* Title + preview (click to expand) */}
         <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setExpanded(!expanded)}>
+          {/* Provenance v1 sidecar — source filename per result. Renders only
+              when the cart's source_paths.npy is present (browser-built carts
+              2026-06-15+). Quiet slate-500 caption above the title so it
+              doesn't fight the title for visual attention but is always
+              available for traceability. Hover to see the full path. */}
+          {result.source_path && (
+            <div className="text-[10px] text-slate-500 font-mono truncate mb-0.5" title={result.source_path}>
+              from <span className="text-slate-400">{result.source_path}</span>
+            </div>
+          )}
           <div className="flex items-center gap-2 mb-1">
             <h3 className="font-medium text-slate-200 truncate">
               {figureMeta

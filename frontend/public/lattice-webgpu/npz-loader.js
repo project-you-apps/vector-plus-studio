@@ -318,6 +318,22 @@ export async function parseCartNpz(buffer) {
         passages = parsePickledStrings(pickleBytes);
     }
 
+    // Provenance v1 sidecar — present iff the cart was browser-built with
+    // source_paths.npy. Older carts (server-built or pre-2026-06-15) won't
+    // have it; sourcePaths will be null and result cards just won't render
+    // a source line. v2 replaces this with a proper strings table indexed
+    // by the hippocampus source_idx field.
+    let sourcePaths = null;
+    const sourcePathsEntry = npzEntries['source_paths'];
+    if (sourcePathsEntry && sourcePathsEntry.data) {
+        const spDtype = sourcePathsEntry.dtype || '';
+        const spMatch = spDtype.match(/^<U(\d+)$/);
+        if (spMatch) {
+            const spMaxLen = parseInt(spMatch[1], 10);
+            sourcePaths = parseUnicodeStrings(sourcePathsEntry.data, spMaxLen, sourcePathsEntry.shape);
+        }
+    }
+
     // Second pass: figures/* entries. parseNpz already inflated them as
     // "raw" Uint8Array (since they don't look like .npy files, parseNpy errors
     // out and we keep the raw bytes). Walk the entry list to collect them
@@ -332,5 +348,5 @@ export async function parseCartNpz(buffer) {
         figures.set(basename, bytes);
     }
 
-    return { embeddings, embeddingsShape: embEntry.shape, passages, figures };
+    return { embeddings, embeddingsShape: embEntry.shape, passages, sourcePaths, figures };
 }

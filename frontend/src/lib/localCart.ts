@@ -12,6 +12,11 @@ interface ParsedCart {
     embeddings: Float32Array;
     embeddingsShape: number[];
     passages: string[];
+    // Provenance v1 sidecar — present iff the cart's .npz contains
+    // source_paths.npy (browser-built carts 2026-06-15+). Null/undefined
+    // for legacy server-built carts; ResultCard renders the source line
+    // only when this is present. See CC_cart-provenance-schema_2026-06-15.
+    sourcePaths?: string[] | null;
     figures?: Map<string, Uint8Array>;
 }
 
@@ -47,6 +52,7 @@ export async function parseCartFile(file: File): Promise<LocalCart> {
         embeddings: cart.embeddings,
         embeddingsShape: cart.embeddingsShape,
         passages: cart.passages,
+        sourcePaths: cart.sourcePaths ?? null,
         sizeBytes: file.size,
         mountedAt: performance.now(),
         figures: cart.figures ?? new Map(),
@@ -136,6 +142,11 @@ export function cosineSearchLocal(
             preview,
             full_text: passage,
             from_lattice: false,
+            // Provenance v1 sidecar — source filename per result, populated
+            // from the cart's source_paths.npy if present. Browser-built carts
+            // 2026-06-15+ have this; legacy server-built carts won't, and
+            // source_path will be undefined (ResultCard hides the source line).
+            source_path: cart.sourcePaths?.[idx] ?? undefined,
             // Sequential PREV/NEXT — clamped to cart bounds. The fancier
             // hippocampus-aware navigation (which respects document boundaries)
             // would require parsing hippocampus.npy from the cart; sequential
