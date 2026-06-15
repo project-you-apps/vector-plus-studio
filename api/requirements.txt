@@ -4,6 +4,11 @@ python-multipart>=0.0.6
 websockets>=12.0
 numpy>=1.24.0
 sentence-transformers>=2.2.0
+# Required by nomic-ai/nomic-embed-text-v1.5's trust_remote_code modeling file.
+# Without it, SentenceTransformer silently falls back to all-mpnet-base-v2,
+# which embeds in a completely different vector space than Nomic-built carts
+# (cosine search returns garbage results with low ~0.12 scores).
+einops>=0.7.0
 PyPDF2>=3.0.0
 python-docx>=0.8.11
 PyJWT>=2.8.0

@@ -235,12 +235,17 @@ export class LatticeEngine {
     }
 
     async _createPipelines() {
-        // Import shader modules
-        const physicsCode = await this._loadShader('shaders/physics.wgsl');
-        const kwtaCode = await this._loadShader('shaders/kwta.wgsl');
-        const hierarchyCode = await this._loadShader('shaders/hierarchy.wgsl');
-        const imprintCode = await this._loadShader('shaders/imprint.wgsl');
-        const utilCode = await this._loadShader('shaders/util.wgsl');
+        // Resolve shaders relative to this module's own URL so the engine can
+        // be loaded as a dynamic ES module from anywhere (test pages, main app,
+        // droplet behind nginx subroute) without the shader paths bending under
+        // SPA-fallback rules. import.meta.url points at lattice-engine.js;
+        // new URL('shaders/X.wgsl', ...) resolves to its sibling shaders dir.
+        const shaderUrl = (name) => new URL(`shaders/${name}`, import.meta.url).href;
+        const physicsCode = await this._loadShader(shaderUrl('physics.wgsl'));
+        const kwtaCode = await this._loadShader(shaderUrl('kwta.wgsl'));
+        const hierarchyCode = await this._loadShader(shaderUrl('hierarchy.wgsl'));
+        const imprintCode = await this._loadShader(shaderUrl('imprint.wgsl'));
+        const utilCode = await this._loadShader(shaderUrl('util.wgsl'));
 
         // Physics frame pipeline
         this.pipelines.physics = this._createComputePipeline('physics', physicsCode);
@@ -270,7 +275,7 @@ export class LatticeEngine {
         }
 
         // Hebbian learning (separate shader)
-        const hebbianCode = await this._loadShader('shaders/hebbian.wgsl');
+        const hebbianCode = await this._loadShader(new URL('shaders/hebbian.wgsl', import.meta.url).href);
         if (hebbianCode) {
             this.pipelines.hebbian = this._createComputePipeline('hebbian', hebbianCode);
         }
