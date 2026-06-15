@@ -261,6 +261,18 @@ export default function BrowserCartBuilder() {
             >
               cloud · v1.2
             </span>
+            {/* Forcing function: visible alpha-state banner for the v1 provenance
+                sidecar (source_paths.npy). Annoying enough we want to retire it;
+                visible enough externally that pilot customers will ask "when does
+                v2 land?", creating sales pressure to actually land v2 schema.
+                See CC_cart-provenance-schema_2026-06-15 for v2 spec + pilot
+                blocker reasoning. Retire this badge once v2 ships. */}
+            <span
+              className="text-[10px] uppercase tracking-wider text-amber-300 bg-amber-500/15 border border-amber-500/40 px-2 py-0.5 rounded font-mono cursor-help"
+              title="Provenance v1 sidecar — source_paths.npy carries filename per pattern alongside h-row. ALPHA. v2 (h-row source_idx + strings table) required before pilot launches with legal/clinical/CPA customers. See CC_cart-provenance-schema_2026-06-15."
+            >
+              provenance: v1 (alpha)
+            </span>
           </h2>
           <p className="text-xs text-slate-400 mt-1 leading-relaxed">
             Your documents never leave your machine — parsing, embedding, and packaging all run client-side via WebGPU
