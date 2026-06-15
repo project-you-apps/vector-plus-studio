@@ -188,8 +188,32 @@ interface Props {
   result: SearchResult
 }
 
+/**
+ * Copy a string to the clipboard via a hidden textarea — fallback for browsers
+ * without navigator.clipboard.writeText or for insecure-context origins.
+ * No-op if document.execCommand also fails (very old browsers).
+ */
+function legacyClipboardCopy(text: string): void {
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    ta.style.left = '-9999px'
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+  } catch {
+    // Silent — primary clipboard path already failed; nothing else to try.
+  }
+}
+
 export default function ResultCard({ result }: Props) {
   const [expanded, setExpanded] = useState(false)
+  // Clipboard copy feedback for the provenance source filename click. True
+  // briefly after a successful copy so the inline "copied" pill renders.
+  const [copiedSource, setCopiedSource] = useState(false)
   const deleteResult = useAppStore((s) => s.deleteResult)
   const openEditor = useAppStore((s) => s.openEditor)
   const openModal = useAppStore((s) => s.openModal)
@@ -295,8 +319,49 @@ export default function ResultCard({ result }: Props) {
               doesn't fight the title for visual attention but is always
               available for traceability. Hover to see the full path. */}
           {result.source_path && (
-            <div className="text-[10px] text-slate-500 font-mono truncate mb-0.5" title={result.source_path}>
-              from <span className="text-slate-400">{result.source_path}</span>
+            <div className="text-[10px] text-slate-500 font-mono truncate mb-0.5 flex items-center gap-1.5" title={result.source_path}>
+              <span className="shrink-0">from</span>
+              {/* Click to copy filename to clipboard. Browser sandbox prevents
+                  launching the file in a native app directly (no file:// from
+                  https://, no native binary launch); copy-to-clipboard is the
+                  pre-alpha primitive — user pastes into Explorer / terminal /
+                  editor to actually open. v1.5 will add custom-URL-scheme
+                  open-in-editor (vscode://, idea://) + optional extension for
+                  default-app open. */}
+              <button
+                type="button"
+                className="text-slate-400 hover:text-cyan-300 transition-colors text-left truncate cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  const path = result.source_path
+                  if (!path) return
+                  // Use the modern async Clipboard API where available; fall
+                  // back to a hidden textarea for older browsers / non-https
+                  // origins. Both paths are silent on success — the click
+                  // feedback is the brief flash from the hover-color
+                  // transition + the title-tip change below.
+                  const onCopied = () => {
+                    setCopiedSource(true)
+                    setTimeout(() => setCopiedSource(false), 1200)
+                  }
+                  if (navigator.clipboard?.writeText) {
+                    navigator.clipboard.writeText(path).then(onCopied).catch(() => {
+                      // Permissions or insecure-context failure — fall through.
+                      legacyClipboardCopy(path)
+                      onCopied()
+                    })
+                  } else {
+                    legacyClipboardCopy(path)
+                    onCopied()
+                  }
+                }}
+                title={copiedSource ? `Copied: ${result.source_path}` : `Click to copy: ${result.source_path}`}
+              >
+                {result.source_path}
+              </button>
+              {copiedSource && (
+                <span className="text-cyan-300 text-[9px] uppercase tracking-wider shrink-0">copied</span>
+              )}
             </div>
           )}
           <div className="flex items-center gap-2 mb-1">
