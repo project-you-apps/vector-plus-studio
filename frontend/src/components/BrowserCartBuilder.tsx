@@ -94,6 +94,16 @@ const BINARY_EXTENSIONS = new Set([
   '.ttf', '.otf', '.woff', '.woff2', '.eot',
   // Database
   '.db', '.sqlite', '.sqlite3', '.mdb',
+  // Numeric / scientific binary
+  '.npy', '.npz', '.h5', '.hdf5', '.parquet', '.feather', '.arrow',
+  '.mat', '.nc', '.fits',
+  // Pickled / serialized (Python, Java, R, etc.)
+  '.pkl', '.pickle', '.joblib', '.rds', '.rda', '.ser',
+  // Compiled / native object code
+  '.o', '.a', '.obj', '.lib', '.exp', '.pdb', '.ilk',
+  '.class', '.jar', '.pyc', '.pyd', '.pyo',
+  // Disk / OS images
+  '.iso', '.img', '.vhd', '.vmdk', '.qcow2',
 ])
 
 function isBinaryFile(file: File): boolean {
