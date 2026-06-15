@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>NPZ parser sanity check</title>
+    <style>
+        body { background: #0a0a0a; color: #e0e0e0; font-family: 'Consolas', 'Monaco', monospace; padding: 20px; }
+        h1 { font-size: 16px; color: #0f0; }
+        .sub { font-size: 12px; color: #888; margin-bottom: 16px; }
+        button, input[type=file] { background: #1a3a1a; color: #0f0; border: 1px solid #0a0; padding: 8px 14px; font-family: inherit; font-size: 13px; cursor: pointer; }
+        textarea { width: 100%; height: 420px; background: #050505; color: #0f0; border: 1px solid #222; padding: 12px; font-family: inherit; font-size: 12px; line-height: 1.5; margin-top: 12px; }
+    </style>
+</head>
+<body>
+    <h1>NPZ parser sanity check</h1>
+    <div class="sub">Pick a <code>.cart.npz</code> from your disk. We'll parse it client-side and print embedding shape + a few passages. If this works, Open Cartridge is unblocked.</div>
+    <input id="picker" type="file" accept=".npz,.cart.npz">
+    <textarea id="log" readonly></textarea>
+    <script type="module">
+        import { parseCartNpz } from './npz-loader.js';
+
+        const logEl = document.getElementById('log');
+        const picker = document.getElementById('picker');
+
+        function log(msg) {
+            const ts = new Date().toISOString().substr(11, 12);
+            logEl.value += `[${ts}] ${msg}\n`;
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        picker.addEventListener('change', async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            log(`File: ${file.name} (${(file.size / 1048576).toFixed(1)} MB)`);
+            try {
+                const t0 = performance.now();
+                const buf = await file.arrayBuffer();
+                log(`Read into ArrayBuffer in ${(performance.now() - t0).toFixed(0)} ms`);
+
+                const t1 = performance.now();
+                const cart = await parseCartNpz(buf);
+                log(`parseCartNpz complete in ${(performance.now() - t1).toFixed(0)} ms`);
+
+                log(`embeddings: ${cart.embeddings.length.toLocaleString()} float32 values, shape=[${cart.embeddingsShape.join(', ')}]`);
+                log(`passages parsed: ${cart.passages.length.toLocaleString()}`);
+
+                if (cart.passages.length > 0) {
+                    log('');
+                    log('--- first 3 passages ---');
+                    for (let i = 0; i < Math.min(3, cart.passages.length); i++) {
+                        log(`[${i}] ${cart.passages[i].slice(0, 240).replace(/\n/g, ' / ')}${cart.passages[i].length > 240 ? '…' : ''}`);
+                    }
+                    log('');
+                    log('--- last 3 passages ---');
+                    for (let i = Math.max(0, cart.passages.length - 3); i < cart.passages.length; i++) {
+                        log(`[${i}] ${cart.passages[i].slice(0, 240).replace(/\n/g, ' / ')}${cart.passages[i].length > 240 ? '…' : ''}`);
+                    }
+                }
+
+                const expectedPassages = cart.embeddingsShape[0];
+                if (cart.passages.length !== expectedPassages) {
+                    log('');
+                    log(`⚠ MISMATCH: embeddings rows = ${expectedPassages} but passages parsed = ${cart.passages.length}. Pickle scanner may be including or skipping wrong strings.`);
+                } else {
+                    log('');
+                    log('✓ embedding rows == parsed passages — counts line up.');
+                }
+            } catch (err) {
+                log(`FAIL: ${err.message}`);
+                log(err.stack || '');
+            }
+        });
+    </script>
+</body>
+</html>

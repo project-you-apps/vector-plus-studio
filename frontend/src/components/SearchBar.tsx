@@ -1,12 +1,21 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Search, Loader2, X } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 
 export default function SearchBar() {
   const { doSearch, searching, status, query, topK, setTopK } = useAppStore()
+  const activeLocalCart = useAppStore((s) => s.activeLocalCart)
   const [input, setInput] = useState('')
 
-  const disabled = !status?.mounted_cartridge || searching
+  // Clear the local input draft whenever the active cart changes (either
+  // server-mounted or local). Otherwise stale text could re-run against the
+  // new cart unintentionally.
+  useEffect(() => {
+    setInput('')
+  }, [status?.mounted_cartridge, activeLocalCart])
+
+  const hasActiveCart = !!status?.mounted_cartridge || !!activeLocalCart
+  const disabled = !hasActiveCart || searching
   const hasResults = !!query
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -30,8 +39,8 @@ export default function SearchBar() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault() }}
-          placeholder={status?.mounted_cartridge ? 'What are you looking for?' : 'Mount a cartridge first...'}
-          disabled={!status?.mounted_cartridge}
+          placeholder={hasActiveCart ? 'What are you looking for?' : 'Mount a cartridge first...'}
+          disabled={!hasActiveCart}
           className="w-full pl-11 pr-10 py-3 bg-slate-800/60 border border-slate-700/50 rounded-xl
                      text-slate-200 placeholder-slate-600 focus:outline-none focus:border-purple-500/50
                      focus:ring-1 focus:ring-purple-500/20 transition-all disabled:opacity-50"

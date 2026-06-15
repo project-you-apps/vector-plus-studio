@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, Database, FolderOpen, Loader2, Trash2, Upload, Zap } from 'lucide-react'
+import { ChevronDown, Database, FolderOpen, Loader2, Trash2, Upload, Zap, Footprints, X } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { useCartBuilderStore } from '../store/cartBuilderStore'
 import type { SearchMode } from '../api/types'
@@ -27,7 +27,14 @@ export default function SearchToolbar() {
     fetchCartridges, mount, unmount,
     setSearchMode, setBlendAlpha,
     webgpuStatus, webgpuBrainLoading, webgpuBrainProgress,
+    walkTrail, clearWalk, restoreTrailStep,
+    localCarts, activeLocalCart, localCartLoading,
+    mountLocalCart, unmountLocalCart, selectLocalCart,
   } = useAppStore()
+  const localFileInputRef = useRef<HTMLInputElement>(null)
+  const [walkTrailOpen, setWalkTrailOpen] = useState(false)
+  const walkTrailRef = useRef<HTMLDivElement>(null)
+  const currentWalkStep = walkTrail.length > 1 ? walkTrail[walkTrail.length - 1] : null
 
   // WebGPU Associate gating (Phase 2e). When the server has no CUDA but the
   // browser has WebGPU and the mounted cart has a brain on disk, Associate
@@ -54,15 +61,16 @@ export default function SearchToolbar() {
 
   // Close dropdowns when clicking outside (one handler for both)
   useEffect(() => {
-    if (!open && !modeOpen) return
+    if (!open && !modeOpen && !walkTrailOpen) return
     const handler = (e: MouseEvent) => {
       const target = e.target as Node
       if (open && ref.current && !ref.current.contains(target)) setOpen(false)
       if (modeOpen && modeRef.current && !modeRef.current.contains(target)) setModeOpen(false)
+      if (walkTrailOpen && walkTrailRef.current && !walkTrailRef.current.contains(target)) setWalkTrailOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
-  }, [open, modeOpen])
+  }, [open, modeOpen, walkTrailOpen])
 
   const currentMode = MODES.find((m) => m.key === searchMode) ?? MODES[0]
 
@@ -97,26 +105,8 @@ export default function SearchToolbar() {
     }
   }
 
-  const handleBrowse = async () => {
-    setPathLoading(true)
-    try {
-      const path = await api.browseForCartridge()
-      if (path) {
-        const res = await api.mountCartridge(path)
-        if (!res.success) {
-          alert(res.message || 'Mount failed')
-          return
-        }
-        fetchCartridges()
-        useAppStore.getState().fetchStatus()
-        setOpen(false)
-      }
-    } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to open file')
-    } finally {
-      setPathLoading(false)
-    }
-  }
+  // handleBrowse used to invoke the backend's PowerShell file dialog; removed
+  // when the browser-side "Open from My Computer" replaced it.
 
   const handlePaste = () => {
     if (!pathInput.trim()) return
@@ -170,9 +160,22 @@ export default function SearchToolbar() {
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm border border-slate-700 bg-slate-800/40 hover:bg-slate-800/70 hover:border-purple-500/40 transition-colors min-w-[280px] cursor-pointer"
           title={mounted ? 'Click to change or unmount the current cartridge' : 'Click to mount a cartridge'}
         >
-          <Database size={14} className={mounted ? 'text-purple-400' : 'text-slate-500'} />
+          {activeLocalCart ? (
+            <FolderOpen size={14} className="text-cyan-400" />
+          ) : (
+            <Database size={14} className={mounted ? 'text-purple-400' : 'text-slate-500'} />
+          )}
           <span className="flex-1 text-left truncate">
-            {mounted ? (
+            {activeLocalCart ? (
+              <>
+                <span className="text-cyan-500 mr-1.5">Local:</span>
+                <span className="text-slate-100 font-medium">{activeLocalCart}</span>
+                {(() => {
+                  const lc = localCarts.get(activeLocalCart)
+                  return lc ? <span className="text-slate-500 ml-1.5 text-xs">({(lc.sizeBytes / 1048576).toFixed(1)} MB)</span> : null
+                })()}
+              </>
+            ) : mounted ? (
               <>
                 <span className="text-slate-500 mr-1.5">Cartridge:</span>
                 <span className="text-slate-100 font-medium">{mounted}</span>
@@ -189,21 +192,11 @@ export default function SearchToolbar() {
 
         {open && (
           <div className="absolute top-full mt-1 left-0 w-96 max-h-[28rem] overflow-y-auto rounded-lg border border-slate-700 bg-[var(--chrome-bg)] shadow-2xl z-30">
-            {/* Open from file system — hidden on the public demo (read-only-mode
-                server). The native PowerShell dialog can't run on the headless
-                Linux droplet, AND users can't see the server filesystem anyway,
-                so the button does nothing useful. The available-carts list below
-                still works. */}
-            {!status?.read_only_mode && (
-              <button
-                onClick={handleBrowse}
-                disabled={pathLoading}
-                className="w-full flex items-center gap-2 px-3 py-2.5 text-sm border-b border-slate-800 hover:bg-slate-800/50 disabled:opacity-50 transition-colors"
-              >
-                {pathLoading ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />}
-                <span className="font-medium">{pathLoading ? 'Opening…' : 'Open Cartridge…'}</span>
-              </button>
-            )}
+            {/* The old backend-PowerShell-dialog "Open Cartridge…" button was
+                removed 2026-06-02. The browser-side "Open from My Computer…"
+                below is strictly better: works on local dev AND droplet, never
+                round-trips to backend, never hangs on a server dialog.
+                Paste-path is still available below for power users. */}
 
             {/* Paste path fallback — also hidden in read-only mode. */}
             {!status?.read_only_mode && (
@@ -268,6 +261,72 @@ export default function SearchToolbar() {
                 if (f) handleUpload(f)
               }}
             />
+
+            {/* Open from My Computer — F1 client-side. Browser parses the
+                cart, nothing uploads. Works in both local dev and on the
+                public droplet. Currently cosine-only (no brain/sigs locally). */}
+            <button
+              onClick={() => localFileInputRef.current?.click()}
+              disabled={localCartLoading}
+              className="w-full flex items-center gap-2 px-3 py-2.5 text-sm border-b border-slate-800 hover:bg-slate-800/50 disabled:opacity-50 transition-colors"
+              title="Open a .cart.npz from your own disk. Parsed in your browser — never uploaded. Read-only, cosine search only (no Associate without brain)."
+            >
+              {localCartLoading ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} className="text-cyan-400" />}
+              <span className="font-medium">{localCartLoading ? 'Parsing…' : 'Open from My Computer…'}</span>
+              <span className="ml-auto text-[10px] text-cyan-500">never uploaded</span>
+            </button>
+            <input
+              ref={localFileInputRef}
+              type="file"
+              accept=".npz,.cart.npz"
+              className="hidden"
+              onChange={async (e) => {
+                const f = e.target.files?.[0]
+                if (!f) return
+                const res = await mountLocalCart(f)
+                if (!res.success) alert(res.message)
+                setOpen(false)
+                // Reset the input so re-picking the same file fires onChange again.
+                if (localFileInputRef.current) localFileInputRef.current.value = ''
+              }}
+            />
+
+            {/* Local carts list — anything the user has opened from disk
+                this session. Distinct from "Available" (server-side carts). */}
+            {localCarts.size > 0 && (
+              <div className="p-2 space-y-1 border-b border-slate-800">
+                <div className="px-1 py-1 text-[10px] uppercase tracking-wider text-cyan-600">
+                  On Your Computer ({localCarts.size})
+                </div>
+                {Array.from(localCarts.values()).map((c) => {
+                  const isActive = activeLocalCart === c.name
+                  return (
+                    <div
+                      key={c.name}
+                      className={`flex items-center gap-2 px-2 py-1.5 rounded text-sm transition-all cursor-pointer ${
+                        isActive
+                          ? 'bg-cyan-500/10 border border-cyan-500/30'
+                          : 'border border-transparent hover:bg-slate-800/40'
+                      }`}
+                      onClick={() => { selectLocalCart(c.name); setOpen(false) }}
+                    >
+                      <FolderOpen size={12} className={isActive ? 'text-cyan-400' : 'text-slate-500'} />
+                      <span className="flex-1 truncate text-slate-200">{c.name}</span>
+                      <span className="text-[10px] text-slate-500">{(c.sizeBytes / 1048576).toFixed(1)} MB</span>
+                      {isActive && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); unmountLocalCart(); setOpen(false) }}
+                          className="p-0.5 rounded hover:bg-slate-700/50 text-slate-400 hover:text-white"
+                          title="Unmount this local cart"
+                        >
+                          <X size={12} />
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
 
             {/* Available carts */}
             <div className="p-2 space-y-1">
@@ -439,6 +498,61 @@ export default function SearchToolbar() {
           </div>
         )}
       </div>
+
+      {currentWalkStep && (
+        <div className="relative" ref={walkTrailRef}>
+          <div className="flex items-center gap-2 px-3 py-1 rounded-lg border border-cyan-500/40 bg-cyan-500/5 text-xs">
+            <button
+              onClick={() => setWalkTrailOpen(!walkTrailOpen)}
+              className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+              title="Show walk trail"
+            >
+              <Footprints size={12} className="text-cyan-400 shrink-0" />
+              <span className="text-cyan-200 uppercase tracking-wider text-[10px]">Walk · {walkTrail.length - 1} step{walkTrail.length === 2 ? '' : 's'}</span>
+              <span className="text-cyan-100 truncate max-w-[280px]" title={currentWalkStep.label}>
+                {currentWalkStep.label}
+              </span>
+              <ChevronDown size={11} className={`text-cyan-300 transition-transform ${walkTrailOpen ? 'rotate-180' : ''}`} />
+            </button>
+            <button
+              onClick={() => { clearWalk(); setWalkTrailOpen(false) }}
+              className="p-0.5 rounded hover:bg-slate-700/50 text-cyan-300 hover:text-white transition-colors"
+              title="Clear walk and return to the original query"
+            >
+              <X size={12} />
+            </button>
+          </div>
+
+          {walkTrailOpen && (
+            <div className="absolute top-full mt-1 left-0 min-w-[320px] max-w-[480px] rounded-lg border border-slate-700 bg-[var(--chrome-bg)] shadow-2xl z-30 p-2">
+              <div className="px-1 py-1 text-[10px] uppercase tracking-wider text-slate-500">Walk trail · click to jump back</div>
+              {walkTrail.map((step, i) => {
+                const isCurrent = i === walkTrail.length - 1
+                return (
+                  <button
+                    key={i}
+                    onClick={() => { restoreTrailStep(i); setWalkTrailOpen(false) }}
+                    className={`w-full text-left px-2.5 py-1.5 rounded text-xs transition-all ${
+                      isCurrent
+                        ? 'bg-cyan-500/15 text-cyan-200 border border-cyan-500/30'
+                        : 'text-slate-300 hover:bg-slate-800/50 border border-transparent cursor-pointer'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-slate-500 font-mono shrink-0">{i}.</span>
+                      <span className="text-[10px] uppercase tracking-wider text-slate-500 shrink-0">
+                        {step.kind === 'query' ? 'Query' : 'Walk'}
+                      </span>
+                      <span className="truncate">{step.label || '(empty)'}</span>
+                      {isCurrent && <span className="text-[10px] text-cyan-400 shrink-0 ml-auto">here</span>}
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {webgpuBrainLoading && webgpuBrainProgress && (
         <div className="flex items-center gap-2 px-3 py-1 rounded-lg border border-cyan-500/40 bg-cyan-500/5 text-xs">

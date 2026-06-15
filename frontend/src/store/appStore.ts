@@ -5,6 +5,37 @@ import type {
 } from '../api/types'
 import * as api from '../api/client'
 import { detectWebGPU, runWebGpuAssociate, loadBrainForCart, isBrainLoadedFor } from '../lib/webgpuAssociate'
+import { parseCartFile, cosineSearchLocal } from '../lib/localCart'
+
+// A cart that lives on the user's local disk and was parsed client-side.
+// Nothing ever leaves the browser; search runs locally over these embeddings.
+// Read-only in F1-A; brain/signatures + RW come in later phases.
+export interface LocalCart {
+  name: string                  // filename minus .cart.npz
+  filename: string              // original filename for display
+  embeddings: Float32Array      // flat N*768 row-major
+  embeddingsShape: number[]     // [N, 768]
+  passages: string[]            // length N
+  sizeBytes: number
+  mountedAt: number             // performance.now() timestamp
+  // Figures embedded in the .cart.npz under 'figures/<hash>.<ext>'. Keyed by
+  // the basename (e.g. 'abc123.png') so ResultCard can look them up via the
+  // hash extracted from a figure passage's '[figure | hash: <h>]' header.
+  // Empty Map when no figures are embedded.
+  figures: Map<string, Uint8Array>
+}
+
+// One step in the walk trail. Step 0 is always the original text query that
+// kicked off the trail. Subsequent steps are walk-from-here anchors.
+export interface WalkStep {
+  kind: 'query' | 'walk'
+  label: string         // text query OR walk-anchor title
+  idx?: number          // walk-anchor result idx (undefined for kind='query')
+  query: string         // store.query value at this step (for SearchBar restore)
+  results: SearchResult[]
+  searchModeLabel: string
+  searchElapsed: number
+}
 
 // Top-level screen state (nav rail picks which screen renders in the main area).
 // 'search' is the default; the original VPS 1.0 search/CRUD experience. Other
@@ -52,6 +83,27 @@ interface AppState {
   webgpuBrainLoadedFor: string | null
   webgpuBrainProgress: { loaded: number; total: number; stage: string } | null
   detectWebGpuOnce: () => Promise<void>
+
+  // Walk-from-here state (W2). When the user clicks Walk on a result card,
+  // we anchor a new Associate search on that passage's embedding. The trail
+  // is an array of state snapshots: index 0 is the original text query, each
+  // subsequent entry is a walk step. The user is always at the LAST entry;
+  // the X button jumps back to entry 0; the dropdown lets them jump to any
+  // entry without re-running the search (cached results).
+  walkTrail: WalkStep[]
+  walkFrom: (idx: number, title: string) => Promise<void>
+  clearWalk: () => void
+  restoreTrailStep: (index: number) => void
+
+  // F1 — Open Cartridge / local carts. Carts the user picked from disk live
+  // here; nothing is uploaded. activeLocalCart names the one that's currently
+  // selected for search (when null, searches go to the server's mounted cart).
+  localCarts: Map<string, LocalCart>
+  activeLocalCart: string | null
+  localCartLoading: boolean
+  mountLocalCart: (file: File) => Promise<{ success: boolean; message: string }>
+  unmountLocalCart: () => void
+  selectLocalCart: (name: string) => void
 
   // Strict keyword filter
   strictMode: boolean
@@ -144,6 +196,196 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ webgpuStatus: available ? 'available' : 'unavailable' })
   },
 
+  localCarts: new Map(),
+  activeLocalCart: null,
+  localCartLoading: false,
+  mountLocalCart: async (file: File) => {
+    console.log('[mountLocalCart] start', { name: file.name, size: file.size })
+    set({ localCartLoading: true })
+    try {
+      const cart = await parseCartFile(file)
+      console.log('[mountLocalCart] parsed', {
+        name: cart.name,
+        embeddings: cart.embeddings.length,
+        embeddingsShape: cart.embeddingsShape,
+        passages: cart.passages.length,
+      })
+      const next = new Map(get().localCarts)
+      next.set(cart.name, cart)
+      set({
+        localCarts: next,
+        activeLocalCart: cart.name,
+        results: [],
+        query: '',
+        searchModeLabel: '',
+        searchElapsed: 0,
+        walkTrail: [],
+      })
+      console.log('[mountLocalCart] active set to', cart.name)
+      return { success: true, message: `Mounted ${cart.name} (${cart.passages.length.toLocaleString()} passages)` }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Unknown error'
+      console.error('[mountLocalCart] FAIL:', e)
+      return { success: false, message: `Local cart mount failed: ${msg}` }
+    } finally {
+      set({ localCartLoading: false })
+    }
+  },
+  unmountLocalCart: () => {
+    set({
+      activeLocalCart: null,
+      results: [],
+      query: '',
+      searchModeLabel: '',
+      searchElapsed: 0,
+      walkTrail: [],
+    })
+  },
+  selectLocalCart: (name: string) => {
+    const { localCarts } = get()
+    if (!localCarts.has(name)) return
+    set({
+      activeLocalCart: name,
+      results: [],
+      query: '',
+      searchModeLabel: '',
+      searchElapsed: 0,
+      walkTrail: [],
+    })
+  },
+
+  walkTrail: [],
+  walkFrom: async (idx: number, title: string) => {
+    const { status, webgpuStatus, cartridges, topK, query, results, walkTrail, searchModeLabel, searchElapsed } = get()
+    const mountedName = status?.mounted_cartridge ?? null
+    if (!mountedName) {
+      console.warn('walkFrom called with no cart mounted')
+      return
+    }
+    const mountedCart = cartridges.find((c) => c.name === mountedName)
+    const cartHasBrain = !!mountedCart?.has_brain
+    const useWebGpu =
+      webgpuStatus === 'available' && !status?.gpu_available && cartHasBrain
+
+    // If this is the first walk in a trail, capture the current state as the
+    // ROOT (text query) step. After that, every walkFrom call appends a walk step.
+    const startingTrail: WalkStep[] = walkTrail.length === 0
+      ? [{
+          kind: 'query',
+          label: query || '(empty query)',
+          query,
+          results,
+          searchModeLabel,
+          searchElapsed,
+        }]
+      : walkTrail
+
+    set({
+      searching: true,
+      searchModeLabel: `Walking from #${idx}…`,
+    })
+
+    try {
+      if (useWebGpu) {
+        if (!isBrainLoadedFor(mountedName)) {
+          set({ webgpuBrainLoading: true, webgpuBrainProgress: null })
+          await loadBrainForCart(mountedName, (p) => {
+            set({ webgpuBrainProgress: { loaded: p.loaded, total: p.total, stage: p.stage } })
+          })
+          set({ webgpuBrainLoading: false, webgpuBrainLoadedFor: mountedName, webgpuBrainProgress: null })
+        }
+        const embResp = await fetch(
+          `${import.meta.env.VITE_API_BASE || '/api'}/cartridges/${encodeURIComponent(mountedName)}/embedding/${idx}`,
+        )
+        if (!embResp.ok) throw new Error(`Embedding fetch failed: ${embResp.status}`)
+        const embData = await embResp.json()
+        const t0 = performance.now()
+        const walkResults = await runWebGpuAssociate({
+          queryEmbedding: embData.embedding,
+          cartName: mountedName,
+          topK,
+          poolSize: 50,
+          onStatus: (msg) => set({ searchModeLabel: msg }),
+        })
+        const newLabel = `Walk · WebGPU from "${title.slice(0, 40)}${title.length > 40 ? '…' : ''}"`
+        const newElapsed = Math.round(performance.now() - t0)
+        set({
+          results: walkResults,
+          searchModeLabel: newLabel,
+          searchElapsed: newElapsed,
+          walkTrail: [...startingTrail, {
+            kind: 'walk', label: title, idx,
+            query: startingTrail[0].query,
+            results: walkResults,
+            searchModeLabel: newLabel,
+            searchElapsed: newElapsed,
+          }],
+        })
+      } else {
+        // Server-side walk via /api/walk-from
+        const t0 = performance.now()
+        const resp = await fetch(`${import.meta.env.VITE_API_BASE || '/api'}/walk-from`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cart_name: mountedName, idx, top_k: topK }),
+        })
+        if (!resp.ok) throw new Error(`Walk-from failed: ${resp.status}`)
+        const data = await resp.json()
+        const newLabel = `Walk · Server from "${title.slice(0, 40)}${title.length > 40 ? '…' : ''}"`
+        const newElapsed = Math.round(performance.now() - t0)
+        set({
+          results: data.results,
+          searchModeLabel: newLabel,
+          searchElapsed: newElapsed,
+          walkTrail: [...startingTrail, {
+            kind: 'walk', label: title, idx,
+            query: startingTrail[0].query,
+            results: data.results,
+            searchModeLabel: newLabel,
+            searchElapsed: newElapsed,
+          }],
+        })
+      }
+    } catch (e) {
+      console.error('walkFrom failed:', e)
+      // On error: leave any existing trail in place but mark mode label so the
+      // user knows the step didn't take. Don't truncate the trail — they may
+      // want to retry or jump back via the dropdown.
+      set({ searchModeLabel: 'Walk failed' })
+    } finally {
+      set({ searching: false, webgpuBrainLoading: false, webgpuBrainProgress: null })
+    }
+  },
+  clearWalk: () => {
+    // Jump back to step 0 (the original text query) using its cached results —
+    // no re-running the search. Then empty the trail entirely.
+    const { walkTrail } = get()
+    if (walkTrail.length === 0) return
+    const root = walkTrail[0]
+    set({
+      walkTrail: [],
+      query: root.query,
+      results: root.results,
+      searchModeLabel: root.searchModeLabel,
+      searchElapsed: root.searchElapsed,
+    })
+  },
+  restoreTrailStep: (index: number) => {
+    // Jump to any step in the trail using its cached results. The trail is
+    // truncated to [0..index] so subsequent walks branch from this point.
+    // If the user lands on step 0 we collapse the trail (back to text-search mode).
+    const { walkTrail } = get()
+    if (index < 0 || index >= walkTrail.length) return
+    const step = walkTrail[index]
+    set({
+      walkTrail: index === 0 ? [] : walkTrail.slice(0, index + 1),
+      query: step.query,
+      results: step.results,
+      searchModeLabel: step.searchModeLabel,
+      searchElapsed: step.searchElapsed,
+    })
+  },
+
   deletedPatterns: [],
 
   addingPassage: false,
@@ -215,6 +457,30 @@ export const useAppStore = create<AppState>((set, get) => ({
   navigateModal: async (idx: number) => {
     set({ modalLoading: true })
     try {
+      // Local cart path — look up the passage from the in-memory cart so
+      // PREV/NEXT navigation works without any backend round-trip.
+      const { activeLocalCart, localCarts } = get()
+      if (activeLocalCart) {
+        const cart = localCarts.get(activeLocalCart)
+        if (cart && idx >= 0 && idx < cart.passages.length) {
+          const passage = cart.passages[idx] ?? ''
+          const firstNewline = passage.indexOf('\n')
+          const title = (firstNewline > 0 ? passage.slice(0, firstNewline) : passage.slice(0, 80)).trim()
+          const total = cart.passages.length
+          set({
+            modalPassage: {
+              idx,
+              title,
+              full_text: passage,
+              prev_idx: idx > 0 ? idx - 1 : null,
+              next_idx: idx < total - 1 ? idx + 1 : null,
+              source_db: null,
+              paper_id: null,
+            },
+          })
+          return
+        }
+      }
       const pattern = await api.getPattern(idx)
       set({
         modalPassage: {
@@ -337,7 +603,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       await get().fetchStatus()
       await get().fetchCartridges()
-      set({ results: [], query: '', deletedPatterns: [], strictMode: false, exactMatch: false })
+      set({
+        results: [], query: '', deletedPatterns: [],
+        strictMode: false, exactMatch: false,
+        walkTrail: [], searchModeLabel: '', searchElapsed: 0,
+      })
       pushToast('success', `Mounted ${resp.name} (${resp.pattern_count} patterns)`, 4000)
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Mount request failed'
@@ -352,7 +622,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       await api.unmountCartridge()
       await get().fetchStatus()
-      set({ results: [], query: '', deletedPatterns: [] })
+      set({
+        results: [], query: '', deletedPatterns: [],
+        walkTrail: [], searchModeLabel: '', searchElapsed: 0,
+      })
     } catch (e) {
       console.error('Unmount failed:', e)
     }
@@ -401,8 +674,51 @@ export const useAppStore = create<AppState>((set, get) => ({
   setTopK: (k) => set({ topK: k }),
 
   doSearch: async (query: string) => {
-    const { searchMode, blendAlpha, topK, status, webgpuStatus, webgpuBrainLoadedFor, cartridges } = get()
-    set({ searching: true, query })
+    const { searchMode, blendAlpha, topK, status, webgpuStatus, webgpuBrainLoadedFor, cartridges, activeLocalCart, localCarts } = get()
+    // A fresh text query exits walk-mode — the user is starting over.
+    set({ searching: true, query, walkTrail: [] })
+
+    // F1 — local cart path. The user's file never leaves the browser; we
+    // embed the query via /api/embed (server-side Nomic), then cosine-rank
+    // against the in-memory embeddings. Fast/Hamming/Smart/Associate aren't
+    // available on local carts yet (no brain or sigs locally); we fall back
+    // to plain cosine for any mode requested.
+    console.log('[doSearch] start', { query, activeLocalCart, hasLocalCart: !!localCarts.get(activeLocalCart ?? '') })
+    if (activeLocalCart) {
+      const cart = localCarts.get(activeLocalCart)
+      if (!cart) {
+        console.warn('[doSearch] activeLocalCart set but Map lookup failed', activeLocalCart, Array.from(localCarts.keys()))
+        set({ searching: false, searchModeLabel: 'Local cart not found' })
+        return
+      }
+      try {
+        const t0 = performance.now()
+        const apiBase = (import.meta.env.VITE_API_BASE as string | undefined) || '/api'
+        console.log('[doSearch] local branch — fetching embedding from', apiBase)
+        const embResp = await fetch(`${apiBase}/embed`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query }),
+        })
+        if (!embResp.ok) throw new Error(`Embed failed: ${embResp.status}`)
+        const embData = await embResp.json()
+        const queryEmb = new Float32Array(embData.embedding)
+        console.log('[doSearch] running cosineSearchLocal on', cart.passages.length, 'passages')
+        const results = cosineSearchLocal(queryEmb, cart, topK)
+        console.log('[doSearch] got', results.length, 'results, top score', results[0]?.score)
+        set({
+          results,
+          searchModeLabel: 'Local cart · cosine (browser)',
+          searchElapsed: Math.round(performance.now() - t0),
+        })
+      } catch (e) {
+        console.error('[doSearch] local FAIL:', e)
+        set({ results: [], searchModeLabel: 'Local search failed' })
+      } finally {
+        set({ searching: false })
+      }
+      return
+    }
 
     // Decide whether browser-side WebGPU Associate should handle this call.
     // Conditions: associate mode + WebGPU available + server lacks CUDA +

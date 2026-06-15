@@ -530,6 +530,73 @@ async def cosine_candidate_pool_for_cart(cart_name: str, payload: dict):
     return _cosine_candidates(payload.get("embedding"), pool_size, embeddings, passages)
 
 
+@app.post("/api/walk-from")
+async def walk_from_idx(payload: dict):
+    """Server-side "Walk from here" — runs Associate using the embedding at
+    the given (cart_name, idx) as the query. Mirrors what the WebGPU Walk
+    path does in the browser. Server-side path requires the cart be mounted
+    (because associate_search wires through the GPU engine's loaded brain).
+
+    Returns results in the same enriched shape as /api/search so the
+    frontend can render them through the standard ResultCard.
+    """
+    from api.search import associate_search
+
+    cart_name = payload.get("cart_name")
+    idx = payload.get("idx")
+    top_k = int(payload.get("top_k", 10))
+    keywords = payload.get("keywords") or None
+
+    if engine.embeddings is None or not engine.passages:
+        raise HTTPException(status_code=400, detail="No cart mounted")
+    if cart_name and engine.mounted_name != cart_name:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Walk-from anchor cart '{cart_name}' is not the mounted cart '{engine.mounted_name}'.",
+        )
+    if not isinstance(idx, int) or idx < 0 or idx >= len(engine.embeddings):
+        raise HTTPException(status_code=404, detail=f"Index {idx} out of range")
+
+    q_emb = engine.embeddings[idx].astype(np.float32)
+    results = associate_search(q_emb, engine.embeddings, engine.passages, top_k=top_k, keywords=keywords)
+
+    # Enrich with title/preview/full_text/prev_idx/next_idx — matches the
+    # same shape /api/search produces (the loop at the end of search.py:do_search).
+    hippo = engine.hippocampus
+    enriched = []
+    for rank, r in enumerate(results):
+        ridx = r['idx']
+        text = r.get('recovered_text') or (engine.passages[ridx] if ridx < len(engine.passages) else "")
+        lines = text.splitlines() if text else ["[empty]"]
+        title = lines[0][:100]
+        preview = " ".join(lines[1:3])[:200] if len(lines) > 1 else ""
+        prev_idx = hippo[ridx].get('prev') if (hippo is not None and ridx < len(hippo)) else None
+        next_idx = hippo[ridx].get('next') if (hippo is not None and ridx < len(hippo)) else None
+        perms = hippo[ridx].get('perms') if (hippo is not None and ridx < len(hippo)) else None
+        enriched.append({
+            "rank": rank + 1,
+            "idx": ridx,
+            "score": r['score'],
+            "cosine_score": r.get('cosine_score'),
+            "physics_score": r.get('physics_score'),
+            "hamming_score": r.get('hamming_score'),
+            "keyword_boost": r.get('keyword_boost'),
+            "title": title,
+            "preview": preview,
+            "full_text": text or "",
+            "from_lattice": r.get('from_lattice', False),
+            "prev_idx": prev_idx,
+            "next_idx": next_idx,
+            "perms": perms,
+        })
+
+    return {
+        "query_idx": idx,
+        "query_passage": engine.passages[idx][:200],
+        "results": enriched,
+    }
+
+
 @app.get("/api/browse")
 async def browse_for_file():
     """Open a native OS file picker and return the selected path."""

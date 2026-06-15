@@ -15,6 +15,23 @@ export default function Header() {
   const toggleLock = useAppStore((s) => s.toggleLock)
   const memboxPanelOpen = useAppStore((s) => s.memboxPanelOpen)
   const toggleMemboxPanel = useAppStore((s) => s.toggleMemboxPanel)
+  const webgpuStatus = useAppStore((s) => s.webgpuStatus)
+  const activeLocalCart = useAppStore((s) => s.activeLocalCart)
+  const localCarts = useAppStore((s) => s.localCarts)
+  // The badge reflects whether physics-driven search is actually achievable:
+  // either the server has CUDA (status.gpu_available), or the browser has
+  // working WebGPU (browser-side Associate). On the droplet only the second
+  // applies; before this change the badge always read "CPU" even when
+  // Associate was perfectly usable.
+  const gpuAvailable = !!status?.gpu_available
+  const webgpuAvailable = webgpuStatus === 'available'
+  const physicsAvailable = gpuAvailable || webgpuAvailable
+  const gpuLabel = gpuAvailable ? 'GPU' : webgpuAvailable ? 'WebGPU' : 'CPU'
+  const gpuTooltip = gpuAvailable
+    ? 'Server GPU active -- lattice physics search runs on the server'
+    : webgpuAvailable
+      ? 'Browser WebGPU detected -- lattice physics runs in your browser'
+      : 'CPU mode -- lattice physics search not available'
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
   const [theme, setTheme] = useState(() =>
@@ -50,13 +67,31 @@ export default function Header() {
       </div>
 
       <div className="flex items-center gap-4 text-sm">
-        {status?.mounted_cartridge && (
-          <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800/60">
-            <span className="text-slate-400">Mounted:</span>
-            <span className="font-medium text-slate-200">{status.mounted_cartridge}</span>
-            <span className="text-slate-500">({status.pattern_count.toLocaleString()} patterns)</span>
-          </div>
-        )}
+        {(() => {
+          // Mounted-cart pill. Local-disk carts get a cyan-tinted pill labeled
+          // "Local:" with the passages count; server-mounted carts read "Mounted:"
+          // and pull from status.pattern_count.
+          if (activeLocalCart) {
+            const lc = localCarts.get(activeLocalCart)
+            return (
+              <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/30">
+                <span className="text-cyan-400">Local:</span>
+                <span className="font-medium text-slate-200">{activeLocalCart}</span>
+                {lc && <span className="text-slate-500">({lc.passages.length.toLocaleString()} patterns)</span>}
+              </div>
+            )
+          }
+          if (status?.mounted_cartridge) {
+            return (
+              <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800/60">
+                <span className="text-slate-400">Mounted:</span>
+                <span className="font-medium text-slate-200">{status.mounted_cartridge}</span>
+                <span className="text-slate-500">({status.pattern_count.toLocaleString()} patterns)</span>
+              </div>
+            )
+          }
+          return null
+        })()}
 
         {/* Save button -- visible when there are unsaved changes */}
         {status?.mounted_cartridge && status.dirty && (
@@ -117,14 +152,12 @@ export default function Header() {
 
         <div
           className="flex items-center gap-2"
-          title={status?.gpu_available
-            ? 'GPU active -- Lattice physics search enabled'
-            : 'CPU mode -- Lattice physics search NOT enabled'}
+          title={gpuTooltip}
         >
-          <Cpu size={14} className={status?.gpu_available ? 'text-slate-400' : 'text-amber-400'} />
-          <span className={`w-2 h-2 rounded-full ${status?.gpu_available ? 'bg-green-400 animate-pulse' : 'bg-amber-400'}`} />
-          <span className={`text-xs font-medium ${status?.gpu_available ? 'text-slate-500' : 'text-amber-400'}`}>
-            {status?.gpu_available ? 'GPU' : 'CPU'}
+          <Cpu size={14} className={physicsAvailable ? 'text-slate-400' : 'text-amber-400'} />
+          <span className={`w-2 h-2 rounded-full ${physicsAvailable ? 'bg-green-400 animate-pulse' : 'bg-amber-400'}`} />
+          <span className={`text-xs font-medium ${physicsAvailable ? 'text-slate-500' : 'text-amber-400'}`}>
+            {gpuLabel}
           </span>
         </div>
 

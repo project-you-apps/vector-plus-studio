@@ -37,6 +37,8 @@ function textContainsExactPhrase(text: string, phrase: string): boolean {
 
 export default function ResultsList() {
   const { results, searchModeLabel, searchElapsed, query, status, strictMode, setStrictMode, exactMatch, setExactMatch, searching, searchMode } = useAppStore()
+  const activeLocalCart = useAppStore((s) => s.activeLocalCart)
+  const localCarts = useAppStore((s) => s.localCarts)
 
   const keywords = useMemo(() => extractKeywords(query), [query])
 
@@ -62,7 +64,7 @@ export default function ResultsList() {
     return filtered
   }, [results, strictMode, exactMatch, keywords, query])
 
-  if (!status?.mounted_cartridge) {
+  if (!status?.mounted_cartridge && !activeLocalCart) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center text-slate-600">
         <div className="w-16 h-16 rounded-2xl bg-slate-800/50 flex items-center justify-center mb-4">
@@ -74,6 +76,10 @@ export default function ResultsList() {
     )
   }
 
+  const totalPatterns = activeLocalCart
+    ? (localCarts.get(activeLocalCart)?.passages.length ?? 0)
+    : (status?.pattern_count ?? 0)
+
   if (!query) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center text-slate-600">
@@ -81,7 +87,7 @@ export default function ResultsList() {
           <Search size={28} />
         </div>
         <p className="text-lg font-medium">Ready to search</p>
-        <p className="text-sm mt-1">{status.pattern_count.toLocaleString()} patterns loaded</p>
+        <p className="text-sm mt-1">{totalPatterns.toLocaleString()} patterns loaded</p>
       </div>
     )
   }

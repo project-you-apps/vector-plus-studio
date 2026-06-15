@@ -19,6 +19,11 @@ const ROW_FULLY_PROTECTED = 0xFF;
 const HIPPO_ROW = 63;
 const SETTLE_FRAMES = 30;
 
+// Matches the BASE constant in api/client.ts — set by VITE_API_BASE at build
+// time (e.g. '/vps/api' for droplet behind nginx subroute). Falls back to '/api'
+// for local dev where the Vite proxy routes through to FastAPI on :8000.
+const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) || '/api';
+
 // Singleton state — module-level caches so React re-renders don't re-init.
 let detectionPromise: Promise<boolean> | null = null;
 let detectionResult: boolean | null = null;
@@ -123,7 +128,7 @@ export async function loadBrainForCart(
 
     const promise = (async () => {
         const engine = await getEngine();
-        const url = `/api/cartridges/${encodeURIComponent(cartName)}/brain`;
+        const url = `${API_BASE}/cartridges/${encodeURIComponent(cartName)}/brain`;
 
         const npyBuffer = await fetchNpyWithProgress(url, (loaded: number, total: number) => {
             onProgress?.({ cartName, loaded, total, stage: 'fetching' });
@@ -178,7 +183,10 @@ async function settleEmbedding(emb: Float32Array): Promise<Float32Array> {
 }
 
 export interface RunAssociateOptions {
-    query: string;
+    /** Free-text query; we embed via /api/embed before settling. Mutually exclusive with queryEmbedding. */
+    query?: string;
+    /** Pre-computed query embedding (e.g. from /api/cartridges/{name}/embedding/{idx} for Walk-from-here). */
+    queryEmbedding?: Float32Array | number[];
     cartName: string;
     topK: number;
     poolSize?: number; // candidates from server cosine pre-filter (default 50)
@@ -193,26 +201,36 @@ export interface RunAssociateOptions {
  * Returns SearchResult records compatible with the existing UI.
  */
 export async function runWebGpuAssociate(opts: RunAssociateOptions): Promise<SearchResult[]> {
-    const { query, cartName, topK, poolSize = 50, onStatus } = opts;
+    const { query, queryEmbedding, cartName, topK, poolSize = 50, onStatus } = opts;
+    if (!query && !queryEmbedding) {
+        throw new Error('runWebGpuAssociate requires either query (text) or queryEmbedding (Float32Array)');
+    }
 
     onStatus?.('Ensuring brain is loaded…');
     await loadBrainForCart(cartName);
 
-    onStatus?.('Embedding query…');
-    const embResp = await fetch('/api/embed', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query }),
-    });
-    if (!embResp.ok) {
-        const err = await embResp.text();
-        throw new Error(`Query embed failed: ${embResp.status} — ${err}`);
+    let queryEmb: Float32Array;
+    if (queryEmbedding) {
+        queryEmb = queryEmbedding instanceof Float32Array
+            ? queryEmbedding
+            : new Float32Array(queryEmbedding);
+    } else {
+        onStatus?.('Embedding query…');
+        const embResp = await fetch(`${API_BASE}/embed`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query }),
+        });
+        if (!embResp.ok) {
+            const err = await embResp.text();
+            throw new Error(`Query embed failed: ${embResp.status} — ${err}`);
+        }
+        const embData = await embResp.json();
+        queryEmb = new Float32Array(embData.embedding);
     }
-    const embData = await embResp.json();
-    const queryEmb = new Float32Array(embData.embedding);
 
     onStatus?.('Fetching candidate pool…');
-    const candResp = await fetch(`/api/cartridges/${encodeURIComponent(cartName)}/cosine-candidates`, {
+    const candResp = await fetch(`${API_BASE}/cartridges/${encodeURIComponent(cartName)}/cosine-candidates`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ embedding: Array.from(queryEmb), pool_size: poolSize }),
