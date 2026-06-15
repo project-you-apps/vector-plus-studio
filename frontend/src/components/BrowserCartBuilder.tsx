@@ -71,6 +71,40 @@ const ACCEPT_TYPES = [
   '.tf', '.hcl',
 ].join(',')
 
+// Extensions we know to be binary / non-textual. We reject these at queue
+// time with a user-visible note rather than letting them fall through to the
+// text parser, which would read random bytes, chunk them into garbage tokens,
+// and crash ONNX with an int32 overflow inside SafeInt. Magic-byte sniffing
+// would be more robust but extension-based is enough for the common cases.
+const BINARY_EXTENSIONS = new Set([
+  // Raster + vector images
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff', '.ico',
+  '.heic', '.heif', '.avif',
+  // Photoshop / design / vector working files
+  '.psd', '.psb', '.ai', '.sketch', '.fig', '.xcf',
+  // Audio
+  '.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.wma', '.opus',
+  // Video
+  '.mp4', '.mov', '.avi', '.mkv', '.webm', '.wmv', '.flv', '.m4v',
+  // Archive
+  '.zip', '.tar', '.gz', '.tgz', '.bz2', '.7z', '.rar', '.xz',
+  // Executable / native
+  '.exe', '.dll', '.so', '.dylib', '.bin', '.dmg', '.deb', '.rpm', '.msi',
+  // Font
+  '.ttf', '.otf', '.woff', '.woff2', '.eot',
+  // Database
+  '.db', '.sqlite', '.sqlite3', '.mdb',
+])
+
+function isBinaryFile(file: File): boolean {
+  const name = file.name.toLowerCase()
+  // Find the last . to get the extension
+  const dot = name.lastIndexOf('.')
+  if (dot === -1) return false
+  const ext = name.slice(dot)
+  return BINARY_EXTENSIONS.has(ext)
+}
+
 interface QueuedFile {
   file: File
   id: string
@@ -79,6 +113,7 @@ interface QueuedFile {
 export default function BrowserCartBuilder() {
   const [cartName, setCartName] = useState('')
   const [queued, setQueued] = useState<QueuedFile[]>([])
+  const [skippedNotice, setSkippedNotice] = useState<string | null>(null)
   const [progress, setProgress] = useState<PipelineProgress | null>(null)
   const [building, setBuilding] = useState(false)
   const [result, setResult] = useState<BuiltCart | null>(null)
@@ -121,9 +156,32 @@ export default function BrowserCartBuilder() {
     setError(null)
     setResult(null)
     setProgress(null)
+    // Partition incoming files into text-based (accepted) vs binary (rejected).
+    // Binary files would crash the embedder with garbage-byte tokens, so we
+    // reject them up front with a clear notice rather than failing mid-build.
+    const all = Array.from(files)
+    const accepted: File[] = []
+    const rejected: string[] = []
+    for (const f of all) {
+      if (isBinaryFile(f)) {
+        rejected.push(f.name)
+      } else {
+        accepted.push(f)
+      }
+    }
+    if (rejected.length > 0) {
+      setSkippedNotice(
+        `Skipped ${rejected.length} binary file${rejected.length === 1 ? '' : 's'} (images/audio/video/archives not yet supported): ` +
+        rejected.slice(0, 5).join(', ') +
+        (rejected.length > 5 ? `, +${rejected.length - 5} more` : '')
+      )
+    } else {
+      setSkippedNotice(null)
+    }
+    if (accepted.length === 0) return
     setQueued((prev) => [
       ...prev,
-      ...Array.from(files).map((f) => ({
+      ...accepted.map((f) => ({
         file: f,
         id:
           typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -260,6 +318,22 @@ export default function BrowserCartBuilder() {
           PDF · DOCX · XLSX · HTML · Code · Configs · 70+ types
         </div>
       </div>
+
+      {/* Skipped-binary notice */}
+      {skippedNotice && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200 flex items-start gap-2">
+          <AlertCircle className="shrink-0 mt-0.5" size={14} />
+          <div className="flex-1">{skippedNotice}</div>
+          <button
+            type="button"
+            onClick={() => setSkippedNotice(null)}
+            className="shrink-0 text-amber-300/60 hover:text-amber-200"
+            aria-label="Dismiss"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
 
       {/* Queued files */}
       {queued.length > 0 && (
