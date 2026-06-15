@@ -257,7 +257,7 @@ export default function BrowserCartBuilder() {
           Drop documents or click to browse
         </div>
         <div className="text-[10px] text-slate-500 mt-1 font-mono">
-          PDF · DOCX · XLSX · CSV · TXT · MD · RTF
+          PDF · DOCX · XLSX · HTML · Code · Configs · 70+ types
         </div>
       </div>
 

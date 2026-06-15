@@ -7,7 +7,7 @@ const DOC_PREFIX = 'search_document: '
 const QUERY_PREFIX = 'search_query: '
 
 const NOMIC_DIM = 768
-const DEFAULT_BATCH_SIZE = 16
+const DEFAULT_BATCH_SIZE = 8
 
 export type PrefixMode = 'document' | 'query' | 'raw'
 
@@ -73,29 +73,7 @@ export async function embedTexts(
 
   for (let i = 0; i < prefixed.length; i += batchSize) {
     const batch = prefixed.slice(i, i + batchSize)
-    // transformers.js accepts string[] natively. Output is a Tensor with
-    // dims [N, dim] when pooling is set (otherwise [N, seq_len, dim]).
-    const out = (await embedder(batch, {
-      pooling: 'mean',
-      normalize: false,
-    })) as Tensor
-
-    if (out.dims.length !== 2) {
-      throw new Error(
-        `Unexpected embedding shape: [${out.dims.join(', ')}] (expected [N, ${NOMIC_DIM}])`
-      )
-    }
-    if (out.dims[1] !== NOMIC_DIM) {
-      throw new Error(
-        `Unexpected embedding dim: ${out.dims[1]} (expected ${NOMIC_DIM})`
-      )
-    }
-    if (out.dims[0] !== batch.length) {
-      throw new Error(
-        `Embedding batch size mismatch: returned ${out.dims[0]} vectors for ${batch.length} inputs`
-      )
-    }
-    result.set(out.data as Float32Array, i * NOMIC_DIM)
+    await embedBatchWithFallback(embedder, batch, result, i * NOMIC_DIM)
     completed += batch.length
     onBatch?.(completed, prefixed.length)
   }
@@ -106,6 +84,71 @@ export async function embedTexts(
     count: texts.length,
     backend: getActiveBackend(),
   }
+}
+
+/**
+ * Embed a single batch with WebGPU-OOM-adaptive halving fallback.
+ *
+ * WebGPU caps individual buffer allocations at 2 GiB (2^31 bytes). Transformer
+ * intermediate tensors scale with batch × seq_len × hidden_dim across N layers
+ * and can blow past this when chunks happen to be long or batch size is high.
+ * On the specific "max buffer size limit" / "OrtRun" / "WebGPU validation
+ * failed" error class, we halve the batch and recurse. Worst case (batch of 1
+ * still fails) the underlying error is re-thrown — a single input that doesn't
+ * fit is a genuine model-side problem we shouldn't silently mask.
+ */
+async function embedBatchWithFallback(
+  embedder: (texts: string[], opts: Record<string, unknown>) => Promise<Tensor>,
+  batch: string[],
+  result: Float32Array,
+  outFloatOffset: number
+): Promise<void> {
+  let out: Tensor
+  try {
+    out = (await embedder(batch, {
+      pooling: 'mean',
+      normalize: false,
+    })) as Tensor
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    const isWebGpuOom =
+      /max buffer size limit/i.test(msg) ||
+      /WebGPU validation failed/i.test(msg) ||
+      /failed to call OrtRun/i.test(msg)
+    if (!isWebGpuOom || batch.length === 1) {
+      throw err
+    }
+    const half = Math.ceil(batch.length / 2)
+    console.warn(
+      `[cart-builder embed] WebGPU buffer-cap hit at batchSize=${batch.length}; ` +
+      `halving to ${half} and retrying. (${msg.slice(0, 120)})`
+    )
+    await embedBatchWithFallback(embedder, batch.slice(0, half), result, outFloatOffset)
+    await embedBatchWithFallback(
+      embedder,
+      batch.slice(half),
+      result,
+      outFloatOffset + half * NOMIC_DIM
+    )
+    return
+  }
+
+  if (out.dims.length !== 2) {
+    throw new Error(
+      `Unexpected embedding shape: [${out.dims.join(', ')}] (expected [N, ${NOMIC_DIM}])`
+    )
+  }
+  if (out.dims[1] !== NOMIC_DIM) {
+    throw new Error(
+      `Unexpected embedding dim: ${out.dims[1]} (expected ${NOMIC_DIM})`
+    )
+  }
+  if (out.dims[0] !== batch.length) {
+    throw new Error(
+      `Embedding batch size mismatch: returned ${out.dims[0]} vectors for ${batch.length} inputs`
+    )
+  }
+  result.set(out.data as Float32Array, outFloatOffset)
 }
 
 /**
