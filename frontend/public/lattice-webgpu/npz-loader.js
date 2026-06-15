@@ -233,6 +233,45 @@ export function parsePickledStrings(bytes) {
 }
 
 // ---------------------------------------------------------------------------
+// Unicode NPY string decoder — handles browser-built carts (cart-builder-v2)
+// ---------------------------------------------------------------------------
+// numpy dtype '<U<n>' stores each string as `n` UTF-32 LE codepoints (4 bytes
+// each), padded with trailing zero codepoints. Layout is row-major over the
+// shape. We only need shape=[N] (1-D string array of passages) here.
+//
+// Total bytes per entry = `maxLen * 4`. Total payload = `N * maxLen * 4`.
+
+/**
+ * Decode a unicode NPY string array payload into JS strings.
+ * @param {ArrayBuffer} data - raw payload (post-header, post-shape)
+ * @param {number} maxLen - codepoints per string (from dtype <U<n>)
+ * @param {number[]} shape - NPY shape; we use shape[0] for count
+ * @returns {string[]}
+ */
+export function parseUnicodeStrings(data, maxLen, shape) {
+    const count = shape && shape.length > 0 ? shape[0] : 0;
+    const view = new DataView(data);
+    const out = new Array(count);
+    const bytesPerStr = maxLen * 4;
+    for (let i = 0; i < count; i++) {
+        const start = i * bytesPerStr;
+        // Read codepoints until trailing zero padding kicks in.
+        let s = '';
+        for (let j = 0; j < maxLen; j++) {
+            const off = start + j * 4;
+            if (off + 4 > data.byteLength) break;
+            const cp = view.getUint32(off, true);
+            if (cp === 0) break;
+            // String.fromCodePoint handles surrogate-pair-bearing codepoints
+            // (e.g. emoji) correctly, unlike fromCharCode.
+            s += String.fromCodePoint(cp);
+        }
+        out[i] = s;
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // High-level: parse a .cart.npz and return embeddings + passages
 // ---------------------------------------------------------------------------
 
@@ -260,8 +299,24 @@ export async function parseCartNpz(buffer) {
     if (!passagesEntry || !passagesEntry.data) {
         throw new Error('Cart: passages.npy missing');
     }
-    const pickleBytes = new Uint8Array(passagesEntry.data);
-    const passages = parsePickledStrings(pickleBytes);
+    // Passages can be in two formats:
+    //   (a) Python-built carts: dtype is object-array, payload is a pickle blob
+    //       (parsePickledStrings handles this).
+    //   (b) Browser-built carts (cart-builder-v2): dtype is <U<maxlen>, payload
+    //       is UTF-32 LE codepoints (4 bytes each), shape=[N], total bytes =
+    //       N * maxlen * 4.
+    // We pick the path based on the NPY header's dtype string.
+    let passages;
+    const passagesDtype = passagesEntry.dtype || '';
+    const unicodeMatch = passagesDtype.match(/^<U(\d+)$/);
+    if (unicodeMatch) {
+        const maxLen = parseInt(unicodeMatch[1], 10);
+        passages = parseUnicodeStrings(passagesEntry.data, maxLen, passagesEntry.shape);
+    } else {
+        // Fallback: legacy server-built carts (dtype 'O' / unknown). Try pickle.
+        const pickleBytes = new Uint8Array(passagesEntry.data);
+        passages = parsePickledStrings(pickleBytes);
+    }
 
     // Second pass: figures/* entries. parseNpz already inflated them as
     // "raw" Uint8Array (since they don't look like .npy files, parseNpy errors
