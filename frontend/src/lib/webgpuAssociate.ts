@@ -264,7 +264,18 @@ export async function runWebGpuAssociate(opts: RunAssociateOptions): Promise<Sea
             passage: c.passage,
         });
     }
-    scored.sort((a, b) => b.physics_score - a.physics_score);
+    // Two-key sort: physics descending, cosine descending as tiebreaker.
+    // Physics scores saturate at 1.000 inside deep semantic basins (e.g.
+    // "band"-themed queries return 10 hits all at P=1.000), so cosine has
+    // to be the discriminator or the strongest pre-physics hit (e.g.
+    // "T. Rex (band)" at C=0.730 on the trex query) gets shuffled below
+    // weaker matches. Tiny epsilon on physics so float noise doesn't
+    // promote a near-tie above a legitimately higher physics score.
+    scored.sort((a, b) => {
+        const dp = b.physics_score - a.physics_score;
+        if (Math.abs(dp) > 1e-6) return dp;
+        return b.cosine_score - a.cosine_score;
+    });
 
     return scored.slice(0, topK).map((s, rank) => {
         const passage = s.passage ?? '';
