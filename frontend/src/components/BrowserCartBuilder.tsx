@@ -26,7 +26,50 @@ type WebGPUStatus = 'detecting' | 'available' | 'unavailable'
 // parse → chunk → embed → write → download. No server roundtrip.
 // Headline pitch: "your data never leaves your machine."
 
-const ACCEPT_TYPES = '.pdf,.docx,.xlsx,.csv,.txt,.md,.markdown,.rtf'
+// File extensions the picker will accept. Order roughly groups by category for
+// readability. Anything not in the explicit parser registry falls through to
+// textParser.parse() (raw UTF-8 read), which works fine for text-based formats
+// (code, YAML, JSON, RST, etc.) — they're just embedded as their source text.
+// HTML gets a dedicated parser (parsers/html.ts) that strips tags first.
+const ACCEPT_TYPES = [
+  // Documents (existing parsers)
+  '.pdf', '.docx', '.xlsx', '.csv', '.txt', '.md', '.markdown', '.rtf',
+  // Web / markup
+  '.html', '.htm', '.xml',
+  // Structured data + config
+  '.json', '.jsonl', '.ndjson',
+  '.yaml', '.yml', '.toml',
+  '.ini', '.cfg', '.conf', '.properties', '.log',
+  // Documentation variants
+  '.mdx', '.qmd', '.rst', '.tex', '.adoc', '.org',
+  // Code — general
+  '.py', '.pyi', '.ipynb',
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
+  '.go', '.rs', '.java', '.kt', '.scala',
+  '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hh',
+  '.rb', '.cs', '.php', '.swift',
+  '.lua', '.luau', '.zig',
+  // Code — shell + scripts
+  '.sh', '.bash', '.zsh', '.fish',
+  '.ps1', '.psm1', '.bat', '.cmd',
+  // Code — functional + niche
+  '.ex', '.exs', '.jl', '.elm', '.clj', '.cljs', '.hs',
+  // Code — DSL + query
+  '.sql', '.graphql', '.gql',
+  // Code — mobile / framework
+  '.m', '.mm', '.dart',
+  '.vue', '.svelte',
+  '.groovy', '.gradle',
+  // Code — hardware / shader
+  '.v', '.sv',
+  '.cu', '.cuh', '.wgsl', '.glsl', '.hlsl',
+  // Code — Fortran
+  '.f', '.f90', '.f95', '.f03', '.f08',
+  // Code — Pascal / Delphi
+  '.pas', '.pp', '.dpr', '.dpk', '.lpr', '.inc', '.dfm', '.lfm', '.lpk',
+  // Code — infra-as-code
+  '.tf', '.hcl',
+].join(',')
 
 interface QueuedFile {
   file: File

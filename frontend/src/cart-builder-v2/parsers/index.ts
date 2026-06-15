@@ -4,6 +4,7 @@
 
 import type { Parser, ParseResult } from '../types'
 import { docxParser } from './docx'
+import { htmlParser } from './html'
 import { pdfParser } from './pdf'
 import { markdownParser, rtfParser, textParser } from './text'
 import { xlsxParser } from './xlsx'
@@ -14,6 +15,7 @@ const parsers: Parser[] = [
   docxParser,
   xlsxParser,
   markdownParser,
+  htmlParser,  // strips <script>/<style>/tags; runs before textParser's catch-all
   rtfParser,
   textParser, // .txt and the catch-all fallback path
 ]
