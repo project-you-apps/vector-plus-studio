@@ -459,6 +459,7 @@ export default function CRUDScreen() {
   // ----- Helper components below (closures so they can read store state) -----
 
   function OpenCartBanner() {
+    const readOnlyMode = !!status?.read_only_mode
     if (!mounted) {
       return (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 flex items-start gap-3">
@@ -466,11 +467,26 @@ export default function CRUDScreen() {
           <div className="text-sm">
             <div className="text-amber-200 font-medium mb-1">No cart mounted</div>
             <div className="text-xs text-slate-400 leading-relaxed">
-              Edit Carts is the destructive screen — passages get tombstoned, updated, and deleted here.
-              Mount a cart from the <strong className="text-slate-200">Search</strong> screen first
-              (the toolbar there has the file picker, upload, and the cart list), then come back to edit.
-              Or pick from <strong className="text-slate-200">My Carts</strong> below if you already
-              know which one you want.
+              Edit Carts is the destructive screen — passages get tombstoned, updated, and deleted here.{' '}
+              {readOnlyMode ? (
+                <>
+                  On the public VPS, mount a cart via{' '}
+                  <strong className="text-slate-200">Search → "Open from My Computer"</strong>{' '}
+                  (uses your browser's File System Access; bytes never leave your machine)
+                  or via <strong className="text-slate-200">"Upload Cartridge"</strong>{' '}
+                  (1-hour sandboxed for trying public carts).{' '}
+                  <strong className="text-slate-200">Browser-built carts saved to your local disk via Cart Builder</strong>{' '}
+                  need to be re-mounted via "Open from My Computer" before Edit Carts can see them — the public VPS
+                  cannot reach into your filesystem directly (that's the browser sandbox doing its job, not a bug).
+                </>
+              ) : (
+                <>
+                  Mount a cart from the <strong className="text-slate-200">Search</strong> screen first
+                  (the toolbar there has the file picker, upload, and the cart list), then come back to edit.
+                  Or pick from <strong className="text-slate-200">My Carts</strong> below if you already
+                  know which one you want.
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -662,6 +678,7 @@ function NewCartPanel({
   const openFolderPicker = useCartBuilderStore((s) => s.openFolderPicker)
   const refreshBrowser = useCartBuilderStore((s) => s.refreshBrowser)
   const mountCart = useAppStore((s) => s.mount)
+  const toggleLock = useAppStore((s) => s.toggleLock)
 
   // Pre-flight: when a destination folder is picked, list any existing
   // .cart.npz files there so the user sees collisions before committing
@@ -824,7 +841,15 @@ function NewCartPanel({
       log('save', `${replace ? 'Replaced' : 'Saved'} ${resp.mounted_filename} to ${resp.folder}`, true)
       try {
         await mountCart(resp.cart_path)
-        log('mount', `Mounted ${resp.mounted_filename} for editing`, true)
+        // User-just-built carts default RW (Andy 6/15 PM): the cart's owner is
+        // mounting it for editing one second after building it. Mount route
+        // defaults to read-only for safety on other-people's-carts; flip
+        // automatically here so the build-then-edit flow lands editable.
+        const postMountStatus = useAppStore.getState().status
+        if (postMountStatus?.read_only) {
+          await toggleLock()
+        }
+        log('mount', `Mounted ${resp.mounted_filename} for editing (RW)`, true)
         await refreshBrowser()
         setMode('open')
       } catch (mountErr) {
@@ -1143,11 +1168,21 @@ function NewCartPanel({
             <button
               onClick={() => { void handleSaveAndMount() }}
               className="px-3 py-1.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-200 text-xs font-medium hover:bg-emerald-500/30 flex items-center gap-1.5 transition-colors"
-              title={`Save to ${destFolder} and mount for editing.`}
+              title={`Save to ${destFolder} and mount as Editable (RW) for immediate editing.`}
             >
               <Save size={12} />
               Save + mount for editing
             </button>
+            {/* RW state pill (Andy 6/15 PM): users couldn't tell what permission state */}
+            {/* their just-built cart would mount in. The Save+mount path auto-flips to */}
+            {/* Editable on user-built carts (see handleSaveAndMount auto-unlock). */}
+            <span
+              className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-green-500/20 border border-green-500/40 text-green-300 font-mono flex items-center gap-1"
+              title="Newly-built carts mount in Editable (RW) mode automatically — you own the cart you just built."
+            >
+              <Unlock size={9} />
+              Will mount: Editable
+            </span>
             <span className="text-[10px] text-slate-500 truncate">
               → {destFolder || '(no folder selected)'}
             </span>

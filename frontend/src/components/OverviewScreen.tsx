@@ -45,6 +45,13 @@ function HealthRow({ ok, label, detail }: { ok: boolean; label: string; detail?:
 
 export default function OverviewScreen() {
   const { status, cartridges, fetchStatus, fetchCartridges } = useAppStore()
+  // Mirror Header.tsx's 3-way physics-engine detection so the Overview's
+  // Engine card and the top-right pill agree (Andy 6/15 PM cosmetic bug:
+  // pill said WebGPU while Overview said CPU). Backend engine (status.gpu_available)
+  // is true when the server has CUDA; webgpuStatus is true when the user's
+  // browser supports WebGPU. The droplet has no GPU, so backend is CPU,
+  // but the browser can still do physics via WebGPU.
+  const webgpuStatus = useAppStore((s) => s.webgpuStatus)
 
   useEffect(() => {
     fetchStatus()
@@ -75,10 +82,28 @@ export default function OverviewScreen() {
         {/* Stat grid */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <StatCard
-            label="Engine"
-            value={status.gpu_available ? 'GPU' : 'CPU'}
-            sub={status.gpu_available ? 'Lattice physics enabled' : 'Embedding-only mode'}
-            accent={status.gpu_available ? 'green' : 'amber'}
+            label="Physics Engine"
+            value={
+              status.gpu_available
+                ? 'GPU'
+                : webgpuStatus === 'available'
+                  ? 'WebGPU'
+                  : 'CPU'
+            }
+            sub={
+              status.gpu_available
+                ? 'Server GPU — lattice physics on backend'
+                : webgpuStatus === 'available'
+                  ? 'Browser WebGPU — lattice physics in your browser'
+                  : 'Embedding-only mode (no physics)'
+            }
+            accent={
+              status.gpu_available
+                ? 'green'
+                : webgpuStatus === 'available'
+                  ? 'green'
+                  : 'amber'
+            }
           />
           <StatCard
             label="Mounted"
