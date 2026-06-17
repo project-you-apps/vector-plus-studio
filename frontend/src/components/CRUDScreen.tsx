@@ -363,7 +363,13 @@ export default function CRUDScreen() {
                 </button>
               </OpPanel>
 
-              {/* Update panel */}
+              {/* Update panel -- backend-mounted carts only. Andy 2026-06-17 PM:
+                  the in-place update flow on LocalCart doesn't have a sane UX
+                  (no visible idx, file-level updates should happen externally
+                  in the app that owns the file). Hidden entirely for LocalCart;
+                  the Add panel handles the "edit-by-replace" pattern (delete
+                  old file via Source Files panel, re-add new version). */}
+              {!isLocalMount && (
               <OpPanel
                 icon={Save}
                 title="Update"
@@ -407,8 +413,14 @@ export default function CRUDScreen() {
                   Update Passage
                 </button>
               </OpPanel>
+              )}
 
-              {/* Delete panel */}
+              {/* Delete-by-IDX panel -- backend-mounted carts only. Andy 2026-06-17 PM:
+                  without a browseable passage list, asking the user to type an idx
+                  is meaningless UX on LocalCart. The Source Files panel below
+                  handles delete-by-source-file (which IS meaningful — files are
+                  the natural unit of organization for user-built carts). */}
+              {!isLocalMount && (
               <OpPanel
                 icon={Trash2}
                 title="Delete"
@@ -439,6 +451,7 @@ export default function CRUDScreen() {
                   Tombstone Pattern
                 </button>
               </OpPanel>
+              )}
             </div>
 
             {/* Source-files panel — LocalCart only. Demo step 6 ("delete the
@@ -851,7 +864,13 @@ function SourceFilesPanel({
         </div>
       ) : (
         <div className="max-h-[280px] overflow-y-auto divide-y divide-cyan-500/20">
-          {sorted.map((s) => {
+          {sorted.map((s, i) => {
+            // File-level IDX (1-based row number in the sorted list). Andy 6/17 PM:
+            // users need an identifier on each row so they can reference files
+            // by number when discussing or deleting. Sequential row index works
+            // for the visible-list use case; doesn't need to be stable across
+            // sessions (sort order changes when tombstones shift activeCount).
+            const fileIdx = i + 1
             const allDeleted = s.activeCount === 0
             return (
               <div
@@ -860,6 +879,9 @@ function SourceFilesPanel({
                   allDeleted ? 'opacity-50' : ''
                 }`}
               >
+                <span className="text-[10px] text-slate-500 font-mono w-8 shrink-0 text-right">
+                  #{fileIdx}
+                </span>
                 <Folder size={11} className="text-cyan-400 shrink-0" />
                 <span
                   className="flex-1 truncate font-mono text-slate-300"
