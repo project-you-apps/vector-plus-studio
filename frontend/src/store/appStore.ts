@@ -30,6 +30,15 @@ export interface LocalCart {
   // hash extracted from a figure passage's '[figure | hash: <h>]' header.
   // Empty Map when no figures are embedded.
   figures: Map<string, Uint8Array>
+  // In-memory tombstones for Edit Carts support on LocalCart (Andy 2026-06-16
+  // PM: the demo path requires editing browser-mounted carts on the public
+  // VPS where the droplet can't reach the user's local filesystem). Tombstoned
+  // idx are filtered out of cosineSearchLocal results so they stop appearing
+  // in search; can be restored via localCartRestore. Persisted by writing the
+  // mutated cart back via showSaveFilePicker (Save action) -- this in-memory
+  // state is the editable representation; the on-disk file is the snapshot.
+  tombstones: Set<number>
+  dirty: boolean                // true if tombstones added/restored since mount
 }
 
 // One step in the walk trail. Step 0 is always the original text query that
@@ -111,6 +120,17 @@ interface AppState {
   mountLocalCart: (file: File) => Promise<{ success: boolean; message: string }>
   unmountLocalCart: () => void
   selectLocalCart: (name: string) => void
+  // LocalCart edit operations (Andy 2026-06-16 PM: Edit Carts must work on
+  // browser-mounted carts on the public droplet). Each operation mutates the
+  // active LocalCart's in-memory state and replaces it in the localCarts Map
+  // immutably so React re-renders. Save persists by re-downloading via
+  // showSaveFilePicker (user picks where to save the mutated cart).
+  localCartTombstone: (idx: number) => void
+  localCartRestore: (idx: number) => void
+  localCartTombstoneBySource: (sourcePath: string) => number
+  localCartListSources: () => Array<{ sourcePath: string; count: number; activeCount: number }>
+  localCartAddPassage: (text: string, source: string) => Promise<{ success: boolean; message: string; idx?: number }>
+  localCartSave: () => Promise<{ success: boolean; message: string }>
 
   // Strict keyword filter
   strictMode: boolean
@@ -247,6 +267,182 @@ export const useAppStore = create<AppState>((set, get) => ({
       searchElapsed: 0,
       walkTrail: [],
     })
+  },
+
+  // ---- LocalCart edit operations ----
+  // All mutations follow the same pattern: get the active cart, build a new
+  // LocalCart with updated state, replace it in a NEW Map, set state.
+  // Immutable update so React sees the change. Dirty flag set so the OpenCartBanner
+  // shows "unsaved changes" until the user saves.
+  localCartTombstone: (idx: number) => {
+    const { activeLocalCart, localCarts } = get()
+    if (!activeLocalCart) return
+    const cart = localCarts.get(activeLocalCart)
+    if (!cart) return
+    if (idx < 0 || idx >= cart.passages.length) return
+    const nextTombs = new Set(cart.tombstones)
+    nextTombs.add(idx)
+    const updatedCart: LocalCart = { ...cart, tombstones: nextTombs, dirty: true }
+    const nextCarts = new Map(localCarts)
+    nextCarts.set(activeLocalCart, updatedCart)
+    set({ localCarts: nextCarts })
+  },
+
+  localCartRestore: (idx: number) => {
+    const { activeLocalCart, localCarts } = get()
+    if (!activeLocalCart) return
+    const cart = localCarts.get(activeLocalCart)
+    if (!cart) return
+    if (!cart.tombstones.has(idx)) return
+    const nextTombs = new Set(cart.tombstones)
+    nextTombs.delete(idx)
+    // dirty stays true if there were tombstones before this restore that are
+    // still set; if all gone, technically we could clear dirty but it doesn't
+    // matter for UX -- user can still Save to commit current state.
+    const updatedCart: LocalCart = { ...cart, tombstones: nextTombs, dirty: true }
+    const nextCarts = new Map(localCarts)
+    nextCarts.set(activeLocalCart, updatedCart)
+    set({ localCarts: nextCarts })
+  },
+
+  // Tombstone every passage whose sourcePath matches the given source.
+  // Returns the count of newly-tombstoned passages (for log/toast messaging).
+  // Used by the demo flow's "delete the specific single file" step.
+  localCartTombstoneBySource: (sourcePath: string): number => {
+    const { activeLocalCart, localCarts } = get()
+    if (!activeLocalCart) return 0
+    const cart = localCarts.get(activeLocalCart)
+    if (!cart || !cart.sourcePaths) return 0
+    const nextTombs = new Set(cart.tombstones)
+    let added = 0
+    for (let i = 0; i < cart.sourcePaths.length; i++) {
+      if (cart.sourcePaths[i] === sourcePath && !nextTombs.has(i)) {
+        nextTombs.add(i)
+        added++
+      }
+    }
+    if (added === 0) return 0
+    const updatedCart: LocalCart = { ...cart, tombstones: nextTombs, dirty: true }
+    const nextCarts = new Map(localCarts)
+    nextCarts.set(activeLocalCart, updatedCart)
+    set({ localCarts: nextCarts })
+    return added
+  },
+
+  // List unique source files in the cart with active + tombstoned counts.
+  // Used by the Delete panel UI to render a clickable list of source files.
+  localCartListSources: () => {
+    const { activeLocalCart, localCarts } = get()
+    if (!activeLocalCart) return []
+    const cart = localCarts.get(activeLocalCart)
+    if (!cart || !cart.sourcePaths) return []
+    const counts = new Map<string, { count: number; activeCount: number }>()
+    for (let i = 0; i < cart.sourcePaths.length; i++) {
+      const sp = cart.sourcePaths[i]
+      if (!sp) continue
+      const c = counts.get(sp) ?? { count: 0, activeCount: 0 }
+      c.count++
+      if (!cart.tombstones.has(i)) c.activeCount++
+      counts.set(sp, c)
+    }
+    return Array.from(counts.entries()).map(([sourcePath, c]) => ({
+      sourcePath,
+      count: c.count,
+      activeCount: c.activeCount,
+    }))
+  },
+
+  // Add a new passage to the active LocalCart. Embeds the text via the
+  // backend's /api/embed endpoint (works for public droplet too -- the
+  // embedding model is server-side), then appends to passages/embeddings/
+  // sourcePaths arrays. Marks cart dirty. Demo step 8: "add file with
+  // other specific knowledge" flows through here -- user provides text +
+  // source label, the new passage becomes immediately searchable in
+  // cosineSearchLocal.
+  localCartAddPassage: async (text: string, source: string) => {
+    const { activeLocalCart, localCarts } = get()
+    if (!activeLocalCart) return { success: false, message: 'No active local cart' }
+    const cart = localCarts.get(activeLocalCart)
+    if (!cart) return { success: false, message: 'Active local cart not found' }
+    const trimmedText = text.trim()
+    if (!trimmedText) return { success: false, message: 'Cannot add empty passage' }
+    try {
+      const apiBase = (import.meta.env.VITE_API_BASE as string | undefined) || '/api'
+      const embResp = await fetch(`${apiBase}/embed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: trimmedText }),
+      })
+      if (!embResp.ok) {
+        return { success: false, message: `Embed request failed: ${embResp.status}` }
+      }
+      const embData = await embResp.json()
+      const newEmb = new Float32Array(embData.embedding)
+      const [, dim] = cart.embeddingsShape
+      if (newEmb.length !== dim) {
+        return { success: false, message: `Embed dim mismatch: got ${newEmb.length}, expected ${dim}` }
+      }
+      // Append to flat embeddings array (immutable -- alloc new larger one).
+      const oldCount = cart.passages.length
+      const newCount = oldCount + 1
+      const newEmbeddings = new Float32Array(newCount * dim)
+      newEmbeddings.set(cart.embeddings)
+      newEmbeddings.set(newEmb, oldCount * dim)
+      const newPassages = [...cart.passages, trimmedText]
+      const newSourcePaths = cart.sourcePaths
+        ? [...cart.sourcePaths, source || '<inline>']
+        : null
+      const updatedCart: LocalCart = {
+        ...cart,
+        embeddings: newEmbeddings,
+        embeddingsShape: [newCount, dim],
+        passages: newPassages,
+        sourcePaths: newSourcePaths,
+        dirty: true,
+      }
+      const nextCarts = new Map(localCarts)
+      nextCarts.set(activeLocalCart, updatedCart)
+      set({ localCarts: nextCarts })
+      return {
+        success: true,
+        message: `Added passage at idx #${oldCount} (source: ${source || '<inline>'})`,
+        idx: oldCount,
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Unknown error'
+      return { success: false, message: `Add failed: ${msg}` }
+    }
+  },
+
+  // Save the active LocalCart back to disk by triggering a re-download via
+  // showSaveFilePicker (Chrome/Edge/Opera) or anchor click (Firefox/Safari).
+  // The saved bytes have tombstones APPLIED -- tombstoned passages are removed
+  // from the passages array, embeddings, and sourcePaths. User can then re-mount
+  // the saved file to confirm the changes persist.
+  // Implementation is in lib/localCart.ts (saveCartToDisk).
+  localCartSave: async () => {
+    const { activeLocalCart, localCarts } = get()
+    if (!activeLocalCart) return { success: false, message: 'No active local cart' }
+    const cart = localCarts.get(activeLocalCart)
+    if (!cart) return { success: false, message: 'Active local cart not found' }
+    if (!cart.dirty && cart.tombstones.size === 0) {
+      return { success: false, message: 'Nothing to save (no changes)' }
+    }
+    try {
+      const { saveLocalCartToDisk } = await import('../lib/localCart')
+      const result = await saveLocalCartToDisk(cart)
+      if (result.success) {
+        // Mark clean after successful save -- the on-disk snapshot now matches.
+        const updatedCart: LocalCart = { ...cart, dirty: false }
+        const nextCarts = new Map(localCarts)
+        nextCarts.set(activeLocalCart, updatedCart)
+        set({ localCarts: nextCarts })
+      }
+      return result
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Unknown save error'
+      return { success: false, message: `Save failed: ${msg}` }
+    }
   },
   selectLocalCart: (name: string) => {
     const { localCarts } = get()

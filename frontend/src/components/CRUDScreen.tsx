@@ -69,12 +69,34 @@ export default function CRUDScreen() {
   const deleteResult = useAppStore((s) => s.deleteResult)
   const restoreResult = useAppStore((s) => s.restoreResult)
 
+  // LocalCart edit support (Andy 2026-06-16 PM): when a browser-mounted cart
+  // is active and the backend has no cart mounted, Edit Carts operates on the
+  // LocalCart in-memory state. Operations route through new store actions
+  // (localCartTombstone, localCartTombstoneBySource, localCartRestore,
+  // localCartSave) instead of the backend API.
+  const activeLocalCartName = useAppStore((s) => s.activeLocalCart)
+  const localCarts = useAppStore((s) => s.localCarts)
+  const unmountLocalCart = useAppStore((s) => s.unmountLocalCart)
+  const localCartTombstone = useAppStore((s) => s.localCartTombstone)
+  const localCartRestore = useAppStore((s) => s.localCartRestore)
+  const localCartTombstoneBySource = useAppStore((s) => s.localCartTombstoneBySource)
+  const localCartListSources = useAppStore((s) => s.localCartListSources)
+  const localCartSave = useAppStore((s) => s.localCartSave)
+
+  const activeLocalCart = activeLocalCartName ? localCarts.get(activeLocalCartName) ?? null : null
+  const isLocalMount = !!activeLocalCart && !status?.mounted_cartridge
+  const isBackendMount = !!status?.mounted_cartridge
+
   const [mode, setMode] = useState<Mode>('open')
   const [activity, setActivity] = useState<ActivityEntry[]>([])
   const [confirm, setConfirm] = useState<ConfirmState | null>(null)
 
-  // Add-panel state
+  // Add-panel state. For LocalCart, addSource is the source label to attach
+  // to the new passage (becomes its sourcePath entry). Defaults to '<inline>'
+  // if user leaves blank.
   const [addText, setAddText] = useState('')
+  const [addSource, setAddSource] = useState('')
+  const localCartAddPassage = useAppStore((s) => s.localCartAddPassage)
 
   // Update-panel state
   const [updateIdx, setUpdateIdx] = useState('')
@@ -92,10 +114,19 @@ export default function CRUDScreen() {
     fetchDeleted()
   }, [fetchCartridges, fetchDeleted])
 
-  const mounted = !!status?.mounted_cartridge
-  const readOnly = !!status?.read_only
-  const dirty = !!status?.dirty
-  const patternCount = status?.pattern_count ?? 0
+  // Unified mount state: a cart is "mounted" if either the backend has one
+  // (status.mounted_cartridge) OR a browser-side LocalCart is active. Backend
+  // takes precedence for legacy compatibility. Read-only for local carts is
+  // always false (the user owns the file they picked from their disk).
+  // Dirty tracks unsaved tombstones/adds for local carts; backend tracks its
+  // own dirty flag via status.dirty.
+  const mounted = isBackendMount || isLocalMount
+  const readOnly = isBackendMount ? !!status?.read_only : false
+  const dirty = isBackendMount ? !!status?.dirty : (activeLocalCart?.dirty ?? false)
+  const patternCount = isBackendMount
+    ? (status?.pattern_count ?? 0)
+    : (activeLocalCart ? activeLocalCart.passages.length - activeLocalCart.tombstones.size : 0)
+  const totalIncludingTombstones = isLocalMount && activeLocalCart ? activeLocalCart.passages.length : patternCount
 
   const log = (kind: OpKind, detail: string, ok: boolean) => {
     setActivity((prev) => [
@@ -105,14 +136,27 @@ export default function CRUDScreen() {
   }
 
   // ── Add ──
+  // Routes through localCartAddPassage for LocalCart-mounted carts (embeds
+  // via /api/embed, appends to in-memory state) or addPassage (backend API)
+  // for backend-mounted carts.
   const handleAdd = async () => {
     const text = addText.trim()
     if (!text) return
-    const resp = await addPassage(text)
-    log('add', resp.message, resp.success)
-    if (resp.success) {
-      setAddText('')
-      fetchStatus()
+    if (isLocalMount) {
+      const source = addSource.trim() || '<inline>'
+      const resp = await localCartAddPassage(text, source)
+      log('add', resp.message, resp.success)
+      if (resp.success) {
+        setAddText('')
+        setAddSource('')
+      }
+    } else {
+      const resp = await addPassage(text)
+      log('add', resp.message, resp.success)
+      if (resp.success) {
+        setAddText('')
+        fetchStatus()
+      }
     }
   }
 
@@ -175,6 +219,8 @@ export default function CRUDScreen() {
   // ── Delete ──
   // Standard practice (Andy 2026-05-06): destructive actions get a
   // confirmation modal. The modal does the actual call on confirm.
+  // For LocalCart-mounted carts, routes through localCartTombstone instead
+  // of the backend API.
   const handleDelete = () => {
     const idx = parseInt(deleteIdx, 10)
     if (isNaN(idx)) return
@@ -187,24 +233,64 @@ export default function CRUDScreen() {
             It stops appearing in search results and can be restored from the tombstoned list below.
           </p>
           <p className="text-xs text-slate-500">
-            Permanent removal happens when you Save the cart (the on-disk data is overwritten).
-            Until then, Restore brings it back.
+            {isLocalMount
+              ? 'In-memory tombstone on your local cart. Click Save Cart to persist (re-downloads the modified .cart.npz to your disk).'
+              : 'Permanent removal happens when you Save the cart (the on-disk data is overwritten). Until then, Restore brings it back.'}
           </p>
         </>
       ),
       confirmLabel: 'Tombstone',
       destructive: true,
       onConfirm: async () => {
-        await deleteResult(idx)
-        log('delete', `Tombstoned pattern #${idx}`, true)
+        if (isLocalMount) {
+          localCartTombstone(idx)
+          log('delete', `Tombstoned local pattern #${idx}`, true)
+        } else {
+          await deleteResult(idx)
+          log('delete', `Tombstoned pattern #${idx}`, true)
+        }
         setDeleteIdx('')
       },
     })
   }
 
+  // Delete an entire source file from a LocalCart — tombstones every passage
+  // whose sourcePath matches. Demo step 6's "delete the specific single file"
+  // flows through here. Confirmation modal explains how many passages will
+  // disappear.
+  const handleDeleteSource = (sourcePath: string, activeCount: number) => {
+    if (!isLocalMount) return
+    setConfirm({
+      title: `Delete file "${sourcePath}"?`,
+      body: (
+        <>
+          <p className="mb-2">
+            This tombstones <strong className="text-rose-300">{activeCount}</strong> passages
+            sourced from <code className="font-mono text-rose-300">{sourcePath}</code>.
+          </p>
+          <p className="text-xs text-slate-500">
+            They'll disappear from search results immediately. Click Save Cart afterward to
+            persist the change to a new .cart.npz on your disk.
+          </p>
+        </>
+      ),
+      confirmLabel: `Delete ${activeCount} passages`,
+      destructive: true,
+      onConfirm: async () => {
+        const added = localCartTombstoneBySource(sourcePath)
+        log('delete', `Tombstoned ${added} passages from "${sourcePath}"`, true)
+      },
+    })
+  }
+
   const handleRestore = async (idx: number) => {
-    await restoreResult(idx)
-    log('restore', `Restored pattern #${idx}`, true)
+    if (isLocalMount) {
+      localCartRestore(idx)
+      log('restore', `Restored local pattern #${idx}`, true)
+    } else {
+      await restoreResult(idx)
+      log('restore', `Restored pattern #${idx}`, true)
+    }
   }
 
   // New Cart is composed entirely in the browser via the cart-builder-v2
@@ -240,7 +326,9 @@ export default function CRUDScreen() {
         {mode === 'open' && mounted && (
           <>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              {/* Add panel */}
+              {/* Add panel. For LocalCart adds an additional 'source label'
+                  input so the new passage gets a sourcePath entry (used by
+                  the Source-files panel for organization + delete-by-source). */}
               <OpPanel
                 icon={Plus}
                 title="Add"
@@ -248,9 +336,17 @@ export default function CRUDScreen() {
                 disabled={readOnly}
                 disabledReason="Cart is read-only — unlock first"
               >
+                {isLocalMount && (
+                  <input
+                    className="w-full rounded-lg bg-slate-950/60 border border-slate-800 px-3 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-green-500/60"
+                    placeholder="Source label (e.g. 'my-notes.md', defaults to <inline>)"
+                    value={addSource}
+                    onChange={(e) => setAddSource(e.target.value)}
+                  />
+                )}
                 <textarea
                   className="w-full h-32 rounded-lg bg-slate-950/60 border border-slate-800 px-3 py-2 text-sm text-slate-200 resize-none font-mono focus:outline-none focus:border-purple-500/60"
-                  placeholder="New passage text…"
+                  placeholder={isLocalMount ? 'Passage text to add to your local cart…' : 'New passage text…'}
                   value={addText}
                   onChange={(e) => setAddText(e.target.value)}
                   disabled={readOnly}
@@ -264,7 +360,7 @@ export default function CRUDScreen() {
                   disabled={!addText.trim() || readOnly}
                   onClick={handleAdd}
                 >
-                  Add Passage
+                  {isLocalMount ? 'Add to LocalCart' : 'Add Passage'}
                 </button>
               </OpPanel>
 
@@ -346,51 +442,84 @@ export default function CRUDScreen() {
               </OpPanel>
             </div>
 
-            {/* Passage browser — click a row to populate Update + Delete IDX
-                fields above. Paginated 25-per-page with filter. Hidden when
-                no cart is mounted; refresh-keyed off patternCount so it
-                stays in sync after add/delete/restore actions. */}
-            <PassageBrowser
-              patternCount={patternCount}
-              mountedKey={status?.mounted_cartridge ?? ''}
-              onPickIdx={(idx) => {
-                setUpdateIdx(String(idx))
-                setDeleteIdx(String(idx))
-              }}
-            />
+            {/* Source-files panel — LocalCart only. Demo step 6 ("delete the
+                specific single file") flows through here: lists every distinct
+                sourcePath in the cart with its active+total passage counts and
+                a Delete-file button that tombstones every passage from that
+                source. */}
+            {isLocalMount && activeLocalCart && (
+              <SourceFilesPanel
+                sources={localCartListSources()}
+                onDeleteSource={(sourcePath, activeCount) => handleDeleteSource(sourcePath, activeCount)}
+              />
+            )}
 
-            {/* Tombstoned list */}
-            <div className="rounded-lg border border-slate-700 bg-slate-800/30">
-              <div className="px-4 py-2 border-b border-slate-700 flex items-center justify-between">
-                <h2 className="text-xs uppercase tracking-wider text-slate-500 flex items-center gap-2">
-                  <Trash2 size={12} />
-                  Tombstoned ({deletedPatterns.length})
-                </h2>
-                <span className="text-[10px] text-slate-600">
-                  Save the cart to GC permanently
-                </span>
-              </div>
-              {deletedPatterns.length === 0 ? (
-                <div className="p-4 text-center text-xs text-slate-600 italic">
-                  No tombstoned passages.
-                </div>
-              ) : (
-                <div className="divide-y divide-slate-800">
-                  {deletedPatterns.map((p) => (
-                    <div key={p.idx} className="px-4 py-2 flex items-center gap-3 text-sm">
-                      <span className="text-xs text-slate-500 font-mono w-12 shrink-0">#{p.idx}</span>
-                      <span className="flex-1 truncate text-slate-400">{p.title}</span>
-                      <button
-                        onClick={() => handleRestore(p.idx)}
-                        className="px-2 py-1 rounded text-xs bg-slate-700/50 hover:bg-slate-600 text-slate-300 hover:text-slate-100 flex items-center gap-1"
-                      >
-                        <RotateCcw size={11} /> Restore
-                      </button>
+            {/* Passage browser — backend-mounted carts only. Paginated 25-per-page
+                with filter, click row to populate Update + Delete IDX fields.
+                Hidden for LocalCart because the API calls it makes (api.listPatterns)
+                go to the backend which doesn't know about LocalCart state. The
+                LocalCart equivalent is browsable in Search (which uses
+                cosineSearchLocal directly). */}
+            {!isLocalMount && (
+              <PassageBrowser
+                patternCount={patternCount}
+                mountedKey={status?.mounted_cartridge ?? ''}
+                onPickIdx={(idx) => {
+                  setUpdateIdx(String(idx))
+                  setDeleteIdx(String(idx))
+                }}
+              />
+            )}
+
+            {/* Tombstoned list — backend-mounted reads from deletedPatterns
+                (fetched from /api/deleted_patterns), LocalCart-mounted reads
+                from activeLocalCart.tombstones in-memory state. Same UX. */}
+            {(() => {
+              const localTombstoneList = isLocalMount && activeLocalCart
+                ? Array.from(activeLocalCart.tombstones).sort((a, b) => a - b).map((idx) => {
+                    const passage = activeLocalCart.passages[idx] ?? ''
+                    const firstNewline = passage.indexOf('\n')
+                    const title = (firstNewline > 0 ? passage.slice(0, firstNewline) : passage.slice(0, 80)).trim()
+                    return { idx, title }
+                  })
+                : []
+              const items = isLocalMount ? localTombstoneList : deletedPatterns
+              return (
+                <div className="rounded-lg border border-slate-700 bg-slate-800/30">
+                  <div className="px-4 py-2 border-b border-slate-700 flex items-center justify-between">
+                    <h2 className="text-xs uppercase tracking-wider text-slate-500 flex items-center gap-2">
+                      <Trash2 size={12} />
+                      Tombstoned ({items.length})
+                    </h2>
+                    <span className="text-[10px] text-slate-600">
+                      {isLocalMount
+                        ? 'Click Save Cart to persist by re-downloading a modified .cart.npz'
+                        : 'Save the cart to GC permanently'}
+                    </span>
+                  </div>
+                  {items.length === 0 ? (
+                    <div className="p-4 text-center text-xs text-slate-600 italic">
+                      No tombstoned passages.
                     </div>
-                  ))}
+                  ) : (
+                    <div className="divide-y divide-slate-800">
+                      {items.map((p) => (
+                        <div key={p.idx} className="px-4 py-2 flex items-center gap-3 text-sm">
+                          <span className="text-xs text-slate-500 font-mono w-12 shrink-0">#{p.idx}</span>
+                          <span className="flex-1 truncate text-slate-400">{p.title}</span>
+                          <button
+                            onClick={() => handleRestore(p.idx)}
+                            className="px-2 py-1 rounded text-xs bg-slate-700/50 hover:bg-slate-600 text-slate-300 hover:text-slate-100 flex items-center gap-1"
+                          >
+                            <RotateCcw size={11} /> Restore
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              )
+            })()}
           </>
         )}
 
@@ -423,17 +552,26 @@ export default function CRUDScreen() {
         {/* Activity log */}
         <ActivityLog entries={activity} />
 
-        {/* Footer save bar — when dirty */}
+        {/* Footer save bar — shown when dirty. Routes to localCartSave for
+            LocalCart (re-downloads via showSaveFilePicker) or saveCartridge
+            for backend mounts. */}
         {dirty && mounted && (
           <div className="sticky bottom-0 -mx-6 px-6 py-3 border-t border-purple-500/30 bg-slate-900/95 backdrop-blur flex items-center justify-between">
             <div className="text-sm text-amber-300 flex items-center gap-2">
               <AlertCircle size={14} />
-              Unsaved changes — tombstones and adds aren't on disk yet.
+              {isLocalMount
+                ? 'Unsaved local edits — click Save Cart to download a modified .cart.npz to your disk.'
+                : 'Unsaved changes — tombstones and adds aren\'t on disk yet.'}
             </div>
             <button
               onClick={async () => {
-                const r = await saveCartridge()
-                log('save', r.message, r.success)
+                if (isLocalMount) {
+                  const r = await localCartSave()
+                  log('save', r.message, r.success)
+                } else {
+                  const r = await saveCartridge()
+                  log('save', r.message, r.success)
+                }
               }}
               className="px-4 py-1.5 rounded-lg text-sm font-medium bg-purple-500/30 border border-purple-500/50 text-purple-200 hover:bg-purple-500/40"
             >
@@ -492,28 +630,68 @@ export default function CRUDScreen() {
         </div>
       )
     }
+    // Display name + filename are different for local vs backend mounts.
+    // Backend: name is the cartridge filename on the server.
+    // Local: show the cart's friendly name + filename ("from disk" hint).
+    const displayName = isLocalMount && activeLocalCart
+      ? activeLocalCart.name
+      : status?.mounted_cartridge
+    const tombCount = activeLocalCart?.tombstones.size ?? 0
+    const subDetail = isLocalMount && activeLocalCart
+      ? `${patternCount.toLocaleString()} active · ${tombCount > 0 ? `${tombCount} tombstoned · ` : ''}${dirty ? 'unsaved changes' : 'clean'} · from ${activeLocalCart.filename}`
+      : `${patternCount.toLocaleString()} patterns · ${dirty ? 'unsaved changes' : 'clean'}`
     return (
-      <div className="rounded-lg border border-purple-500/30 bg-purple-500/5 p-3 flex items-center gap-3">
-        <Database size={16} className="text-purple-400 shrink-0" />
-        <div className="flex-1">
-          <div className="text-sm text-slate-200 font-medium">{status?.mounted_cartridge}</div>
-          <div className="text-[11px] text-slate-500">{patternCount.toLocaleString()} patterns · {dirty ? 'unsaved changes' : 'clean'}</div>
+      <div className={`rounded-lg border p-3 flex items-center gap-3 ${
+        isLocalMount
+          ? 'border-cyan-500/30 bg-cyan-500/5'
+          : 'border-purple-500/30 bg-purple-500/5'
+      }`}>
+        <Database size={16} className={isLocalMount ? 'text-cyan-400 shrink-0' : 'text-purple-400 shrink-0'} />
+        <div className="flex-1 min-w-0">
+          <div className="text-sm text-slate-200 font-medium flex items-center gap-2">
+            <span className="truncate">{displayName}</span>
+            {isLocalMount && (
+              <span
+                className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 font-mono shrink-0"
+                title="This cart is mounted from your local disk via File System Access API. Edits are in-memory; Save downloads a modified copy."
+              >
+                LOCAL
+              </span>
+            )}
+          </div>
+          <div className="text-[11px] text-slate-500">{subDetail}</div>
         </div>
-        <button
-          onClick={toggleLock}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-            readOnly
-              ? 'bg-rose-500/20 border border-rose-500/40 text-rose-300 hover:bg-rose-500/30'
-              : 'bg-green-500/20 border border-green-500/40 text-green-300 hover:bg-green-500/30'
-          }`}
-          title={readOnly ? 'Click to unlock for editing' : 'Click to lock (read-only)'}
-        >
-          {readOnly ? <><Lock size={11} /> Read-only</> : <><Unlock size={11} /> Editable</>}
-        </button>
+        {/* Lock toggle only meaningful for backend carts. Local carts are
+            always editable (user owns the file they picked from their disk). */}
+        {!isLocalMount && (
+          <button
+            onClick={toggleLock}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              readOnly
+                ? 'bg-rose-500/20 border border-rose-500/40 text-rose-300 hover:bg-rose-500/30'
+                : 'bg-green-500/20 border border-green-500/40 text-green-300 hover:bg-green-500/30'
+            }`}
+            title={readOnly ? 'Click to unlock for editing' : 'Click to lock (read-only)'}
+          >
+            {readOnly ? <><Lock size={11} /> Read-only</> : <><Unlock size={11} /> Editable</>}
+          </button>
+        )}
+        {isLocalMount && (
+          <span
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-green-500/20 border border-green-500/40 text-green-300"
+            title="LocalCart is always editable — you picked this file from your own disk."
+          >
+            <Unlock size={11} /> Editable
+          </span>
+        )}
         <button
           onClick={async () => {
-            const name = status?.mounted_cartridge || 'cart'
-            await unmount()
+            const name = displayName || 'cart'
+            if (isLocalMount) {
+              unmountLocalCart()
+            } else {
+              await unmount()
+            }
             log('unmount', `Unmounted ${name}`, true)
           }}
           className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800"
@@ -632,6 +810,89 @@ function ActivityLog({ entries }: { entries: ActivityEntry[] }) {
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SourceFilesPanel — for LocalCart-mounted carts only. Lists each unique
+// source file in the cart with its passage counts and a Delete-file button
+// that tombstones every passage from that file. Demo step 6's "delete the
+// specific single file" UX lives here.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SourceFilesPanel({
+  sources,
+  onDeleteSource,
+}: {
+  sources: Array<{ sourcePath: string; count: number; activeCount: number }>
+  onDeleteSource: (sourcePath: string, activeCount: number) => void
+}) {
+  // Sort by activeCount descending (most-impactful files first), with all-
+  // tombstoned files at the bottom and same-counts alphabetically.
+  const sorted = [...sources].sort((a, b) => {
+    if (b.activeCount !== a.activeCount) return b.activeCount - a.activeCount
+    return a.sourcePath.localeCompare(b.sourcePath)
+  })
+  return (
+    <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5">
+      <div className="px-4 py-2 border-b border-cyan-500/30 flex items-center justify-between gap-3">
+        <h2 className="text-xs uppercase tracking-wider text-cyan-300 flex items-center gap-2">
+          <Folder size={12} />
+          Source files ({sorted.length})
+        </h2>
+        <span className="text-[10px] text-slate-500">
+          click Delete file to tombstone every passage from that source
+        </span>
+      </div>
+      {sorted.length === 0 ? (
+        <div className="p-4 text-center text-xs text-slate-600 italic">
+          No source files indexed in this cart. Provenance v1 sidecar may be missing
+          (legacy server-built cart). Use Delete by IDX above for per-passage tombstoning.
+        </div>
+      ) : (
+        <div className="max-h-[280px] overflow-y-auto divide-y divide-cyan-500/20">
+          {sorted.map((s) => {
+            const allDeleted = s.activeCount === 0
+            return (
+              <div
+                key={s.sourcePath}
+                className={`px-4 py-2 flex items-center gap-3 text-xs ${
+                  allDeleted ? 'opacity-50' : ''
+                }`}
+              >
+                <Folder size={11} className="text-cyan-400 shrink-0" />
+                <span
+                  className="flex-1 truncate font-mono text-slate-300"
+                  title={s.sourcePath}
+                >
+                  {s.sourcePath}
+                </span>
+                <span className="text-[10px] text-slate-500 font-mono shrink-0">
+                  {allDeleted ? (
+                    <span className="text-rose-400">all tombstoned</span>
+                  ) : (
+                    <>
+                      {s.activeCount} active
+                      {s.activeCount !== s.count && (
+                        <span className="text-slate-600"> / {s.count} total</span>
+                      )}
+                    </>
+                  )}
+                </span>
+                <button
+                  onClick={() => onDeleteSource(s.sourcePath, s.activeCount)}
+                  disabled={allDeleted}
+                  className="px-2 py-1 rounded text-xs bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1 shrink-0"
+                  title={allDeleted ? 'All passages from this file are already tombstoned' : `Tombstone all ${s.activeCount} passages from this file`}
+                >
+                  <Trash2 size={10} /> Delete file
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

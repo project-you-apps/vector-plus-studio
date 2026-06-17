@@ -56,6 +56,11 @@ export async function parseCartFile(file: File): Promise<LocalCart> {
         sizeBytes: file.size,
         mountedAt: performance.now(),
         figures: cart.figures ?? new Map(),
+        // Editable-state defaults: no tombstones, not dirty. Edit Carts mutates
+        // these via the localCart* store actions; cosineSearchLocal filters
+        // tombstoned idx out of search results.
+        tombstones: new Set<number>(),
+        dirty: false,
     };
 }
 
@@ -66,6 +71,69 @@ function l2NormalizeInPlace(v: Float32Array, offset: number, len: number): numbe
         sumSq += x * x;
     }
     return Math.sqrt(sumSq) + 1e-9;
+}
+
+/**
+ * Save a LocalCart back to disk via the cart-builder-v2 writer pipeline.
+ * Filters tombstoned passages, rebuilds embeddings + sourcePaths arrays
+ * for the surviving entries, then re-bundles as a .cart.npz (+ manifest
+ * + permissions) and triggers showDirectoryPicker for the user to pick
+ * where to save. Andy 2026-06-16 PM: this is the persistence path for
+ * Edit Carts working on browser-mounted LocalCarts on the public droplet.
+ *
+ * Saved cart is FUNCTIONALLY EQUIVALENT to the source (same embedding dim,
+ * same NPY format, same manifest shape) but with tombstoned passages
+ * permanently removed from passages.npy / embeddings.npy / source_paths.npy.
+ * User can re-mount the saved file to verify, or distribute to others.
+ *
+ * Returns success+message; the message is the saved filename on success
+ * or the error reason on failure (user-cancel counts as success with a
+ * cancelled message so UX doesn't show a scary error).
+ */
+export async function saveLocalCartToDisk(cart: import('../store/appStore').LocalCart): Promise<{ success: boolean; message: string }> {
+    const { buildCart, downloadBuiltCart } = await import('../cart-builder-v2/writer/npz');
+    const [n, dim] = cart.embeddingsShape;
+    // Build the live (non-tombstoned) index list, preserving original order
+    // so the cart's narrative integrity is preserved on re-mount.
+    const liveIndices: number[] = [];
+    for (let i = 0; i < n; i++) {
+        if (!cart.tombstones.has(i)) liveIndices.push(i);
+    }
+    if (liveIndices.length === 0) {
+        return { success: false, message: 'Cannot save an empty cart (every passage tombstoned).' };
+    }
+    // Rebuild embeddings + sections from live entries.
+    const liveEmbeddings = new Float32Array(liveIndices.length * dim);
+    const liveSections: Array<import('../cart-builder-v2/types').Section> = [];
+    for (let outI = 0; outI < liveIndices.length; outI++) {
+        const inI = liveIndices[outI];
+        const inOff = inI * dim;
+        const outOff = outI * dim;
+        for (let d = 0; d < dim; d++) liveEmbeddings[outOff + d] = cart.embeddings[inOff + d];
+        liveSections.push({
+            text: cart.passages[inI] ?? '',
+            page: null,
+            source: cart.sourcePaths?.[inI] ?? '<unknown>',
+        });
+    }
+    try {
+        const built = await buildCart(liveEmbeddings, liveSections, {
+            cartName: cart.name,
+        });
+        await downloadBuiltCart(built);
+        return {
+            success: true,
+            message: `Saved ${built.cartFilename} (${liveSections.length} passages; ${cart.tombstones.size} tombstoned)`,
+        };
+    } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        // User-cancel of the directory picker shows up as an AbortError -- treat
+        // as success-with-cancel so we don't show a scary failure toast.
+        if (msg.includes('aborted') || msg.includes('AbortError')) {
+            return { success: true, message: 'Save cancelled' };
+        }
+        return { success: false, message: `Save failed: ${msg}` };
+    }
 }
 
 /**
@@ -90,7 +158,15 @@ export function cosineSearchLocal(
     for (let d = 0; d < dim; d++) qNormalized[d] = queryEmb[d] / qNorm;
 
     const scores = new Float32Array(n);
+    const tombstones = cart.tombstones;
     for (let i = 0; i < n; i++) {
+        // Tombstoned passages get score = -Infinity so they fall out of top-K
+        // ranking and never appear in search results. Edit Carts can restore
+        // them; until then, they're invisible to search.
+        if (tombstones && tombstones.has(i)) {
+            scores[i] = -Infinity;
+            continue;
+        }
         const rowStart = i * dim;
         let dot = 0;
         let rowSumSq = 0;
