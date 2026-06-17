@@ -126,7 +126,6 @@ export default function CRUDScreen() {
   const patternCount = isBackendMount
     ? (status?.pattern_count ?? 0)
     : (activeLocalCart ? activeLocalCart.passages.length - activeLocalCart.tombstones.size : 0)
-  const totalIncludingTombstones = isLocalMount && activeLocalCart ? activeLocalCart.passages.length : patternCount
 
   const log = (kind: OpKind, detail: string, ok: boolean) => {
     setActivity((prev) => [
