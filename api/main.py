@@ -1520,6 +1520,18 @@ async def list_deleted():
     return DeletedListResponse(deleted=deleted)
 
 
+# Lone UTF-16 surrogates (U+D800–U+DFFF) crash FastAPI's JSON serializer.
+# They appear in legacy carts as decoder artifacts from earlier ingest paths.
+# Drop them — astral characters (codepoints >= U+10000) are outside this range
+# and are preserved. Local copy (not imported from cart-builder) per the
+# droplet-reconciliation discipline: VPS code stays self-contained.
+_LONE_SURROGATE_RE = re.compile(r'[\ud800-\udfff]')
+
+
+def _scrub_lone_surrogates(text: str) -> str:
+    return _LONE_SURROGATE_RE.sub('', text) if text else text
+
+
 @app.get("/api/patterns", response_model=PatternListResponse)
 async def list_patterns(offset: int = 0, limit: int = 25, q: str | None = None):
     """Paginated list of active (non-tombstoned) passages with first-line
@@ -1556,6 +1568,7 @@ async def list_patterns(offset: int = 0, limit: int = 25, q: str | None = None):
 
     items: list[PatternListItem] = []
     for idx, text in page:
+        text = _scrub_lone_surrogates(text)
         lines = text.splitlines() if text else ["[empty]"]
         title = lines[0][:120] if lines else "[empty]"
         preview = " ".join(lines[1:3])[:200] if len(lines) > 1 else ""
@@ -1607,6 +1620,7 @@ async def get_pattern(idx: int):
         if engine.sqlite_db_path:
             source_db = os.path.basename(engine.sqlite_db_path)
 
+    text = _scrub_lone_surrogates(text)
     lines = text.splitlines() if text else ["[empty]"]
     title = lines[0][:100]
     preview = " ".join(lines[1:3])[:200] if len(lines) > 1 else ""
