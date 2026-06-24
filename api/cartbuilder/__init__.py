@@ -1,25 +1,24 @@
 """
-api/cartbuilder.py — Cart Builder routes ported from project-you-apps/cart-builder Flask app.
+api/cartbuilder/__init__.py — Cart Builder routes (Phase 2 port-completion).
 
-This is Phase 1 of the Cart Builder port plan (docs/CARTBUILDER-PORT-PLAN.md).
-Mirrors the Flask app's backend routes as FastAPI routes under /api/cartbuilder/*,
-delegating to cart-builder's existing parsers / builder / cartridge_builder modules.
+History:
+- Phase 1 (2026-05): FastAPI routes ported from project-you-apps/cart-builder
+  Flask app; parsers/builder/cartridge_builder still loaded from standalone
+  cart-builder/cart-builder/ via sys.path bootstrap (now removed).
+- Phase 2 (2026-06-23): standalone cart-builder modules moved INTO this
+  subpackage as sibling files. sys.path bootstrap deleted. Imports are
+  relative. Standalone cart-builder/ folder ready for archive.
 
-Scope reduced 2026-05-04 evening per CRUD-as-own-screen architecture decision:
-the /remove, /restore, /replace, /delete routes are NOT ported here — they live
-in the future CRUD screen. This module is purely cart-as-package operations
-(upload, files, metadata, ingest, pattern0, build, build/status, carts,
-cart_folders, browse, load_cart, clear_workspace, has_changes).
-
-The cart-builder source modules don't collide with any VPS local module names,
-so we add cart-builder/cart-builder/ to sys.path here once at import time.
-The membot importlib pattern in main.py is unchanged.
+Route scope: cart-as-package operations only (upload, files, metadata, ingest,
+pattern0, build, build/status, carts, cart_folders, browse, load_cart,
+clear_workspace, has_changes). Per CRUD-as-own-screen architecture decision
+2026-05-04, the /remove, /restore, /replace, /delete routes live in the
+future CRUD screen, not here.
 """
 from __future__ import annotations
 
 import json
 import os
-import sys
 import time
 import uuid
 from pathlib import Path
@@ -29,20 +28,12 @@ from fastapi.responses import JSONResponse
 
 
 # ---------------------------------------------------------------------------
-# sys.path bootstrap so cart-builder's parsers.py / builder.py / cartridge_builder.py
-# resolve their sibling imports correctly.
+# Relative imports — modules now live as siblings in this subpackage.
 # ---------------------------------------------------------------------------
 
-_CART_BUILDER_SRC = os.path.abspath(os.path.join(
-    os.path.dirname(__file__), "..", "..", "cart-builder", "cart-builder"
-))
-if os.path.isdir(_CART_BUILDER_SRC) and _CART_BUILDER_SRC not in sys.path:
-    sys.path.append(_CART_BUILDER_SRC)
-
-# Late imports — only after sys.path is patched
 try:
-    from parsers import parse_file, chunk_texts  # type: ignore
-    from builder import build_cart_async, get_state  # type: ignore
+    from .parsers import parse_file, chunk_texts
+    from .builder import build_cart_async, get_state
     _CART_BUILDER_AVAILABLE = True
 except Exception as _e:  # pragma: no cover
     _CART_BUILDER_AVAILABLE = False
@@ -167,8 +158,9 @@ def _check_available() -> None:
         raise HTTPException(
             status_code=503,
             detail=f"Cart Builder modules not available: {_IMPORT_ERROR}. "
-                   f"Ensure cart-builder/cart-builder/ exists and its dependencies "
-                   f"are installed (pip install pymupdf python-docx openpyxl striprtf)."
+                   f"Ensure api/cartbuilder/ subpackage is intact and its dependencies "
+                   f"are installed (pip install pymupdf python-docx openpyxl striprtf "
+                   f"beautifulsoup4 python-pptx pyyaml)."
         )
 
 
