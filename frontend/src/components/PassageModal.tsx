@@ -57,6 +57,24 @@ function spaceAfterBrackets(text: string): string {
   return text.replace(/\](\S)/g, '] $1')
 }
 
+// Collapse pathological vertical whitespace from PDF-extracted text. PDFs
+// often produce runs of 3+ consecutive newlines (with optional whitespace
+// between) from layout-positional spacing — words/phrases scattered across
+// vertical space because the source PDF wrapped lines mid-paragraph or used
+// positional layout. Renders as dramatic per-word gaps in the modal (Andy
+// 2026-06-26 QA on wiki_nomic_100k pattern #26 et al).
+//
+// This normalizes 3+ newlines into a single paragraph break (\n\n) without
+// touching:
+//   - Single-newline structure (intentional line breaks: poetry, verse, code)
+//   - Single-blank-line paragraph breaks (legitimate \n\n stays)
+//
+// Pure UX/display fix; zero changes to cart-format or chunker. PDF-derived
+// chunks become readable; poetry/verse/code rendering unaffected.
+function collapseExcessWhitespace(text: string): string {
+  return text.replace(/(\n\s*){3,}/g, '\n\n')
+}
+
 export default function PassageModal() {
   const modalOpen = useAppStore((s) => s.modalOpen)
   const passage = useAppStore((s) => s.modalPassage)
@@ -107,11 +125,11 @@ export default function PassageModal() {
   // Carts without a chunker header pattern pass through unchanged.
   const { grayText, brightText, overlapPosition } = useMemo(() => {
     const fullText = passage?.full_text ?? ''
-    const body = spaceAfterBrackets(stripChunkerHeader(fullText))
+    const body = collapseExcessWhitespace(spaceAfterBrackets(stripChunkerHeader(fullText)))
     if (!prevTextForOverlap || !navDirection || !body) {
       return { grayText: '', brightText: body, overlapPosition: null as 'prefix' | 'suffix' | null }
     }
-    const prevBody = spaceAfterBrackets(stripChunkerHeader(prevTextForOverlap))
+    const prevBody = collapseExcessWhitespace(spaceAfterBrackets(stripChunkerHeader(prevTextForOverlap)))
     if (navDirection === 'next') {
       // prev's suffix should be current's prefix (the chunker's overlap window)
       const len = findOverlap(prevBody, body)

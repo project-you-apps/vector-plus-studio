@@ -125,6 +125,7 @@ html.light [role="switch"] > span {
    Mapping convention:  -100 → -900,  -200 → -800,  -300 → -700,  -400 → -600. */
 
 /* Slate (text + chrome) */
+html.light .text-slate-100  { color: rgb(15 23 42); }  /* → slate-900 — was missing from the original sweep; caused invisible h1/h2/h3/strong text in PassageModal under light mode (Andy 2026-06-28 QA) */
 html.light .text-slate-200  { color: rgb(15 23 42); }
 html.light .text-slate-300  { color: rgb(30 41 59); }
 html.light .text-slate-400  { color: rgb(51 65 85); }

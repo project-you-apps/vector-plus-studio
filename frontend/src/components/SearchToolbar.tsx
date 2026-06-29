@@ -524,8 +524,8 @@ export default function SearchToolbar() {
           </div>
 
           {walkTrailOpen && (
-            <div className="absolute top-full mt-1 left-0 min-w-[320px] max-w-[480px] rounded-lg border border-slate-700 bg-[var(--chrome-bg)] shadow-2xl z-30 p-2">
-              <div className="px-1 py-1 text-[10px] uppercase tracking-wider text-slate-500">Walk trail · click to jump back</div>
+            <div className="absolute top-full mt-1 left-0 min-w-[320px] max-w-[480px] max-h-[60vh] overflow-y-auto rounded-lg border border-slate-700 bg-[var(--chrome-bg)] shadow-2xl z-30 p-2">
+              <div className="px-1 py-1 text-[10px] uppercase tracking-wider text-slate-500 sticky top-0 bg-[var(--chrome-bg)]">Walk trail · click to jump back</div>
               {walkTrail.map((step, i) => {
                 const isCurrent = i === walkTrail.length - 1
                 return (
