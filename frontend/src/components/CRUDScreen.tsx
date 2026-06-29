@@ -11,6 +11,8 @@ import * as api from '../api/client'
 import type { PatternListItem } from '../api/client'
 import {
   buildCartFromPassages,
+  chunkSections,
+  parseFile,
   type BuiltCart,
   type PipelineProgress,
 } from '../cart-builder-v2'
@@ -97,6 +99,12 @@ export default function CRUDScreen() {
   const [addText, setAddText] = useState('')
   const [addSource, setAddSource] = useState('')
   const localCartAddPassage = useAppStore((s) => s.localCartAddPassage)
+  // File-picker Add (LocalCart only, Andy 2026-06-17 PM "and we're good to
+  // go"). Pick files → parse via cart-builder-v2 → chunk → embed each chunk
+  // → localCartAddPassage with source=file.name. Progress shown inline.
+  const [addFilesProcessing, setAddFilesProcessing] = useState(false)
+  const [addFilesStatus, setAddFilesStatus] = useState<string | null>(null)
+  const addFilesInputRef = useRef<HTMLInputElement | null>(null)
 
   // Update-panel state
   const [updateIdx, setUpdateIdx] = useState('')
@@ -105,6 +113,11 @@ export default function CRUDScreen() {
 
   // Delete-panel state
   const [deleteIdx, setDeleteIdx] = useState('')
+  // LocalCart delete-target mode (Andy 2026-06-17 PM): user picks whether the
+  // typed IDX refers to a row in Source Files (delete a whole file) or a
+  // passage IDX from search results (delete one passage). Defaults to 'file'
+  // because file-level delete is the primary use case for user-built carts.
+  const [deleteMode, setDeleteMode] = useState<'file' | 'passage'>('file')
 
   // New-cart state
   const [newCartName, setNewCartName] = useState('')
@@ -156,6 +169,59 @@ export default function CRUDScreen() {
         setAddText('')
         fetchStatus()
       }
+    }
+  }
+
+  // ── Add files (LocalCart only) ──
+  // Reuses cart-builder-v2's parseFile + chunkSections so the file→passage
+  // pipeline matches Cart Builder's behavior exactly (300-word chunks, 50
+  // overlap, same parsers for PDF/DOCX/XLSX/MD/HTML/RTF/TXT). Each chunk
+  // becomes one passage with source = file.name so Source Files panel
+  // groups them by their origin file.
+  const handleAddFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return
+    if (!isLocalMount) return
+    setAddFilesProcessing(true)
+    try {
+      let totalAdded = 0
+      let totalFailed = 0
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i]
+        setAddFilesStatus(`(${i + 1}/${files.length}) Parsing ${file.name}…`)
+        try {
+          const parsed = await parseFile(file)
+          if (parsed.sections.length === 0) {
+            log('add', `${file.name}: no text extracted`, false)
+            totalFailed++
+            continue
+          }
+          const chunks = chunkSections(parsed.sections)
+          setAddFilesStatus(`(${i + 1}/${files.length}) Embedding ${chunks.length} chunk${chunks.length === 1 ? '' : 's'} from ${file.name}…`)
+          let fileAdded = 0
+          for (let c = 0; c < chunks.length; c++) {
+            setAddFilesStatus(`(${i + 1}/${files.length}) ${file.name}: embedding ${c + 1}/${chunks.length}…`)
+            const resp = await localCartAddPassage(chunks[c].text, file.name)
+            if (resp.success) fileAdded++
+          }
+          log('add', `Added ${fileAdded}/${chunks.length} chunk${chunks.length === 1 ? '' : 's'} from ${file.name}`, fileAdded > 0)
+          totalAdded += fileAdded
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : 'Unknown parser error'
+          log('add', `${file.name}: ${msg}`, false)
+          totalFailed++
+        }
+      }
+      setAddFilesStatus(
+        totalFailed > 0
+          ? `Done — added ${totalAdded} passages, ${totalFailed} file${totalFailed === 1 ? '' : 's'} failed`
+          : `Done — added ${totalAdded} passages from ${files.length} file${files.length === 1 ? '' : 's'}`
+      )
+    } finally {
+      setAddFilesProcessing(false)
+      // Clear status after a few seconds so the panel returns to clean state
+      setTimeout(() => setAddFilesStatus(null), 6000)
+      // Reset the file input so picking the same file again re-fires onChange
+      if (addFilesInputRef.current) addFilesInputRef.current.value = ''
     }
   }
 
@@ -218,17 +284,43 @@ export default function CRUDScreen() {
   // ── Delete ──
   // Standard practice (Andy 2026-05-06): destructive actions get a
   // confirmation modal. The modal does the actual call on confirm.
-  // For LocalCart-mounted carts, routes through localCartTombstone instead
-  // of the backend API.
+  // For LocalCart-mounted carts, routes through localCartTombstone for the
+  // passage-idx variant, or resolves the file row to its sourcePath and
+  // routes through handleDeleteSource for the file-idx variant.
+  // Andy 2026-06-17 PM: the file/passage distinction is the user's call —
+  // deleteMode toggle in the panel says which kind of IDX they typed.
   const handleDelete = () => {
     const idx = parseInt(deleteIdx, 10)
     if (isNaN(idx)) return
+
+    // LocalCart + file mode: look up the file at row #idx in the sorted
+    // Source Files list (same sort as the panel below so the visible row
+    // numbers match) and tombstone every passage from that sourcePath.
+    if (isLocalMount && deleteMode === 'file') {
+      const sources = localCartListSources()
+      const sorted = [...sources].sort((a, b) => {
+        if (b.activeCount !== a.activeCount) return b.activeCount - a.activeCount
+        return a.sourcePath.localeCompare(b.sourcePath)
+      })
+      const row = sorted[idx - 1]
+      if (!row) {
+        log('delete', `File #${idx} not found (only ${sorted.length} files)`, false)
+        return
+      }
+      // Delegate to the same handler the Source Files row buttons use —
+      // single confirm path, consistent UX.
+      handleDeleteSource(row.sourcePath, row.activeCount)
+      setDeleteIdx('')
+      return
+    }
+
+    // Passage mode (LocalCart or backend) — standard per-passage tombstone.
     setConfirm({
-      title: `Tombstone pattern #${idx}?`,
+      title: `Tombstone passage #${idx}?`,
       body: (
         <>
           <p className="mb-2">
-            This marks pattern <code className="font-mono text-rose-300">#{idx}</code> as deleted.
+            This marks passage <code className="font-mono text-rose-300">#{idx}</code> as deleted.
             It stops appearing in search results and can be restored from the tombstoned list below.
           </p>
           <p className="text-xs text-slate-500">
@@ -243,10 +335,10 @@ export default function CRUDScreen() {
       onConfirm: async () => {
         if (isLocalMount) {
           localCartTombstone(idx)
-          log('delete', `Tombstoned local pattern #${idx}`, true)
+          log('delete', `Tombstoned local passage #${idx}`, true)
         } else {
           await deleteResult(idx)
-          log('delete', `Tombstoned pattern #${idx}`, true)
+          log('delete', `Tombstoned passage #${idx}`, true)
         }
         setDeleteIdx('')
       },
@@ -277,7 +369,16 @@ export default function CRUDScreen() {
       destructive: true,
       onConfirm: async () => {
         const added = localCartTombstoneBySource(sourcePath)
-        log('delete', `Tombstoned ${added} passages from "${sourcePath}"`, true)
+        // Andy 2026-06-17 PM: include the actual passage indices that got
+        // tombstoned so it's visible at a glance whether the file→idx
+        // resolution is doing the right thing (vs the "is it tombstoning the
+        // typed idx instead?" suspicion).
+        const idxList = added.length === 0
+          ? '(none — no matching sourcePath, possibly legacy cart)'
+          : added.length <= 6
+            ? `idx ${added.join(', ')}`
+            : `idx ${added.slice(0, 6).join(', ')}…(+${added.length - 6} more)`
+        log('delete', `Tombstoned ${added.length} from "${sourcePath}" — ${idxList}`, added.length > 0)
       },
     })
   }
@@ -341,6 +442,7 @@ export default function CRUDScreen() {
                     placeholder="Source label (e.g. 'my-notes.md', defaults to <inline>)"
                     value={addSource}
                     onChange={(e) => setAddSource(e.target.value)}
+                    disabled={addFilesProcessing}
                   />
                 )}
                 <textarea
@@ -348,79 +450,134 @@ export default function CRUDScreen() {
                   placeholder={isLocalMount ? 'Passage text to add to your local cart…' : 'New passage text…'}
                   value={addText}
                   onChange={(e) => setAddText(e.target.value)}
-                  disabled={readOnly}
+                  disabled={readOnly || addFilesProcessing}
                 />
                 <button
                   className={`w-full px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    addText.trim() && !readOnly
+                    addText.trim() && !readOnly && !addFilesProcessing
                       ? 'bg-green-500/20 border border-green-500/40 text-green-300 hover:bg-green-500/30'
                       : 'bg-slate-800/50 border border-slate-700 text-slate-600 cursor-not-allowed'
                   }`}
-                  disabled={!addText.trim() || readOnly}
+                  disabled={!addText.trim() || readOnly || addFilesProcessing}
                   onClick={handleAdd}
                 >
                   {isLocalMount ? 'Add to LocalCart' : 'Add Passage'}
                 </button>
+
+                {/* File-picker Add — LocalCart only. Pick one or more files
+                    (PDF, DOCX, XLSX, MD, HTML, RTF, TXT supported via the
+                    cart-builder-v2 parsers); each becomes N passages (one per
+                    300-word chunk) with source = file.name so they show up
+                    grouped in the Source Files panel below. */}
+                {isLocalMount && (
+                  <>
+                    <div className="flex items-center gap-2 my-1">
+                      <div className="flex-1 h-px bg-slate-700/40" />
+                      <span className="text-[10px] uppercase tracking-wider text-slate-500">or</span>
+                      <div className="flex-1 h-px bg-slate-700/40" />
+                    </div>
+                    <input
+                      ref={addFilesInputRef}
+                      type="file"
+                      multiple
+                      accept=".pdf,.docx,.xlsx,.md,.markdown,.html,.htm,.rtf,.txt"
+                      className="hidden"
+                      onChange={(e) => handleAddFiles(e.target.files)}
+                    />
+                    <button
+                      className={`w-full px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
+                        addFilesProcessing
+                          ? 'bg-slate-800/50 border border-slate-700 text-slate-600 cursor-not-allowed'
+                          : 'bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/30'
+                      }`}
+                      disabled={addFilesProcessing}
+                      onClick={() => addFilesInputRef.current?.click()}
+                      title="Pick one or more files — each becomes a set of chunked passages with source = filename"
+                    >
+                      {addFilesProcessing
+                        ? <><Loader2 size={14} className="animate-spin" /> Processing…</>
+                        : <><FilePlus2 size={14} /> Pick Files…</>}
+                    </button>
+                    {addFilesStatus && (
+                      <div className="text-[10px] text-slate-400 italic px-1 leading-snug">
+                        {addFilesStatus}
+                      </div>
+                    )}
+                    <div className="text-[10px] text-slate-500 leading-snug px-1">
+                      Supports PDF, DOCX, XLSX, MD, HTML, RTF, TXT — chunked at 300 words, 50-overlap.
+                    </div>
+                  </>
+                )}
               </OpPanel>
 
-              {/* Update panel -- backend-mounted carts only. Andy 2026-06-17 PM:
-                  the in-place update flow on LocalCart doesn't have a sane UX
-                  (no visible idx, file-level updates should happen externally
-                  in the app that owns the file). Hidden entirely for LocalCart;
-                  the Add panel handles the "edit-by-replace" pattern (delete
-                  old file via Source Files panel, re-add new version). */}
-              {!isLocalMount && (
+              {/* Update panel. Backend-mounted carts: full editable flow.
+                  LocalCart: rendered as a disabled "COMING SOON" preview so
+                  users can see the capability is on the roadmap without it
+                  being functional. Andy 2026-06-17 PM: file-level / passage-
+                  level update on LocalCart needs UX design (which IDX system
+                  does the user mean? do file-level updates roundtrip back to
+                  the source file on disk?). Add + Delete handle the
+                  "edit-by-replace" pattern in the meantime. */}
               <OpPanel
                 icon={Save}
                 title="Update"
                 accent="cyan"
-                disabled={readOnly}
-                disabledReason="Cart is read-only — unlock first"
+                disabled={readOnly || isLocalMount}
+                disabledReason={isLocalMount ? undefined : 'Cart is read-only — unlock first'}
               >
+                {isLocalMount && (
+                  <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 flex items-center gap-2">
+                    <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/25 border border-amber-500/50 text-amber-100 font-mono shrink-0">
+                      Coming Soon
+                    </span>
+                    <span className="leading-snug">
+                      For now, edit by deleting + re-adding (Delete panel + Add panel).
+                    </span>
+                  </div>
+                )}
                 <div className="flex gap-2">
                   <input
-                    className="w-24 rounded-lg bg-slate-950/60 border border-slate-800 px-3 py-1.5 text-sm text-slate-200 font-mono focus:outline-none focus:border-purple-500/60"
+                    className="w-24 rounded-lg bg-slate-950/60 border border-slate-800 px-3 py-1.5 text-sm text-slate-200 font-mono focus:outline-none focus:border-purple-500/60 disabled:opacity-40"
                     placeholder="idx"
                     value={updateIdx}
                     onChange={(e) => setUpdateIdx(e.target.value)}
-                    disabled={readOnly}
+                    disabled={readOnly || isLocalMount}
                   />
                   <button
                     className="flex-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-50"
-                    disabled={!updateIdx || readOnly || updateLoading}
+                    disabled={!updateIdx || readOnly || isLocalMount || updateLoading}
                     onClick={handleUpdateLoad}
                   >
                     {updateLoading ? <Loader2 size={12} className="animate-spin inline" /> : 'Load'}
                   </button>
                 </div>
                 <textarea
-                  className="w-full h-24 rounded-lg bg-slate-950/60 border border-slate-800 px-3 py-2 text-sm text-slate-200 resize-none font-mono focus:outline-none focus:border-purple-500/60"
-                  placeholder="(load a passage by idx, or paste new text)"
+                  className="w-full h-24 rounded-lg bg-slate-950/60 border border-slate-800 px-3 py-2 text-sm text-slate-200 resize-none font-mono focus:outline-none focus:border-purple-500/60 disabled:opacity-40"
+                  placeholder={isLocalMount ? '(coming soon)' : '(load a passage by idx, or paste new text)'}
                   value={updateText}
                   onChange={(e) => setUpdateText(e.target.value)}
-                  disabled={readOnly}
+                  disabled={readOnly || isLocalMount}
                 />
                 <button
                   className={`w-full px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    updateIdx && updateText.trim() && !readOnly
+                    updateIdx && updateText.trim() && !readOnly && !isLocalMount
                       ? 'bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/30'
                       : 'bg-slate-800/50 border border-slate-700 text-slate-600 cursor-not-allowed'
                   }`}
-                  disabled={!updateIdx || !updateText.trim() || readOnly}
+                  disabled={!updateIdx || !updateText.trim() || readOnly || isLocalMount}
                   onClick={handleUpdateSave}
-                  title="Saves new text + tombstones the old idx (until backend gets a true PUT route)"
+                  title={isLocalMount ? 'Coming soon — for now, delete + re-add' : 'Saves new text + tombstones the old idx (until backend gets a true PUT route)'}
                 >
-                  Update Passage
+                  {isLocalMount ? 'Coming Soon' : 'Update Passage'}
                 </button>
               </OpPanel>
-              )}
 
-              {/* Delete-by-IDX panel -- backend-mounted carts only. Andy 2026-06-17 PM:
-                  without a browseable passage list, asking the user to type an idx
-                  is meaningless UX on LocalCart. The Source Files panel below
-                  handles delete-by-source-file (which IS meaningful — files are
-                  the natural unit of organization for user-built carts). */}
-              {!isLocalMount && (
+              {/* Delete panel. Backend-mounted carts: passage-IDX only (no
+                  file-level provenance on legacy server-built carts). LocalCart:
+                  user picks File # (from Source Files list below) or Passage #
+                  via a toggle so it's explicit which IDX system they're typing.
+                  Andy 2026-06-17 PM: re-enabled for LocalCart after the IDX
+                  column on Source Files made file-level delete unambiguous. */}
               <OpPanel
                 icon={Trash2}
                 title="Delete"
@@ -428,13 +585,53 @@ export default function CRUDScreen() {
                 disabled={readOnly}
                 disabledReason="Cart is read-only — unlock first"
               >
+                {isLocalMount && (
+                  // Match the Mode-tabs pattern at top of Edit Carts (slate-800/40
+                  // outer + X-500/30 active) — both have html.light overrides so
+                  // they read in light + dark mode.
+                  <div className="flex gap-1 bg-slate-800/40 rounded-lg p-1">
+                    <button
+                      onClick={() => setDeleteMode('file')}
+                      className={`flex-1 px-2 py-1 rounded text-xs font-medium transition-colors ${
+                        deleteMode === 'file'
+                          ? 'bg-rose-500/30 text-rose-200'
+                          : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                      }`}
+                      title="Type a file # from the Source Files list below — tombstones every passage from that file"
+                    >
+                      File #
+                    </button>
+                    <button
+                      onClick={() => setDeleteMode('passage')}
+                      className={`flex-1 px-2 py-1 rounded text-xs font-medium transition-colors ${
+                        deleteMode === 'passage'
+                          ? 'bg-rose-500/30 text-rose-200'
+                          : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                      }`}
+                      title="Type a passage # (the IDX shown next to a search result) — tombstones just that one passage"
+                    >
+                      Passage #
+                    </button>
+                  </div>
+                )}
                 <div className="text-xs text-slate-500 leading-relaxed">
-                  Tombstone a passage by index. The pattern stays on disk until you Save the cart;
-                  Restore from the list below to undo.
+                  {isLocalMount && deleteMode === 'file' ? (
+                    <>Tombstone every passage from one source file. Type its row # from the Source Files list below.</>
+                  ) : isLocalMount && deleteMode === 'passage' ? (
+                    <>Tombstone a single passage by its IDX (the # shown next to a search result). Restore from the list below to undo.</>
+                  ) : (
+                    <>Tombstone a passage by index. The pattern stays on disk until you Save the cart; Restore from the list below to undo.</>
+                  )}
                 </div>
                 <input
                   className="w-full rounded-lg bg-slate-950/60 border border-slate-800 px-3 py-2 text-sm text-slate-200 font-mono focus:outline-none focus:border-purple-500/60"
-                  placeholder="Pattern idx"
+                  placeholder={
+                    isLocalMount && deleteMode === 'file'
+                      ? 'File # (from Source Files below)'
+                      : isLocalMount && deleteMode === 'passage'
+                        ? 'Passage # (from search results)'
+                        : 'Pattern idx'
+                  }
                   value={deleteIdx}
                   onChange={(e) => setDeleteIdx(e.target.value)}
                   disabled={readOnly}
@@ -448,10 +645,13 @@ export default function CRUDScreen() {
                   disabled={!deleteIdx || readOnly}
                   onClick={handleDelete}
                 >
-                  Tombstone Pattern
+                  {isLocalMount && deleteMode === 'file'
+                    ? 'Tombstone File'
+                    : isLocalMount && deleteMode === 'passage'
+                      ? 'Tombstone Passage'
+                      : 'Tombstone Pattern'}
                 </button>
               </OpPanel>
-              )}
             </div>
 
             {/* Source-files panel — LocalCart only. Demo step 6 ("delete the
@@ -485,17 +685,22 @@ export default function CRUDScreen() {
 
             {/* Tombstoned list — backend-mounted reads from deletedPatterns
                 (fetched from /api/deleted_patterns), LocalCart-mounted reads
-                from activeLocalCart.tombstones in-memory state. Same UX. */}
+                from activeLocalCart.tombstones in-memory state. For LocalCart
+                we also surface the sourcePath alongside the idx — Andy 6/17 PM:
+                lets the user verify at a glance which actual passage got
+                tombstoned, regardless of whether they came from File mode
+                (file # in Delete panel) or Passage mode (passage idx). */}
             {(() => {
               const localTombstoneList = isLocalMount && activeLocalCart
                 ? Array.from(activeLocalCart.tombstones).sort((a, b) => a - b).map((idx) => {
                     const passage = activeLocalCart.passages[idx] ?? ''
                     const firstNewline = passage.indexOf('\n')
                     const title = (firstNewline > 0 ? passage.slice(0, firstNewline) : passage.slice(0, 80)).trim()
-                    return { idx, title }
+                    const sourcePath = activeLocalCart.sourcePaths?.[idx] ?? null
+                    return { idx, title, sourcePath }
                   })
                 : []
-              const items = isLocalMount ? localTombstoneList : deletedPatterns
+              const items: Array<{ idx: number; title: string; sourcePath?: string | null }> = isLocalMount ? localTombstoneList : deletedPatterns
               return (
                 <div className="rounded-lg border border-slate-700 bg-slate-800/30">
                   <div className="px-4 py-2 border-b border-slate-700 flex items-center justify-between">
@@ -518,10 +723,17 @@ export default function CRUDScreen() {
                       {items.map((p) => (
                         <div key={p.idx} className="px-4 py-2 flex items-center gap-3 text-sm">
                           <span className="text-xs text-slate-500 font-mono w-12 shrink-0">#{p.idx}</span>
-                          <span className="flex-1 truncate text-slate-400">{p.title}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="truncate text-slate-400">{p.title}</div>
+                            {isLocalMount && p.sourcePath && (
+                              <div className="text-[10px] font-mono text-cyan-400/70 truncate" title={`Source: ${p.sourcePath}`}>
+                                from {p.sourcePath}
+                              </div>
+                            )}
+                          </div>
                           <button
                             onClick={() => handleRestore(p.idx)}
-                            className="px-2 py-1 rounded text-xs bg-slate-700/50 hover:bg-slate-600 text-slate-300 hover:text-slate-100 flex items-center gap-1"
+                            className="px-2 py-1 rounded text-xs bg-slate-700/50 hover:bg-slate-600 text-slate-300 hover:text-slate-100 flex items-center gap-1 shrink-0"
                           >
                             <RotateCcw size={11} /> Restore
                           </button>

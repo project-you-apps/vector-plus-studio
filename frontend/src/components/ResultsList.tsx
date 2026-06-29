@@ -59,6 +59,33 @@ export default function ResultsList() {
         const text = r.full_text || r.preview || r.title
         return textContainsKeyword(text, keywords)
       })
+
+      // Andy 2026-06-17 PM: rerank when strictMode is on. Pure cosine on
+      // long-form text can put a slightly-denser-context result above a
+      // verbatim phrase match by a 0.008 hair (e.g. "save to disk" → first
+      // result at 0.573 beats literal "save to disk:" line at 0.565). The
+      // user who turned ON Must-contain-keywords is asking for keyword
+      // weight, so we bubble verbatim phrase matches to the top, then
+      // higher keyword density, then preserve original cosine order for
+      // ties. Stopwords are still stripped from `keywords` so the density
+      // score reflects content words; the PHRASE check uses the raw query
+      // so "save to disk" matches as a literal substring.
+      const phrase = query.trim().toLowerCase()
+      const rankedCopy = filtered.map((r, originalIdx) => {
+        const text = (r.full_text || r.preview || r.title).toLowerCase()
+        const hasPhrase = phrase.length > 0 && text.includes(phrase) ? 1 : 0
+        const keywordHits = keywords.reduce(
+          (n, kw) => (text.includes(kw) ? n + 1 : n),
+          0,
+        )
+        return { r, originalIdx, hasPhrase, keywordHits }
+      })
+      rankedCopy.sort((a, b) => {
+        if (a.hasPhrase !== b.hasPhrase) return b.hasPhrase - a.hasPhrase
+        if (a.keywordHits !== b.keywordHits) return b.keywordHits - a.keywordHits
+        return a.originalIdx - b.originalIdx
+      })
+      filtered = rankedCopy.map((x) => x.r)
     }
 
     return filtered

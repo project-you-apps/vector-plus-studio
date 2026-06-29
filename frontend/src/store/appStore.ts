@@ -127,7 +127,7 @@ interface AppState {
   // showSaveFilePicker (user picks where to save the mutated cart).
   localCartTombstone: (idx: number) => void
   localCartRestore: (idx: number) => void
-  localCartTombstoneBySource: (sourcePath: string) => number
+  localCartTombstoneBySource: (sourcePath: string) => number[]
   localCartListSources: () => Array<{ sourcePath: string; count: number; activeCount: number }>
   localCartAddPassage: (text: string, source: string) => Promise<{ success: boolean; message: string; idx?: number }>
   localCartSave: () => Promise<{ success: boolean; message: string }>
@@ -308,20 +308,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Tombstone every passage whose sourcePath matches the given source.
   // Returns the count of newly-tombstoned passages (for log/toast messaging).
   // Used by the demo flow's "delete the specific single file" step.
-  localCartTombstoneBySource: (sourcePath: string): number => {
+  localCartTombstoneBySource: (sourcePath: string): number[] => {
     const { activeLocalCart, localCarts } = get()
-    if (!activeLocalCart) return 0
+    if (!activeLocalCart) return []
     const cart = localCarts.get(activeLocalCart)
-    if (!cart || !cart.sourcePaths) return 0
+    if (!cart || !cart.sourcePaths) return []
     const nextTombs = new Set(cart.tombstones)
-    let added = 0
+    const added: number[] = []
     for (let i = 0; i < cart.sourcePaths.length; i++) {
       if (cart.sourcePaths[i] === sourcePath && !nextTombs.has(i)) {
         nextTombs.add(i)
-        added++
+        added.push(i)
       }
     }
-    if (added === 0) return 0
+    if (added.length === 0) return added
     const updatedCart: LocalCart = { ...cart, tombstones: nextTombs, dirty: true }
     const nextCarts = new Map(localCarts)
     nextCarts.set(activeLocalCart, updatedCart)
