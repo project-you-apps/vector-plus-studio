@@ -177,50 +177,92 @@ function getWebGlRendererDiag(): { renderer: string; vendor: string } | null {
 }
 
 /**
+ * Pattern-match a WebGL2 `WEBGL_debug_renderer_info` renderer string to
+ * decide whether the underlying GPU is integrated / software / otherwise
+ * not-fit-for-sustained-inference. Returns true to recommend WASM downgrade.
+ *
+ * Patterns recognized (2026-06-30 calibration):
+ *   - SwiftShader (software-only WebGL — no real GPU exposed at all)
+ *   - AMD APU integrated: "AMD Radeon(TM) Graphics" (with or without model
+ *     number like 780M, 880M, etc.) BUT NOT discrete card identifiers
+ *     (RX <n>, Pro/W-series, FirePro, MI<n>, Instinct, Radeon VII)
+ *   - Intel integrated: Iris / HD / UHD prefixes (discrete Intel Arc cards
+ *     use different naming like "Arc A380" / "Arc A770" — not matched here)
+ *
+ * Verified against real WebGL renderer strings collected 2026-06-30:
+ *   ✓ Laptop  "ANGLE (AMD, AMD Radeon(TM) Graphics (0x00001506) D3D11)"
+ *             → returns true (correctly downgrades integrated Radeon)
+ *   ✗ Desktop "ANGLE (NVIDIA, NVIDIA GeForce RTX 4080 SUPER ... D3D11)"
+ *             → returns false (correctly keeps RTX on WebGPU)
+ */
+function isIntegratedGpuByWebGlRenderer(renderer: string): boolean {
+  if (!renderer) return false
+  const r = renderer.toLowerCase()
+  // SwiftShader = software-only WebGL fallback (no real GPU). WebGPU on the
+  // same machine is likely also software-only or non-functional. Always
+  // downgrade — WASM is actually faster than a software-GPU path.
+  if (/swiftshader/.test(r)) return true
+  // AMD APU integrated: "Radeon(TM)" + "Graphics" without discrete identifiers.
+  if (/amd/.test(r) && /radeon\(tm\)/.test(r) && /graphics/.test(r)) {
+    const hasDiscreteId =
+      /\b(rx\s*\d|pro\s*w?\d|firepro|mi\d{2,}|instinct|radeon\s*vii)\b/.test(r)
+    if (!hasDiscreteId) return true
+  }
+  // Intel iGPUs: Iris / HD / UHD prefixes.
+  if (/intel/.test(r) && /\b(iris|hd|uhd)\b/.test(r)) return true
+  return false
+}
+
+/**
  * Heuristic: is this WebGPU adapter likely to sustain the Nomic embed model
  * under real workload (300+ token chunks, batch=8, hundreds of chunks)?
  *
- * Returns false for adapters that report:
- *   1. `maxBufferSize` at or below the WebGPU spec default of 256 MiB — strong
- *      signal of constrained hardware. Discrete GPUs typically expose 1 GiB+.
- *      Nomic intermediate tensors during inference can need >256 MiB of
- *      contiguous buffer during peak, so devices stuck at the default hang
- *      under sustained workload (DXGI_ERROR_DEVICE_HUNG on Windows D3D12).
- *   2. `adapter.info` description matching known integrated-GPU patterns —
- *      AMD APU "Radeon(TM) Graphics" (no discrete model id), Intel
- *      Iris/HD/UHD prefixes. Apple Silicon and discrete NVIDIA/AMD are
- *      treated as capable.
+ * Signal priority (2026-06-30 PM recalibration):
+ *   1. **WebGL2 renderer string** (PRIMARY) — pattern-match against
+ *      `WEBGL_debug_renderer_info` output. Catches integrated AMD APUs
+ *      ("AMD Radeon(TM) Graphics") and Intel iGPUs by name. This works
+ *      where WebGPU's `adapter.info.description` does not — Chromium on
+ *      Windows returns empty description through WebGPU but exposes the
+ *      full name via WebGL2.
+ *   2. `maxBufferSize` ≤ 256 MiB — fallback signal. Less useful than it
+ *      looked: Chrome reports 2 GiB on both Andy's RTX 4080 Super AND his
+ *      integrated Radeon (anti-fingerprint normalization), so this only
+ *      fires on adapters that report the strict spec default.
+ *   3. `adapter.info` description pattern — last-resort signal for browsers
+ *      that populate adapter.info but mask WebGL2's renderer info. Empty
+ *      on Chromium/Windows; might fire on other configs.
  *
- * False negative cost: an under-spec'd discrete GPU runs on WASM unnecessarily.
- * False positive cost: a weak GPU attempts WebGPU and hangs mid-build,
- * triggering the mid-stream WASM fallback (`embed.ts`'s WebGpuDeviceLostError
- * path) — defended in depth.
+ * False negative cost: a discrete GPU mistakenly downgraded to WASM still
+ * builds carts, just slower. False positive cost: a weak GPU attempts
+ * WebGPU and hangs mid-build, triggering the `WebGpuDeviceLostError`
+ * mid-stream WASM fallback in `embed.ts` — the build still completes.
+ * Defense in depth either way.
  *
- * Origin: 2026-06-29 — Andy's laptop (AMD Ryzen 7000 + integrated Radeon,
- * 489 MB dedicated VRAM per dxdiag) crawled at 1%/min then hung. The first
- * version of this probe ran a 1-token embed which succeeded on the integrated
- * GPU (trivial workload) and incorrectly marked WebGPU as adequate.
+ * Origin: 2026-06-29 — Andy's laptop (AMD Ryzen 7000 + integrated Radeon)
+ * crawled then hung on real workload. 2026-06-30 second pass: discovered
+ * WebGPU adapter.info is empty on Chromium/Windows but WebGL2 renderer
+ * info works. This is the WebGL-renderer-primary version of the heuristic.
  */
-function isWebGpuLikelyAdequate(adapter: AdapterShape): boolean {
-  // Signal 1: maxBufferSize at the WebGPU default suggests a constrained
-  // device. Keep the comparison <= to also catch the off-by-one case.
+function isWebGpuLikelyAdequate(
+  adapter: AdapterShape,
+  webglRenderer?: string,
+): boolean {
+  // Signal 1 (PRIMARY): WebGL2 renderer string pattern.
+  if (webglRenderer && isIntegratedGpuByWebGlRenderer(webglRenderer)) {
+    return false
+  }
+
+  // Signal 2: maxBufferSize fallback (rarely fires; see docstring).
   if (adapter.limits.maxBufferSize <= 256 * 1024 * 1024) return false
 
-  // Signal 2: adapter.info description patterns for known-integrated GPUs.
-  // Chrome 124+ exposes adapter.info synchronously; older browsers don't
-  // populate it, in which case we trust Signal 1 alone.
+  // Signal 3: adapter.info description pattern (last-resort).
   const info = adapter.info
   if (info) {
     const vendor = (info.vendor ?? '').toLowerCase()
     const desc = (info.description ?? '').toLowerCase()
-    // AMD APU integrated graphics: typically described as "AMD Radeon(TM)
-    // Graphics" with NO discrete model number (RX, PRO, FirePro etc.).
     if (vendor === 'amd' && /^amd radeon\(tm\) graphics\s*$/i.test(desc)) {
       return false
     }
-    // Intel iGPUs: Iris, HD, UHD prefixes are characteristic of integrated
-    // graphics. Intel Arc discrete cards use different names ("Arc A380",
-    // "Arc A770") and aren't matched here.
     if (vendor === 'intel' && /\b(iris|hd|uhd)\b/i.test(desc)) {
       return false
     }
@@ -294,7 +336,11 @@ export async function probeWebGpuCapability(
     maxBufferSize_MiB:
       Math.round(adapter.limits.maxBufferSize / (1024 * 1024)),
   }
-  const adequateVerdict = isWebGpuLikelyAdequate(adapter)
+  // Fetch WebGL renderer BEFORE the heuristic call so it can drive the
+  // verdict. Tonight's Stage 2 promotes WebGL renderer string to the
+  // primary signal — see isWebGpuLikelyAdequate / isIntegratedGpuByWebGlRenderer.
+  const webglDiag = getWebGlRendererDiag()
+  const adequateVerdict = isWebGpuLikelyAdequate(adapter, webglDiag?.renderer)
   // Serialize the fields explicitly into the log message rather than passing
   // raw objects — Chrome renders raw GPUAdapterInfo / Limits objects as
   // type-name placeholders ("GPUAdapterInfo", "Object") that aren't
@@ -312,16 +358,6 @@ export async function probeWebGpuCapability(
     `heuristic verdict=${adequateVerdict ? 'webgpu' : 'wasm'}`,
   )
 
-  // 2026-06-30 PM: WebGL2 renderer diagnostic. WebGPU's adapter.info comes
-  // back with empty description on Chromium/Windows (anti-fingerprint
-  // choice); WebGL2's WEBGL_debug_renderer_info still exposes the full GPU
-  // name and is what Stage 2 of Patch 6 will pattern-match on. Logging here
-  // alongside the WebGPU diagnostic lets us see both signals side-by-side
-  // on every machine that hits this code, no manual console snippet needed.
-  // Also logs navigator.deviceMemory + hardwareConcurrency as secondary
-  // signals (laptop vs workstation rough discriminator when GPU name is
-  // ambiguous or masked).
-  const webglDiag = getWebGlRendererDiag()
   const nav = navigator as Navigator & { deviceMemory?: number }
   console.log(
     `[cart-builder probe] webgl_renderer=${
