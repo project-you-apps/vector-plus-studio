@@ -126,57 +126,149 @@ export async function forceWasmFallback(
   return getEmbedder({ ...options, device: 'wasm' })
 }
 
+// Minimal type shapes for adapter.info / adapter.limits we read. The DOM
+// lib types for WebGPU are in flux across browsers; rather than fight
+// lib.dom.d.ts version skew, we cast through these structural types at the
+// inspection site.
+interface AdapterInfo {
+  vendor?: string
+  architecture?: string
+  device?: string
+  description?: string
+}
+
+interface AdapterShape {
+  limits: { maxBufferSize: number }
+  info?: AdapterInfo
+}
+
 /**
- * Probe whether WebGPU can actually sustain the embed workload (not just
- * "does the adapter exist"). Performs a tiny real embed of a single token
- * sequence on WebGPU; if it succeeds, the embedder is cached and returned
- * as 'webgpu' active backend so the first real Build button click reuses it
- * instead of paying the load cost twice. If it fails, the embedder falls
- * through to WASM, gets cached as WASM, and the badge can downgrade upfront.
+ * Heuristic: is this WebGPU adapter likely to sustain the Nomic embed model
+ * under real workload (300+ token chunks, batch=8, hundreds of chunks)?
  *
- * **Why a real embed and not just `requestAdapter()`?** On constrained
- * devices (integrated GPUs sharing system RAM, older drivers, Chromium
- * Windows quirks), `requestAdapter()` returns a valid adapter but the actual
- * Nomic inference hangs the D3D12 device mid-stream (`DXGI_ERROR_DEVICE_HUNG`).
- * The only reliable test is "run the real workload." This costs ~10-30 sec
- * one-time (model download + tiny embed) but eliminates mid-build surprises.
+ * Returns false for adapters that report:
+ *   1. `maxBufferSize` at or below the WebGPU spec default of 256 MiB — strong
+ *      signal of constrained hardware. Discrete GPUs typically expose 1 GiB+.
+ *      Nomic intermediate tensors during inference can need >256 MiB of
+ *      contiguous buffer during peak, so devices stuck at the default hang
+ *      under sustained workload (DXGI_ERROR_DEVICE_HUNG on Windows D3D12).
+ *   2. `adapter.info` description matching known integrated-GPU patterns —
+ *      AMD APU "Radeon(TM) Graphics" (no discrete model id), Intel
+ *      Iris/HD/UHD prefixes. Apple Silicon and discrete NVIDIA/AMD are
+ *      treated as capable.
  *
- * Time-bounded: if the probe doesn't complete in `timeoutMs`, treat as
- * unusable. Default 60s covers slow connections + cold model download.
+ * False negative cost: an under-spec'd discrete GPU runs on WASM unnecessarily.
+ * False positive cost: a weak GPU attempts WebGPU and hangs mid-build,
+ * triggering the mid-stream WASM fallback (`embed.ts`'s WebGpuDeviceLostError
+ * path) — defended in depth.
+ *
+ * Origin: 2026-06-29 — Andy's laptop (AMD Ryzen 7000 + integrated Radeon,
+ * 489 MB dedicated VRAM per dxdiag) crawled at 1%/min then hung. The first
+ * version of this probe ran a 1-token embed which succeeded on the integrated
+ * GPU (trivial workload) and incorrectly marked WebGPU as adequate.
+ */
+function isWebGpuLikelyAdequate(adapter: AdapterShape): boolean {
+  // Signal 1: maxBufferSize at the WebGPU default suggests a constrained
+  // device. Keep the comparison <= to also catch the off-by-one case.
+  if (adapter.limits.maxBufferSize <= 256 * 1024 * 1024) return false
+
+  // Signal 2: adapter.info description patterns for known-integrated GPUs.
+  // Chrome 124+ exposes adapter.info synchronously; older browsers don't
+  // populate it, in which case we trust Signal 1 alone.
+  const info = adapter.info
+  if (info) {
+    const vendor = (info.vendor ?? '').toLowerCase()
+    const desc = (info.description ?? '').toLowerCase()
+    // AMD APU integrated graphics: typically described as "AMD Radeon(TM)
+    // Graphics" with NO discrete model number (RX, PRO, FirePro etc.).
+    if (vendor === 'amd' && /^amd radeon\(tm\) graphics\s*$/i.test(desc)) {
+      return false
+    }
+    // Intel iGPUs: Iris, HD, UHD prefixes are characteristic of integrated
+    // graphics. Intel Arc discrete cards use different names ("Arc A380",
+    // "Arc A770") and aren't matched here.
+    if (vendor === 'intel' && /\b(iris|hd|uhd)\b/i.test(desc)) {
+      return false
+    }
+  }
+
+  return true
+}
+
+/**
+ * Decide whether to use WebGPU or WASM for this device, then PRE-LOAD the
+ * model on the chosen backend so the first Build click skips model-load
+ * cost. Replaces the 2026-06-29 morning version of this function which ran
+ * a 1-token embed — that approach proved inadequate (1-token workload
+ * succeeds on integrated GPUs that crawl-then-hang on real chunks). The
+ * new approach inspects `adapter.limits` + `adapter.info` instead — instant
+ * decision, no model load on the wrong backend, no false positives from
+ * trivially-small probe inputs.
+ *
+ * Mid-stream WASM fallback (`embed.ts`'s WebGpuDeviceLostError handler) is
+ * still in place as a defense-in-depth — if this heuristic misjudges and
+ * the device hangs anyway, the build will recover and complete on WASM.
+ *
+ * `timeoutMs` retained for backward compat with the old API surface but no
+ * longer used in the body — adapter inspection is sub-100ms by construction.
  */
 export async function probeWebGpuCapability(
   options: { timeoutMs?: number; modelId?: string } = {},
 ): Promise<EmbedderBackend> {
-  const timeoutMs = options.timeoutMs ?? 60_000
+  void options.timeoutMs // retained for caller compat; not used in inspection path
   if (!hasWebGPU()) {
-    // No adapter at all — load WASM eagerly so the badge is honest and the
-    // first build doesn't pay an additional load cost.
+    // No adapter at all — pre-load WASM eagerly so the badge is honest and
+    // the first Build click skips model-download cost.
     await getEmbedder({ device: 'wasm', modelId: options.modelId })
     return 'wasm'
   }
+
+  let adapter: AdapterShape | null = null
   try {
-    const probeRun = (async () => {
-      const e = await getEmbedder({ device: 'webgpu', modelId: options.modelId })
-      // Real workload: embed one short string. If WebGPU is going to hang on
-      // this device, it'll hang here — before the user has invested any time.
-      await e(['probe'], { pooling: 'mean', normalize: false })
-      return getActiveBackend()
-    })()
-    const timeout = new Promise<EmbedderBackend>((_, reject) =>
-      setTimeout(
-        () => reject(new Error(`WebGPU probe timed out after ${timeoutMs}ms`)),
-        timeoutMs,
-      ),
-    )
-    return await Promise.race([probeRun, timeout])
+    const nav = navigator as Navigator & {
+      gpu: { requestAdapter: () => Promise<AdapterShape | null> }
+    }
+    adapter = await nav.gpu.requestAdapter()
   } catch (err) {
-    // Probe failed — either device-lost, OOM on tiny input (driver bug),
-    // timeout, or any other surprise. Tear down the WebGPU pipeline and
-    // load WASM so the cart-builder is ready when the user clicks Build.
     const msg = err instanceof Error ? err.message : String(err)
     console.warn(
-      `[cart-builder probe] WebGPU capability probe failed — falling back ` +
-      `to WASM. (${msg.slice(0, 200)})`,
+      `[cart-builder probe] requestAdapter threw — falling back to WASM. ` +
+      `(${msg.slice(0, 200)})`,
+    )
+    await getEmbedder({ device: 'wasm', modelId: options.modelId })
+    return 'wasm'
+  }
+
+  if (!adapter) {
+    console.warn(
+      '[cart-builder probe] No WebGPU adapter returned — falling back to WASM.',
+    )
+    await getEmbedder({ device: 'wasm', modelId: options.modelId })
+    return 'wasm'
+  }
+
+  if (!isWebGpuLikelyAdequate(adapter)) {
+    const info = adapter.info
+    const desc = info?.description ?? '(no description)'
+    const maxBuf = (adapter.limits.maxBufferSize / (1024 * 1024)).toFixed(0)
+    console.warn(
+      `[cart-builder probe] WebGPU adapter inadequate for sustained embed ` +
+      `workload (device="${desc}", maxBufferSize=${maxBuf} MiB). Pre-loading ` +
+      `WASM instead — build will be slower but will complete reliably.`,
+    )
+    await getEmbedder({ device: 'wasm', modelId: options.modelId })
+    return 'wasm'
+  }
+
+  // Adapter looks adequate. Pre-load on WebGPU.
+  try {
+    await getEmbedder({ device: 'webgpu', modelId: options.modelId })
+    return 'webgpu'
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn(
+      `[cart-builder probe] WebGPU model load failed despite adequate-looking ` +
+      `adapter — falling back to WASM. (${msg.slice(0, 200)})`,
     )
     await forceWasmFallback({ modelId: options.modelId })
     return 'wasm'

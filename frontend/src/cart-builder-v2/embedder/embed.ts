@@ -161,11 +161,18 @@ async function embedBatchWithFallback(
     })) as Tensor
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
+    // 2026-06-29 second pass: the FIRST device-lost regex (`/Device is lost/i`)
+    // missed the actual error format the embedder throws, which wraps the
+    // type in brackets: `[Device] is lost`. Broadened to a word-boundary
+    // `is lost` match plus the bracket-syntax variants. In an ONNX/WebGPU
+    // embed-error catch, any "is lost" mention is canonical device-loss —
+    // there's no other context where it would appear.
     const isDeviceLost =
-      /Device is lost/i.test(msg) ||
+      /\bis lost\b/i.test(msg) ||
       /DXGI_ERROR_DEVICE_HUNG/i.test(msg) ||
       /Device removed/i.test(msg) ||
-      /GPU(?:Device)?(?: was)? destroyed/i.test(msg)
+      /GPU(?:Device)?(?: was)? destroyed/i.test(msg) ||
+      /context (?:was )?lost/i.test(msg)
     if (isDeviceLost) {
       throw new WebGpuDeviceLostError(
         err instanceof Error ? err : new Error(String(err)),
