@@ -143,6 +143,40 @@ interface AdapterShape {
 }
 
 /**
+ * Get the WebGL2 `WEBGL_debug_renderer_info` output. This API predates WebGPU
+ * and (unlike WebGPU's `adapter.info`) typically exposes the FULL GPU name
+ * — e.g. "ANGLE (NVIDIA, NVIDIA GeForce RTX 4080 SUPER (0x00002702) ...)"
+ * or "ANGLE (AMD, AMD Radeon(TM) 780M Graphics, D3D11)" — even on browsers
+ * that mask WebGPU's adapter.info.description.
+ *
+ * Why this exists: tonight's WebGPU adapter.info diagnostic showed empty
+ * description on both Andy's home machine RTX 4080 Super AND the laptop's
+ * Ryzen 7000 integrated Radeon. WebGL2 fills the gap. The renderer string
+ * is what Stage 2 of Patch 6 will pattern-match on to distinguish integrated
+ * from discrete GPUs (the only signal that survives Chrome's anti-fingerprint
+ * choices in WebGPU). Verified working on Edge + Chrome 149 on Windows.
+ *
+ * Returns null if WebGL2 is unavailable or the extension is masked
+ * (some configs return generic strings like "WebGL" or "Google SwiftShader").
+ */
+function getWebGlRendererDiag(): { renderer: string; vendor: string } | null {
+  try {
+    if (typeof document === 'undefined') return null
+    const canvas = document.createElement('canvas')
+    const gl = canvas.getContext('webgl2') as WebGL2RenderingContext | null
+    if (!gl) return null
+    const ext = gl.getExtension('WEBGL_debug_renderer_info')
+    if (!ext) return null
+    return {
+      renderer: String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) ?? ''),
+      vendor: String(gl.getParameter(ext.UNMASKED_VENDOR_WEBGL) ?? ''),
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
  * Heuristic: is this WebGPU adapter likely to sustain the Nomic embed model
  * under real workload (300+ token chunks, batch=8, hundreds of chunks)?
  *
@@ -276,6 +310,26 @@ export async function probeWebGpuCapability(
     `[cart-builder probe] adapter.info=${infoStr} ` +
     `maxBufferSize=${diagLimits.maxBufferSize_MiB} MiB (${diagLimits.maxBufferSize} bytes) ` +
     `heuristic verdict=${adequateVerdict ? 'webgpu' : 'wasm'}`,
+  )
+
+  // 2026-06-30 PM: WebGL2 renderer diagnostic. WebGPU's adapter.info comes
+  // back with empty description on Chromium/Windows (anti-fingerprint
+  // choice); WebGL2's WEBGL_debug_renderer_info still exposes the full GPU
+  // name and is what Stage 2 of Patch 6 will pattern-match on. Logging here
+  // alongside the WebGPU diagnostic lets us see both signals side-by-side
+  // on every machine that hits this code, no manual console snippet needed.
+  // Also logs navigator.deviceMemory + hardwareConcurrency as secondary
+  // signals (laptop vs workstation rough discriminator when GPU name is
+  // ambiguous or masked).
+  const webglDiag = getWebGlRendererDiag()
+  const nav = navigator as Navigator & { deviceMemory?: number }
+  console.log(
+    `[cart-builder probe] webgl_renderer=${
+      JSON.stringify(webglDiag?.renderer ?? '(unavailable)')
+    } webgl_vendor=${
+      JSON.stringify(webglDiag?.vendor ?? '(unavailable)')
+    } deviceMemory=${nav.deviceMemory ?? 'unknown'} ` +
+    `hardwareConcurrency=${navigator.hardwareConcurrency ?? 'unknown'}`,
   )
 
   if (!adequateVerdict) {
