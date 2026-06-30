@@ -37,7 +37,13 @@ export {
 } from './embedder/loader'
 
 export type { EmbedOptions, EmbedResult, PrefixMode } from './embedder/embed'
-export { embedQuery, embedTexts, NOMIC_DIM, WebGpuDeviceLostError } from './embedder/embed'
+export {
+  embedQuery,
+  embedTexts,
+  NOMIC_DIM,
+  WebGpuBufferCapError,
+  WebGpuDeviceLostError,
+} from './embedder/embed'
 
 // Writer (Block 3)
 export type { HippocampusOptions } from './writer/hippocampus'

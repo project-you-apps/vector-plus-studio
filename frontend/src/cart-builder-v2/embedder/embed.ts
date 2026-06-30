@@ -26,6 +26,24 @@ export class WebGpuDeviceLostError extends Error {
   }
 }
 
+// Thrown when an individual chunk's tensor dimensions exceed the WebGPU
+// per-buffer 2 GiB cap, even at batch size 1. Distinct from "too many items
+// in a batch" (recoverable by halving) — this means a SINGLE chunk is too
+// long for WebGPU to handle at all. Halving exhausted, we're at batch=1, and
+// the same chunk still won't fit. Caller (embedTexts outer loop) should
+// route the offending batch to WASM, which doesn't have the 2 GiB single-
+// buffer cap. See [[CC_webgpu-device-lost-fallback-2026-06-29]] Patch 7
+// section for the diagnosis (originally surfaced on home machine builds
+// with very long Claude-Code transcript MDs producing 7K+ token chunks).
+export class WebGpuBufferCapError extends Error {
+  public readonly underlying: Error
+  constructor(underlying: Error) {
+    super(`WebGPU buffer cap exceeded at batch=1: ${underlying.message}`)
+    this.name = 'WebGpuBufferCapError'
+    this.underlying = underlying
+  }
+}
+
 export type PrefixMode = 'document' | 'query' | 'raw'
 
 export interface EmbedOptions extends LoaderOptions {
@@ -99,14 +117,22 @@ export async function embedTexts(
     try {
       await embedBatchWithFallback(embedder, batch, result, i * NOMIC_DIM)
     } catch (err) {
-      if (!(err instanceof WebGpuDeviceLostError)) throw err
-      // WebGPU device died mid-build. Tear down the dead pipeline, reload on
-      // WASM, swap the embedder reference, retry this batch, and continue
-      // with WASM for every subsequent batch. The user gets their cart
-      // instead of a half-built failure + page-reload requirement.
+      const isDeviceLost = err instanceof WebGpuDeviceLostError
+      const isBufferCap = err instanceof WebGpuBufferCapError
+      if (!isDeviceLost && !isBufferCap) throw err
+      // Two distinct WebGPU failure modes both recover the same way: tear
+      // down the WebGPU pipeline, reload the embedder on WASM, swap the
+      // local `embedder` reference, retry this batch on WASM, and continue
+      // on WASM for every subsequent batch. Either way the user gets their
+      // cart instead of a half-built failure + page-reload requirement.
+      //   - device-lost (Patch 1+2+4): WebGPU device hung mid-build
+      //   - buffer-cap (Patch 7b): a single chunk exceeded the 2 GiB
+      //     per-buffer cap even at batch=1 (oversized chunk)
+      const underlying = isDeviceLost ? err.underlying : err.underlying
+      const reason = isDeviceLost ? 'device lost' : 'buffer cap exceeded'
       console.warn(
-        `[cart-builder embed] WebGPU device lost mid-build — reloading on ` +
-        `WASM and continuing. (${err.underlying.message.slice(0, 120)})`,
+        `[cart-builder embed] WebGPU ${reason} mid-build — reloading on ` +
+        `WASM and continuing. (${underlying.message.slice(0, 120)})`,
       )
       embedder = await forceWasmFallback(loaderOpts)
       onBackendChange?.('wasm')
@@ -194,8 +220,19 @@ async function embedBatchWithFallback(
       /max buffer size limit/i.test(msg) ||
       /WebGPU validation failed/i.test(msg) ||
       /failed to call OrtRun/i.test(msg)
-    if (!isWebGpuOom || batch.length === 1) {
+    if (!isWebGpuOom) {
       throw err
+    }
+    if (batch.length === 1) {
+      // Halving exhausted — single chunk is too long for WebGPU's per-buffer
+      // 2 GiB cap. Throw a typed error so the outer embedTexts loop knows to
+      // tear down the WebGPU pipeline and retry this batch on WASM (no
+      // single-buffer cap there). Don't re-throw raw err; that would surface
+      // as "Build failed" with a confusing WebGPU validation message when
+      // recovery on WASM is actually available.
+      throw new WebGpuBufferCapError(
+        err instanceof Error ? err : new Error(String(err)),
+      )
     }
     const half = Math.ceil(batch.length / 2)
     console.warn(
