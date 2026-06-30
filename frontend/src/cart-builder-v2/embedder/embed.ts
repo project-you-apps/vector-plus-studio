@@ -161,6 +161,15 @@ async function embedBatchWithFallback(
     })) as Tensor
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
+    // 2026-06-30 Patch 6 Stage 1 diagnostic: log every embed-batch failure
+    // with the EXACT error string before regex routing. If a regex misses
+    // we want to see what string it was tested against, so we can refine
+    // without iterating in the dark. (Patch 4 was itself a fix to Patch 1's
+    // regex miss; the diagnostic prevents a third round of that.)
+    console.log(
+      `[cart-builder embed] caught error in embedBatchWithFallback ` +
+      `(batchSize=${batch.length}). Full message: ${msg}`,
+    )
     // 2026-06-29 second pass: the FIRST device-lost regex (`/Device is lost/i`)
     // missed the actual error format the embedder throws, which wraps the
     // type in brackets: `[Device] is lost`. Broadened to a word-boundary
@@ -173,6 +182,9 @@ async function embedBatchWithFallback(
       /Device removed/i.test(msg) ||
       /GPU(?:Device)?(?: was)? destroyed/i.test(msg) ||
       /context (?:was )?lost/i.test(msg)
+    console.log(
+      `[cart-builder embed] error classification: isDeviceLost=${isDeviceLost}`,
+    )
     if (isDeviceLost) {
       throw new WebGpuDeviceLostError(
         err instanceof Error ? err : new Error(String(err)),

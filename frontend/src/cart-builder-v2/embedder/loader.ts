@@ -247,10 +247,40 @@ export async function probeWebGpuCapability(
     return 'wasm'
   }
 
-  if (!isWebGpuLikelyAdequate(adapter)) {
-    const info = adapter.info
-    const desc = info?.description ?? '(no description)'
-    const maxBuf = (adapter.limits.maxBufferSize / (1024 * 1024)).toFixed(0)
+  // 2026-06-30 Patch 6 Stage 1: diagnostic logging at probe decision time.
+  // The 06-29 heuristic (Patch 5) missed Andy's Ryzen 7000 + integrated
+  // Radeon — adapter inspection returned 'webgpu' but the device couldn't
+  // sustain real workload. Without seeing what `adapter.info` and
+  // `adapter.limits` actually report on the offending device, refining the
+  // heuristic is guesswork. Logging every probe decision lets us refine
+  // from real data on every machine that hits this code path.
+  const diagInfo = adapter.info ?? {}
+  const diagLimits = {
+    maxBufferSize: adapter.limits.maxBufferSize,
+    maxBufferSize_MiB:
+      Math.round(adapter.limits.maxBufferSize / (1024 * 1024)),
+  }
+  const adequateVerdict = isWebGpuLikelyAdequate(adapter)
+  // Serialize the fields explicitly into the log message rather than passing
+  // raw objects — Chrome renders raw GPUAdapterInfo / Limits objects as
+  // type-name placeholders ("GPUAdapterInfo", "Object") that aren't
+  // copy-pasteable without clicking to expand. The explicit string form
+  // makes the log line self-contained for sharing back during diagnostic.
+  const infoStr = JSON.stringify({
+    vendor: diagInfo.vendor ?? '',
+    architecture: diagInfo.architecture ?? '',
+    device: diagInfo.device ?? '',
+    description: diagInfo.description ?? '',
+  })
+  console.log(
+    `[cart-builder probe] adapter.info=${infoStr} ` +
+    `maxBufferSize=${diagLimits.maxBufferSize_MiB} MiB (${diagLimits.maxBufferSize} bytes) ` +
+    `heuristic verdict=${adequateVerdict ? 'webgpu' : 'wasm'}`,
+  )
+
+  if (!adequateVerdict) {
+    const desc = diagInfo.description ?? '(no description)'
+    const maxBuf = diagLimits.maxBufferSize_MiB
     console.warn(
       `[cart-builder probe] WebGPU adapter inadequate for sustained embed ` +
       `workload (device="${desc}", maxBufferSize=${maxBuf} MiB). Pre-loading ` +
