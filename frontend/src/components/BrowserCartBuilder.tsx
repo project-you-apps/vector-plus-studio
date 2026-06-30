@@ -15,11 +15,23 @@ import {
 import {
   buildCartFromFiles,
   downloadBuiltCart,
+  probeWebGpuCapability,
+  webGpuAdapterAvailable,
   type BuiltCart,
+  type EmbedderBackend,
   type PipelineProgress,
 } from '../cart-builder-v2'
 
-type WebGPUStatus = 'detecting' | 'available' | 'unavailable'
+// 'detecting'      — initial mount, fast adapter check in flight
+// 'probing'        — adapter exists, running tiny real-workload embed to
+//                    verify the device can actually sustain inference
+//                    (catches the laptop-integrated-Radeon case where
+//                    requestAdapter() succeeds but ONNX hangs the device)
+// 'webgpu'         — probe succeeded; fast path
+// 'wasm'           — no adapter OR probe failed at startup; CPU path
+// 'wasm-fallback'  — probe said WebGPU was fine, but device hung mid-build;
+//                    failover swap happened, the build continued on WASM
+type WebGPUStatus = 'detecting' | 'probing' | 'webgpu' | 'wasm' | 'wasm-fallback'
 
 // Block 4 (UI integration) — self-contained browser-side cart builder.
 // Renders inside CartBuilderScreen. Uses Block 1-3 pipeline:
@@ -132,34 +144,49 @@ export default function BrowserCartBuilder() {
   const [webgpuStatus, setWebgpuStatus] = useState<WebGPUStatus>('detecting')
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
-  // Probe WebGPU once on mount so users see upfront whether they're on the
-  // fast path or WASM fallback. requestAdapter() is the only reliable check —
-  // `'gpu' in navigator` is true on browsers that expose the API but lack
-  // working drivers (returns null adapter).
+  // Two-stage WebGPU capability probe on mount so the backend badge tells the
+  // truth instead of advertising green for "adapter exists but inference will
+  // hang." Stage 1 (fast, ~ms): does a WebGPU adapter exist at all? Stage 2
+  // (slow, ~10-30s): can the adapter actually sustain the Nomic embed model?
+  // The second stage matters because constrained devices (integrated GPUs
+  // sharing system RAM, older drivers, Chromium Windows quirks) return a
+  // valid adapter from requestAdapter() but hang D3D12 mid-inference with
+  // DXGI_ERROR_DEVICE_HUNG. probeWebGpuCapability() runs a tiny real embed;
+  // if it fails or times out, the cached embedder is silently swapped to WASM
+  // BEFORE the user's first Build click — no failed builds, no page reload.
+  // Pre-2026-06-29 the probe only did requestAdapter(); see
+  // [[CC_webgpu-device-lost-fallback-2026-06-29]] for the laptop-build repro
+  // that motivated the deeper probe.
   useEffect(() => {
     let cancelled = false
     const probe = async () => {
-      const nav = navigator as Navigator & {
-        gpu?: { requestAdapter: () => Promise<unknown> }
-      }
-      if (!nav.gpu) {
-        if (!cancelled) setWebgpuStatus('unavailable')
+      if (!webGpuAdapterAvailable()) {
+        if (!cancelled) setWebgpuStatus('wasm')
+        // No adapter — pre-warm WASM so the first Build click doesn't pay
+        // model-download cost on top of unavoidable embed time.
+        await probeWebGpuCapability().catch(() => {})
         return
       }
-      try {
-        const adapter = await nav.gpu.requestAdapter()
-        if (!cancelled) {
-          setWebgpuStatus(adapter ? 'available' : 'unavailable')
-        }
-      } catch {
-        if (!cancelled) setWebgpuStatus('unavailable')
-      }
+      if (!cancelled) setWebgpuStatus('probing')
+      const backend = await probeWebGpuCapability()
+      if (cancelled) return
+      setWebgpuStatus(backend === 'webgpu' ? 'webgpu' : 'wasm')
     }
     void probe()
     return () => {
       cancelled = true
     }
   }, [])
+
+  // Called from buildCartFromFiles via the onBackendChange hook when the
+  // embedder backend swaps mid-build (e.g. WebGPU device hung → automatic
+  // WASM failover). Updates the badge so the user sees the graceful
+  // degradation in real time instead of wondering why the build kept going
+  // after the console exploded.
+  const handleBackendChange = (backend: EmbedderBackend) => {
+    if (backend === 'wasm') setWebgpuStatus('wasm-fallback')
+    else if (backend === 'webgpu') setWebgpuStatus('webgpu')
+  }
 
   const handleFiles = (files: FileList | null) => {
     if (!files || files.length === 0) return
@@ -225,6 +252,7 @@ export default function BrowserCartBuilder() {
         {
           cartName: sanitizedName,
           onProgress: setProgress,
+          onBackendChange: handleBackendChange,
         }
       )
       setResult(buildResult.cart)
@@ -402,9 +430,9 @@ export default function BrowserCartBuilder() {
       {/* Build button */}
       <button
         onClick={handleBuild}
-        disabled={building || queued.length === 0}
+        disabled={building || queued.length === 0 || !cartName.trim()}
         className={`w-full rounded-lg px-4 py-2.5 text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
-          building || queued.length === 0
+          building || queued.length === 0 || !cartName.trim()
             ? 'bg-slate-800/50 border border-slate-700 text-slate-600 cursor-not-allowed'
             : 'bg-purple-500/30 border border-purple-500/50 text-purple-100 hover:bg-purple-500/40'
         }`}
@@ -416,6 +444,11 @@ export default function BrowserCartBuilder() {
         )}
         {building ? 'Building in browser…' : 'Build cart in browser'}
       </button>
+      {!building && !cartName.trim() && (
+        <div className="text-[10px] text-amber-400/80 italic px-1 -mt-1">
+          Enter a cart name above before building.
+        </div>
+      )}
 
       {/* Progress */}
       {building && progress && (
@@ -490,7 +523,12 @@ export default function BrowserCartBuilder() {
 }
 
 // WebGPU/WASM status badge. Surfaces the embedder backend before the user
-// triggers a build, so they know upfront if they're on the slow path.
+// triggers a build, so they know upfront if they're on the slow path. Five
+// states: detecting (fast adapter check), probing (real-workload capability
+// probe in flight), webgpu (probe passed; fast path), wasm (probe failed or
+// no adapter; CPU path), wasm-fallback (started WebGPU but device hung
+// mid-build; failover swap happened). Probing is the long state — model
+// download + tiny embed takes 10-30s the first time.
 function BackendBadge({ status }: { status: WebGPUStatus }) {
   if (status === 'detecting') {
     return (
@@ -500,21 +538,43 @@ function BackendBadge({ status }: { status: WebGPUStatus }) {
       </span>
     )
   }
-  if (status === 'available') {
+  if (status === 'probing') {
+    return (
+      <span
+        className="text-[10px] uppercase tracking-wider text-sky-300 bg-sky-500/15 border border-sky-500/40 px-2 py-0.5 rounded font-mono inline-flex items-center gap-1"
+        title="WebGPU adapter found — probing whether it can sustain the embed model. One-time check (~10-30s) so the build doesn't surprise you with a device-lost error halfway through."
+      >
+        <Loader2 size={9} className="animate-spin" />
+        probing webgpu
+      </span>
+    )
+  }
+  if (status === 'webgpu') {
     return (
       <span
         className="text-[10px] uppercase tracking-wider text-emerald-300 bg-emerald-500/15 border border-emerald-500/40 px-2 py-0.5 rounded font-mono inline-flex items-center gap-1"
-        title="Your browser exposes WebGPU. The embedder will run on GPU compute — fast path."
+        title="WebGPU verified end-to-end on this device. The embedder will run on GPU compute — fast path."
       >
         <Zap size={9} />
         WebGPU
       </span>
     )
   }
+  if (status === 'wasm-fallback') {
+    return (
+      <span
+        className="text-[10px] uppercase tracking-wider text-amber-300 bg-amber-500/15 border border-amber-500/40 px-2 py-0.5 rounded font-mono inline-flex items-center gap-1"
+        title="WebGPU was working but the device hung mid-build (DXGI_ERROR_DEVICE_HUNG or equivalent). The embedder swapped to WebAssembly automatically — your build will complete, just slower. No page reload needed."
+      >
+        <Cpu size={9} />
+        WASM (fallback)
+      </span>
+    )
+  }
   return (
     <span
       className="text-[10px] uppercase tracking-wider text-amber-300 bg-amber-500/15 border border-amber-500/40 px-2 py-0.5 rounded font-mono inline-flex items-center gap-1"
-      title="WebGPU not available — embedder will use WebAssembly. Functional but slower (model load + per-chunk embedding take ~2-3× longer)."
+      title="WebGPU not available on this device (no adapter, or probe detected it can't sustain the embed model). Embedder will use WebAssembly. Functional but slower (model load + per-chunk embedding take ~2-3× longer)."
     >
       <Cpu size={9} />
       WASM (slower)

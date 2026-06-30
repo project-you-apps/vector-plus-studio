@@ -112,3 +112,78 @@ export function clearEmbedderCache(): void {
   loading = null
   activeBackend = 'unknown'
 }
+
+/**
+ * Tear down the current (presumed dead) embedder and reload on WASM. Used
+ * when WebGPU device-loss is detected mid-build — the WebGPU pipeline can't
+ * be recovered by re-trying, so we drop it and continue on CPU. Returns the
+ * fresh WASM embedder, ready to embed the batch that just failed.
+ */
+export async function forceWasmFallback(
+  options: LoaderOptions = {},
+): Promise<EmbedderInstance> {
+  clearEmbedderCache()
+  return getEmbedder({ ...options, device: 'wasm' })
+}
+
+/**
+ * Probe whether WebGPU can actually sustain the embed workload (not just
+ * "does the adapter exist"). Performs a tiny real embed of a single token
+ * sequence on WebGPU; if it succeeds, the embedder is cached and returned
+ * as 'webgpu' active backend so the first real Build button click reuses it
+ * instead of paying the load cost twice. If it fails, the embedder falls
+ * through to WASM, gets cached as WASM, and the badge can downgrade upfront.
+ *
+ * **Why a real embed and not just `requestAdapter()`?** On constrained
+ * devices (integrated GPUs sharing system RAM, older drivers, Chromium
+ * Windows quirks), `requestAdapter()` returns a valid adapter but the actual
+ * Nomic inference hangs the D3D12 device mid-stream (`DXGI_ERROR_DEVICE_HUNG`).
+ * The only reliable test is "run the real workload." This costs ~10-30 sec
+ * one-time (model download + tiny embed) but eliminates mid-build surprises.
+ *
+ * Time-bounded: if the probe doesn't complete in `timeoutMs`, treat as
+ * unusable. Default 60s covers slow connections + cold model download.
+ */
+export async function probeWebGpuCapability(
+  options: { timeoutMs?: number; modelId?: string } = {},
+): Promise<EmbedderBackend> {
+  const timeoutMs = options.timeoutMs ?? 60_000
+  if (!hasWebGPU()) {
+    // No adapter at all — load WASM eagerly so the badge is honest and the
+    // first build doesn't pay an additional load cost.
+    await getEmbedder({ device: 'wasm', modelId: options.modelId })
+    return 'wasm'
+  }
+  try {
+    const probeRun = (async () => {
+      const e = await getEmbedder({ device: 'webgpu', modelId: options.modelId })
+      // Real workload: embed one short string. If WebGPU is going to hang on
+      // this device, it'll hang here — before the user has invested any time.
+      await e(['probe'], { pooling: 'mean', normalize: false })
+      return getActiveBackend()
+    })()
+    const timeout = new Promise<EmbedderBackend>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`WebGPU probe timed out after ${timeoutMs}ms`)),
+        timeoutMs,
+      ),
+    )
+    return await Promise.race([probeRun, timeout])
+  } catch (err) {
+    // Probe failed — either device-lost, OOM on tiny input (driver bug),
+    // timeout, or any other surprise. Tear down the WebGPU pipeline and
+    // load WASM so the cart-builder is ready when the user clicks Build.
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn(
+      `[cart-builder probe] WebGPU capability probe failed — falling back ` +
+      `to WASM. (${msg.slice(0, 200)})`,
+    )
+    await forceWasmFallback({ modelId: options.modelId })
+    return 'wasm'
+  }
+}
+
+/** Exposed so the UI can show "no GPU adapter at all" upfront vs. probe-failure. */
+export function webGpuAdapterAvailable(): boolean {
+  return hasWebGPU()
+}

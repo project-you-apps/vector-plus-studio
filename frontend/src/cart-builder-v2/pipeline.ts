@@ -50,9 +50,14 @@ export interface PipelineProgress {
 export interface PipelineOptions {
   cartName: string
   chunkOptions?: ChunkOptions
-  embedOptions?: Omit<EmbedOptions, 'onBatch' | 'onProgress'>
+  embedOptions?: Omit<EmbedOptions, 'onBatch' | 'onProgress' | 'onBackendChange'>
   buildOptions?: Omit<BuildCartOptions, 'cartName'>
   onProgress?: (progress: PipelineProgress) => void
+  /** Fires if the embedder backend changes mid-build (e.g. WebGPU → WASM
+   *  failover on device loss). Lets the UI flip its badge so the user sees
+   *  the graceful degradation rather than wondering why the console exploded
+   *  but the build kept going. */
+  onBackendChange?: (backend: import('./types').EmbedderBackend) => void
   /** Reject files larger than this. Default 50 MB per file. */
   maxFileSizeBytes?: number
   /** Reject builds that exceed this chunk count. Default 10,000 chunks. */
@@ -196,6 +201,7 @@ export async function buildCartFromFiles(
           message: `Embedding chunks… ${completed}/${total}`,
         })
       },
+      onBackendChange: options.onBackendChange,
     })
 
     // ── Stage 4: write ─────────────────────────────────────────────────
@@ -319,6 +325,7 @@ export async function buildCartFromPassages(
           message: `Embedding passages… ${completed}/${total}`,
         })
       },
+      onBackendChange: options.onBackendChange,
     })
 
     // ── Stage 4: write ─────────────────────────────────────────────────

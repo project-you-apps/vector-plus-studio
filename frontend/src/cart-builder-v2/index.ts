@@ -29,12 +29,15 @@ export type {
 export type { LoaderOptions } from './embedder/loader'
 export {
   clearEmbedderCache,
+  forceWasmFallback,
   getActiveBackend,
   getEmbedder,
+  probeWebGpuCapability,
+  webGpuAdapterAvailable,
 } from './embedder/loader'
 
 export type { EmbedOptions, EmbedResult, PrefixMode } from './embedder/embed'
-export { embedQuery, embedTexts, NOMIC_DIM } from './embedder/embed'
+export { embedQuery, embedTexts, NOMIC_DIM, WebGpuDeviceLostError } from './embedder/embed'
 
 // Writer (Block 3)
 export type { HippocampusOptions } from './writer/hippocampus'
