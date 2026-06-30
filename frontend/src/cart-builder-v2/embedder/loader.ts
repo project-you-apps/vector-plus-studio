@@ -289,12 +289,25 @@ function isWebGpuLikelyAdequate(
  * longer used in the body — adapter inspection is sub-100ms by construction.
  */
 export async function probeWebGpuCapability(
-  options: { timeoutMs?: number; modelId?: string } = {},
+  options: {
+    timeoutMs?: number
+    modelId?: string
+    /**
+     * Fired AS SOON AS the heuristic makes its decision, BEFORE the model
+     * pre-load starts. Lets the UI update the BackendBadge immediately so
+     * the user sees "WASM" or "WebGPU" while the slow model download runs
+     * in the background. Without this, the badge sits on "probing" for
+     * ~10-30s while the model downloads — confusing UX even though the
+     * decision was made in ms (2026-06-30 PM Andy laptop test repro).
+     */
+    onDecision?: (backend: EmbedderBackend) => void
+  } = {},
 ): Promise<EmbedderBackend> {
   void options.timeoutMs // retained for caller compat; not used in inspection path
   if (!hasWebGPU()) {
     // No adapter at all — pre-load WASM eagerly so the badge is honest and
     // the first Build click skips model-download cost.
+    options.onDecision?.('wasm')
     await getEmbedder({ device: 'wasm', modelId: options.modelId })
     return 'wasm'
   }
@@ -376,11 +389,13 @@ export async function probeWebGpuCapability(
       `workload (device="${desc}", maxBufferSize=${maxBuf} MiB). Pre-loading ` +
       `WASM instead — build will be slower but will complete reliably.`,
     )
+    options.onDecision?.('wasm')
     await getEmbedder({ device: 'wasm', modelId: options.modelId })
     return 'wasm'
   }
 
   // Adapter looks adequate. Pre-load on WebGPU.
+  options.onDecision?.('webgpu')
   try {
     await getEmbedder({ device: 'webgpu', modelId: options.modelId })
     return 'webgpu'
@@ -390,6 +405,7 @@ export async function probeWebGpuCapability(
       `[cart-builder probe] WebGPU model load failed despite adequate-looking ` +
       `adapter — falling back to WASM. (${msg.slice(0, 200)})`,
     )
+    options.onDecision?.('wasm')
     await forceWasmFallback({ modelId: options.modelId })
     return 'wasm'
   }

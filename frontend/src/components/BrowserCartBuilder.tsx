@@ -168,7 +168,15 @@ export default function BrowserCartBuilder() {
         return
       }
       if (!cancelled) setWebgpuStatus('probing')
-      const backend = await probeWebGpuCapability()
+      // onDecision fires the moment the heuristic makes its call (~ms),
+      // BEFORE the slow model pre-load starts. Without this the badge sits
+      // on "probing" for 10-30s during model download, confusing users into
+      // thinking the probe is stuck (2026-06-30 PM Andy laptop test repro).
+      const backend = await probeWebGpuCapability({
+        onDecision: (decided) => {
+          if (!cancelled) setWebgpuStatus(decided === 'webgpu' ? 'webgpu' : 'wasm')
+        },
+      })
       if (cancelled) return
       setWebgpuStatus(backend === 'webgpu' ? 'webgpu' : 'wasm')
     }
