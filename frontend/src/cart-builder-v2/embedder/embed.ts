@@ -134,9 +134,42 @@ export async function embedTexts(
         `[cart-builder embed] WebGPU ${reason} mid-build — reloading on ` +
         `WASM and continuing. (${underlying.message.slice(0, 120)})`,
       )
-      embedder = await forceWasmFallback(loaderOpts)
-      onBackendChange?.('wasm')
-      await embedBatchWithFallback(embedder, batch, result, i * NOMIC_DIM)
+      // 2026-06-30 Patch 7b diagnostic: instrument each step of the WASM
+      // fallback so we can see WHICH one fails when the toast shows the
+      // original WebGPU error re-propagated. Home-machine test with 2 large
+      // MD files showed the "reloading" log fires but no subsequent log,
+      // then Build failed — meaning something between forceWasmFallback and
+      // the retry throws silently. Explicit try/catch + step logging reveals
+      // exactly which link is broken.
+      try {
+        console.log('[cart-builder embed] fallback step 1/3: calling forceWasmFallback…')
+        embedder = await forceWasmFallback(loaderOpts)
+        console.log(
+          `[cart-builder embed] fallback step 1/3 OK: embedder swapped to WASM ` +
+          `(activeBackend=${getActiveBackend()})`,
+        )
+        console.log('[cart-builder embed] fallback step 2/3: onBackendChange callback')
+        onBackendChange?.('wasm')
+        console.log('[cart-builder embed] fallback step 3/3: retrying batch on WASM…')
+        await embedBatchWithFallback(embedder, batch, result, i * NOMIC_DIM)
+        console.log(
+          `[cart-builder embed] fallback step 3/3 OK: WASM retry succeeded ` +
+          `(${batch.length} chunks embedded on WASM)`,
+        )
+      } catch (retryErr) {
+        const retryMsg =
+          retryErr instanceof Error ? retryErr.message : String(retryErr)
+        console.error(
+          `[cart-builder embed] WASM fallback FAILED — retry threw. ` +
+          `Full message: ${retryMsg}`,
+          retryErr,
+        )
+        // Re-throw so the surface still shows a failure; but at least we
+        // now know from the log which step killed us and what the retry
+        // error was (vs re-propagating the original WebGPU error and
+        // hiding the fact that WASM also failed).
+        throw retryErr
+      }
     }
     completed += batch.length
     onBatch?.(completed, prefixed.length)
