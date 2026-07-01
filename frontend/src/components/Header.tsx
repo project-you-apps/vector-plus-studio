@@ -75,8 +75,17 @@ export default function Header() {
         <div className="gradient-bg w-8 h-8 rounded-lg flex items-center justify-center">
           <Zap size={18} className="text-white" />
         </div>
-        <h1 className="text-xl font-bold gradient-text">Vector+ Studio</h1>
-        <span className="text-xs text-slate-500 mt-1">v1.1</span>
+        {/* v1.1 lives INSIDE the h1 as an inline span so it stays in the
+            title's own text flow. On narrow viewports the h1 wraps ("Vector+"
+            / "Studio") and v1.1 wraps with it instead of floating out on the
+            right per the pre-fix behavior Andy caught 2026-07-01. Explicit
+            text-slate-500 override is required because gradient-text on the
+            parent sets text-transparent + bg-clip-text; the child span needs
+            its own color to render at all. */}
+        <h1 className="text-xl font-bold gradient-text">
+          Vector+ Studio
+          <span className="text-xs text-slate-500 font-normal align-baseline ml-1.5">v1.1</span>
+        </h1>
       </div>
 
       <div className="flex items-center gap-4 text-sm">

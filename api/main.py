@@ -137,6 +137,7 @@ from .models import (
     SearchResult, SearchResponse, StatusResponse,
     DeletedPattern, DeletedListResponse, MessageResponse,
     PatternResponse, PatternListItem, PatternListResponse,
+    Pattern0Response, Pattern0TocItem,
     MemboxLockState, MemboxCartInfo, MemboxWriteEntry, MemboxStatus,
     MemboxCartListResponse, MemboxImprintRequest,
     MemboxMountRequest, MemboxUnmountRequest,
@@ -300,6 +301,287 @@ async def get_status():
         read_only=engine.read_only or READ_ONLY_MODE,
         read_only_mode=READ_ONLY_MODE,
         cart_permissions=engine.cart_permissions,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pattern-0 TOC (v1) — 2026-07-01
+#
+# Left-side TOC panel spec (Andy 2026-07-01 morning):
+#   • Cart metadata: name, description (~200 words), creator, created_at, owner
+#   • Optional v2 agent_briefing block (surfaces BRIEFING button in UI)
+#   • Flat toc_items list: one per source file, with description + pattern_count
+#   • Derived-stats fallback when Pattern-0 is minimal/absent
+#
+# Read strategy: peek the mounted NPZ file's `pattern0` array. Two shapes exist
+# in the wild:
+#   1. JSON string (builder.py / Cart Builder GUI carts): rich metadata + files
+#   2. 64-byte binary h-row (cartridge_builder.py membot carts): no rich meta,
+#      falls through to source-hash derivation
+# Legacy .pkl carts have NO pattern0; also falls through to derived.
+#
+# Derived path: unique per-pattern source hashes from hippocampus rows, or the
+# engine.mounted_name as a single "self-titled" entry when no hippocampus.
+# ---------------------------------------------------------------------------
+
+# Cap description at ~200 words with trailing "..."; server-side truncation
+# keeps the JSON payload small on large-header carts and matches the v1 spec
+# ("NO expand button in v1").
+_DESCRIPTION_WORD_CAP = 200
+
+
+def _truncate_words(text: str | None, cap: int = _DESCRIPTION_WORD_CAP) -> str | None:
+    if not text:
+        return text
+    words = text.split()
+    if len(words) <= cap:
+        return text
+    return " ".join(words[:cap]) + "..."
+
+
+def _parse_pattern0_from_npz(cart_path: str) -> dict | None:
+    """Attempt to read the `pattern0` array from a .cart.npz and decode it.
+
+    Returns a normalized dict with keys {name, description, creator, created_at,
+    owner, agent_briefing, files} where present, or None if the cart has no
+    parseable Pattern-0.
+
+    Handles both known shapes:
+      • JSON string (Cart Builder GUI, `builder.py`)
+      • 4096-byte CartridgeHeader (fill-level encoded) — vector-benchmark-demo
+        cartridge_header.py format. Rarely landed on disk today, but honored
+        per spec's "reuse existing parsing code" guidance.
+      • 64-byte hippo-row binary (`cartridge_builder.py`) — no rich metadata,
+        returns None so caller falls through to derived-stats.
+    """
+    try:
+        with np.load(cart_path, allow_pickle=True) as data:
+            if 'pattern0' not in data.files:
+                return None
+            p0 = data['pattern0']
+
+            # Shape 1: JSON string (0-d U-dtype array or bytes)
+            if p0.dtype.kind in ('U', 'O'):
+                try:
+                    raw = p0.item() if p0.ndim == 0 else p0[0]
+                    import json as _json
+                    payload = _json.loads(str(raw))
+                    if isinstance(payload, dict):
+                        return payload
+                except (ValueError, TypeError):
+                    return None
+                return None
+
+            # Binary shapes
+            if p0.dtype == np.uint8:
+                raw_bytes = p0.tobytes()
+
+                # Shape 3: 64-byte hippo-row → no rich metadata, caller derives
+                if len(raw_bytes) < 512:
+                    return None
+
+                # Shape 2: 4096-byte CartridgeHeader (magic-gated)
+                # Reuse cartridge_header.py's unpack() when the magic matches;
+                # a 4096-byte lattice-encoded pattern doesn't land in the NPZ
+                # today, but honoring the format keeps us forward-compatible.
+                try:
+                    magic = int.from_bytes(raw_bytes[:4], 'little')
+                except Exception:
+                    return None
+
+                # 0x56504C53 = "VPLS" per cartridge_header.py MAGIC constant
+                if magic == 0x56504C53:
+                    try:
+                        # Lazy import: only pay the cost when we actually see
+                        # a VPLS-magic header on disk.
+                        from vector_benchmark_demo.cuda.cartridge_header import CartridgeHeader  # type: ignore
+                    except Exception:
+                        # cartridge_header lives in vector-benchmark-demo, not
+                        # inside vector-plus-studio-repo. Fall back to a local
+                        # struct unpack that mirrors the 512-byte fixed layout.
+                        try:
+                            import struct as _struct
+                            FIXED = '<I H B B I I I H B B 32s 64s 128s 128s 64s 64s 8s'
+                            vals = _struct.unpack(FIXED, raw_bytes[:_struct.calcsize(FIXED)])
+                            def _un(b): return b.rstrip(b'\x00').decode('utf-8', errors='replace')
+                            return {
+                                'cart_name': _un(vals[12]),
+                                'description': _un(vals[13]),
+                                'creator': _un(vals[14]),
+                                'created_at_ts': int(vals[5]),
+                                'total_chunks': int(vals[4]),
+                                'files': [],
+                            }
+                        except Exception:
+                            return None
+                    try:
+                        hdr = CartridgeHeader.unpack(raw_bytes)
+                        return {
+                            'cart_name': hdr.name,
+                            'description': hdr.description,
+                            'creator': hdr.creator,
+                            'created_at_ts': int(hdr.created_ts),
+                            'total_chunks': int(hdr.pattern_count),
+                            'files': [],
+                        }
+                    except Exception:
+                        return None
+
+                return None
+    except Exception as e:
+        print(f"[Pattern0] Failed to read {cart_path}: {e}")
+        return None
+    return None
+
+
+def _derive_toc_from_hippocampus() -> list[Pattern0TocItem]:
+    """Fallback TOC: count patterns per unique source_hash in engine.hippocampus.
+
+    Source hashes are integers (source filenames aren't stored in the h-row —
+    only their 32-bit hash). We can't recover the original filename here, but
+    we can at least show N distinct source groups + their counts, matching the
+    spec's "derived stats" empty-state banner.
+    """
+    if not engine.hippocampus:
+        # No hippocampus at all: single self-titled item.
+        return [Pattern0TocItem(
+            name=engine.mounted_name or "(unnamed cart)",
+            description=None,
+            pattern_count=len(engine.passages),
+        )]
+
+    from collections import OrderedDict
+    counts: "OrderedDict[int, int]" = OrderedDict()
+    for row in engine.hippocampus:
+        h = row.get('source_hash', 0)
+        if not h:
+            continue
+        counts[h] = counts.get(h, 0) + 1
+
+    if not counts:
+        # Hippocampus present but no source_hashes populated.
+        return [Pattern0TocItem(
+            name=engine.mounted_name or "(unnamed cart)",
+            description=None,
+            pattern_count=len(engine.passages),
+        )]
+
+    return [
+        Pattern0TocItem(
+            name=f"source #{i + 1} (hash {h:08x})",
+            description=None,
+            pattern_count=n,
+        )
+        for i, (h, n) in enumerate(counts.items())
+    ]
+
+
+@app.get("/api/cart/pattern-0", response_model=Pattern0Response)
+async def get_cart_pattern_0():
+    """Return Pattern-0 metadata + TOC for the currently-mounted cart.
+
+    Read-only v1 (Andy 2026-07-01). See docs/RFC/pattern-0-v2-spec.md +
+    docs/membot-internal/mempack-agent-runtime-spec.md.
+    """
+    if not engine.mounted_name:
+        return Pattern0Response(mounted=False)
+
+    payload: dict | None = None
+    if engine.mounted_path and os.path.exists(engine.mounted_path):
+        # Only .cart.npz files carry pattern0. Legacy .pkl carts skip straight
+        # to the derived path.
+        if engine.mounted_path.endswith('.npz'):
+            payload = _parse_pattern0_from_npz(engine.mounted_path)
+
+    total_patterns = len(engine.passages)
+
+    if payload:
+        # Cart Builder GUI JSON schema (see api/cartbuilder/builder.py):
+        #   {cart_name, creator, created_at, file_count, total_chunks,
+        #    embedding_model, embedding_dim, files: [{name, owner, description,
+        #    tags, chunks}]}
+        name = str(payload.get('cart_name') or engine.mounted_name)
+        description = _truncate_words(payload.get('description'))
+        creator = payload.get('creator') or None
+        # Prefer ISO string; else derive from Unix ts if present.
+        created_at = payload.get('created_at')
+        if not created_at and 'created_at_ts' in payload:
+            try:
+                from datetime import datetime, timezone
+                ts = int(payload['created_at_ts'])
+                created_at = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+            except Exception:
+                created_at = None
+
+        # Owner: not stored on the cart-level Pattern-0 in builder.py schema
+        # (owner is per-file in the `files` list). Surface the FIRST file's
+        # owner when the cart is single-source; else None per spec ("hide if
+        # null/empty").
+        owner = None
+        files_meta = payload.get('files') or []
+        if isinstance(files_meta, list) and len(files_meta) == 1:
+            first_owner = (files_meta[0] or {}).get('owner')
+            if first_owner:
+                owner = str(first_owner)
+
+        agent_briefing = payload.get('agent_briefing') or None
+
+        toc_items: list[Pattern0TocItem] = []
+        if isinstance(files_meta, list) and files_meta:
+            for f in files_meta:
+                if not isinstance(f, dict):
+                    continue
+                fname = str(f.get('name') or '(unnamed)')
+                fdesc = f.get('description') or None
+                fcount = int(f.get('chunks') or 0)
+                toc_items.append(Pattern0TocItem(
+                    name=fname,
+                    description=fdesc,
+                    pattern_count=fcount,
+                ))
+
+        # If Pattern-0 exists but lists no files, fall through to derived TOC
+        # so the panel isn't just a name+description with an empty list.
+        if not toc_items:
+            toc_items = _derive_toc_from_hippocampus()
+            return Pattern0Response(
+                mounted=True,
+                name=name,
+                description=description,
+                creator=creator,
+                created_at=created_at,
+                owner=owner,
+                pattern_count=total_patterns,
+                agent_briefing=agent_briefing,
+                toc_items=toc_items,
+                is_derived=True,
+            )
+
+        return Pattern0Response(
+            mounted=True,
+            name=name,
+            description=description,
+            creator=creator,
+            created_at=created_at,
+            owner=owner,
+            pattern_count=total_patterns,
+            agent_briefing=agent_briefing,
+            toc_items=toc_items,
+            is_derived=False,
+        )
+
+    # No parseable Pattern-0 → derived path.
+    return Pattern0Response(
+        mounted=True,
+        name=engine.mounted_name,
+        description=None,
+        creator=None,
+        created_at=None,
+        owner=None,
+        pattern_count=total_patterns,
+        agent_briefing=None,
+        toc_items=_derive_toc_from_hippocampus(),
+        is_derived=True,
     )
 
 

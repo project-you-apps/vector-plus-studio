@@ -101,6 +101,40 @@ class StatusResponse(BaseModel):
     # to /api/cartridges/eject to identify which sandbox file to delete.
     mounted_path: str | None = None
 
+# --- Pattern-0 TOC (v1) ---
+# 2026-07-01 spec: left-side TOC panel on the Search tab that shows metadata
+# + table-of-contents of the currently-mounted cart. Read-only v1.
+# Backend endpoint: GET /api/cart/pattern-0
+
+class Pattern0TocItem(BaseModel):
+    name: str
+    description: str | None = None
+    pattern_count: int = 0
+
+
+class Pattern0Response(BaseModel):
+    mounted: bool = False
+    # Full Pattern-0 metadata (v1 header). When the mounted cart lacks a
+    # meaningful Pattern-0, `is_derived=True` and these come from source_paths
+    # + engine.mounted_name fallback.
+    name: str | None = None
+    description: str | None = None
+    creator: str | None = None
+    created_at: str | None = None  # ISO 8601
+    owner: str | None = None
+    pattern_count: int = 0
+    # v2 agent_briefing block. Only present when the cart's Pattern-0 has one.
+    # See docs/RFC/pattern-0-v2-spec.md.
+    agent_briefing: str | None = None
+    # Flat list of files (or free-floating passages) in the cart. Client-side
+    # substring filter narrows the visible list without a round-trip.
+    toc_items: list[Pattern0TocItem] = Field(default_factory=list)
+    # True when Pattern-0 was minimal/absent and toc_items were computed from
+    # unique source_paths in the hippocampus rows (or from the raw passages
+    # array for legacy carts).
+    is_derived: bool = False
+
+
 class DeletedPattern(BaseModel):
     idx: int
     title: str

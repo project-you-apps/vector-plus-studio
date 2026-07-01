@@ -105,6 +105,33 @@ export interface CartPermissions {
   version?: string
 }
 
+// Pattern-0 TOC (2026-07-01, Andy). Response of GET /api/cart/pattern-0.
+// One entry per source file (or free-floating passage) in the mounted cart.
+export interface Pattern0TocItem {
+  name: string
+  description?: string | null
+  pattern_count: number
+}
+
+export interface Pattern0Response {
+  mounted: boolean
+  name?: string | null
+  description?: string | null
+  creator?: string | null
+  created_at?: string | null   // ISO 8601
+  owner?: string | null
+  pattern_count?: number
+  // v2 agent_briefing block. When present, the TOC panel surfaces a
+  // BRIEFING button that opens a modal with the full text. See
+  // docs/RFC/pattern-0-v2-spec.md.
+  agent_briefing?: string | null
+  toc_items: Pattern0TocItem[]
+  // True when Pattern-0 was minimal/absent and toc_items came from a
+  // hippocampus-source-hash derivation. UI shows the "No metadata available
+  // — showing derived stats" banner.
+  is_derived: boolean
+}
+
 export interface DeletedPattern {
   idx: number
   title: string

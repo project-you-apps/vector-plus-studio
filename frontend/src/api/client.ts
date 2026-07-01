@@ -1,6 +1,6 @@
 import type {
   CartridgeInfo, SearchResponse, StatusResponse, DeletedPattern,
-  SearchMode, PatternResponse,
+  SearchMode, PatternResponse, Pattern0Response,
   MemboxCartInfo, MemboxStatus, MemboxImprintRequest, MemboxMountRequest,
 } from './types'
 import { useAuthStore } from '../store/authStore'
@@ -31,6 +31,13 @@ async function fetchJSON<T>(url: string, opts?: RequestInit): Promise<T> {
 
 export async function getStatus(): Promise<StatusResponse> {
   return fetchJSON('/status')
+}
+
+// Pattern-0 TOC for the mounted cart. Returns {mounted:false} when nothing
+// is mounted server-side, so the caller can hide the panel without a special
+// error branch. See Pattern0TocPanel.tsx (2026-07-01).
+export async function getCartPattern0(): Promise<Pattern0Response> {
+  return fetchJSON('/cart/pattern-0')
 }
 
 export async function getCartridges(): Promise<CartridgeInfo[]> {

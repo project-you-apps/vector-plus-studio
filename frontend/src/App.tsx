@@ -6,6 +6,7 @@ import NavRail from './components/NavRail'
 import SearchToolbar from './components/SearchToolbar'
 import SearchBar from './components/SearchBar'
 import ResultsList from './components/ResultsList'
+import Pattern0TocPanel from './components/Pattern0TocPanel'
 import PassageEditor from './components/PassageEditor'
 import PassageModal from './components/PassageModal'
 import MemboxPanel from './components/MemboxPanel'
@@ -26,6 +27,54 @@ function ScreenStub({ title, body }: { title: string; body: string }) {
       <h2 className="text-2xl font-bold gradient-text mb-3">{title}</h2>
       <p className="text-sm text-slate-500 max-w-md leading-relaxed">{body}</p>
     </main>
+  )
+}
+
+
+// Search screen layout — Andy 2026-07-01 (revised same day).
+// • Search input full-width at top.
+// • When a cart is mounted (server-side OR browser LocalCart): stack the
+//   Pattern-0 TOC above the results, both centered under a max-w-7xl
+//   container. The TOC gets a max-h so it can't push results off-screen;
+//   Pattern0TocPanel handles its own overflow via internal list scroll +
+//   JUMP pagination at >25 items.
+// • When nothing is mounted: TOC hidden; results/placeholder alone.
+// Editor path unchanged — Add/Edit Passage takes over the whole main.
+function SearchScreenLayout({ editorOpen }: { editorOpen: boolean }) {
+  const mountedCartridge = useAppStore((s) => s.status?.mounted_cartridge ?? null)
+  const activeLocalCart = useAppStore((s) => s.activeLocalCart)
+  const showToc = !!(mountedCartridge || activeLocalCart) && !editorOpen
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {!editorOpen && <SearchToolbar />}
+      <main className="flex-1 flex flex-col p-6 overflow-hidden w-full max-w-7xl mx-auto">
+        {editorOpen ? (
+          <PassageEditor />
+        ) : (
+          <>
+            <SearchBar />
+            <div className="mt-6 flex-1 overflow-hidden flex flex-col gap-6">
+              {showToc && (
+                // min-h reserves ~5-7 items worth of breathing room even for
+                // small carts, so the panel subconsciously reads as "there is
+                // room to grow here." As items accumulate, the flex-1 list
+                // inside naturally consumes that whitespace; past that the
+                // panel grows up to max-h and then pagination (TOC_PAGE_SIZE
+                // = 25 inside Pattern0TocPanel) takes over. Not an always-
+                // there buffer — just visible for small lists.
+                <div className="flex-shrink-0 min-h-[315px] max-h-[45vh] flex flex-col overflow-hidden">
+                  <Pattern0TocPanel />
+                </div>
+              )}
+              <div className="flex-1 overflow-hidden flex flex-col">
+                <ResultsList />
+              </div>
+            </div>
+          </>
+        )}
+      </main>
+    </div>
   )
 }
 
@@ -106,21 +155,7 @@ export default function App() {
             Add Passage and Tombstoned restore deferred to the CRUD planning
             session. */}
         {activeScreen === 'search' && (
-          <div className="flex-1 flex flex-col overflow-hidden">
-            {!editorOpen && <SearchToolbar />}
-            <main className="flex-1 flex flex-col p-6 overflow-hidden">
-              {editorOpen ? (
-                <PassageEditor />
-              ) : (
-                <>
-                  <SearchBar />
-                  <div className="mt-6 flex-1 overflow-hidden flex flex-col">
-                    <ResultsList />
-                  </div>
-                </>
-              )}
-            </main>
-          </div>
+          <SearchScreenLayout editorOpen={editorOpen} />
         )}
 
         {activeScreen === 'overview' && <OverviewScreen />}
