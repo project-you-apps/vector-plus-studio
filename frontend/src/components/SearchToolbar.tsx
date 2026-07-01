@@ -315,7 +315,17 @@ export default function SearchToolbar() {
                       <span className="text-[10px] text-slate-500">{(c.sizeBytes / 1048576).toFixed(1)} MB</span>
                       {isActive && (
                         <button
-                          onClick={(e) => { e.stopPropagation(); unmountLocalCart(); setOpen(false) }}
+                          onClick={async (e) => {
+                            // Fix #13 (2026-06-30) — X was already wired to
+                            // unmountLocalCart, but defensively also drop any
+                            // backend mount so the pill in Header resets and
+                            // every tab sees a clean "nothing mounted" state.
+                            // Same shared unmount path as the Header pill (Fix #1).
+                            e.stopPropagation()
+                            unmountLocalCart()
+                            if (status?.mounted_cartridge) await unmount()
+                            setOpen(false)
+                          }}
                           className="p-0.5 rounded hover:bg-slate-700/50 text-slate-400 hover:text-white"
                           title="Unmount this local cart"
                         >

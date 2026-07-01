@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Activity, Cpu, Lock, LockOpen, Moon, Save, Sun, Zap } from 'lucide-react'
+import { Activity, Cpu, Lock, LockOpen, Moon, Save, Sun, X, Zap } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import AuthChip from './AuthChip'
 
@@ -18,6 +18,19 @@ export default function Header() {
   const webgpuStatus = useAppStore((s) => s.webgpuStatus)
   const activeLocalCart = useAppStore((s) => s.activeLocalCart)
   const localCarts = useAppStore((s) => s.localCarts)
+  const unmount = useAppStore((s) => s.unmount)
+  const unmountLocalCart = useAppStore((s) => s.unmountLocalCart)
+
+  // Fix #1 (2026-06-30) — clicking the mounted-cart pill unmounts the cart.
+  // Since mount state lives in the store, unmounting propagates to every tab
+  // via React re-render. Handles both flavors: backend mount (status.mounted_cartridge,
+  // via api.unmountCartridge) and browser-side LocalCart (activeLocalCart,
+  // via unmountLocalCart which clears store state). If somehow both are set,
+  // unmount both.
+  const handleUnmountPill = async () => {
+    if (activeLocalCart) unmountLocalCart()
+    if (status?.mounted_cartridge) await unmount()
+  }
   // The badge reflects whether physics-driven search is actually achievable:
   // either the server has CUDA (status.gpu_available), or the browser has
   // working WebGPU (browser-side Associate). On the droplet only the second
@@ -74,20 +87,32 @@ export default function Header() {
           if (activeLocalCart) {
             const lc = localCarts.get(activeLocalCart)
             return (
-              <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/30">
+              <button
+                type="button"
+                onClick={handleUnmountPill}
+                title="Click to unmount"
+                className="group flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/30 hover:bg-cyan-500/20 hover:border-cyan-500/50 transition-colors cursor-pointer"
+              >
                 <span className="text-cyan-400">Local:</span>
                 <span className="font-medium text-slate-200">{activeLocalCart}</span>
                 {lc && <span className="text-slate-500">({lc.passages.length.toLocaleString()} patterns)</span>}
-              </div>
+                <X size={12} className="text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+              </button>
             )
           }
           if (status?.mounted_cartridge) {
             return (
-              <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800/60">
+              <button
+                type="button"
+                onClick={handleUnmountPill}
+                title="Click to unmount"
+                className="group flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800/60 hover:bg-slate-700/80 transition-colors cursor-pointer"
+              >
                 <span className="text-slate-400">Mounted:</span>
                 <span className="font-medium text-slate-200">{status.mounted_cartridge}</span>
                 <span className="text-slate-500">({status.pattern_count.toLocaleString()} patterns)</span>
-              </div>
+                <X size={12} className="text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+              </button>
             )
           }
           return null
