@@ -269,11 +269,30 @@ export async function runWebGpuAssociate(opts: RunAssociateOptions): Promise<Sea
     // "band"-themed queries return 10 hits all at P=1.000), so cosine has
     // to be the discriminator or the strongest pre-physics hit (e.g.
     // "T. Rex (band)" at C=0.730 on the trex query) gets shuffled below
-    // weaker matches. Tiny epsilon on physics so float noise doesn't
-    // promote a near-tie above a legitimately higher physics score.
+    // weaker matches.
+    //
+    // Adaptive epsilon: a fixed 1e-6 epsilon is too tight for real-world
+    // content. Inside a "loose" physics cluster (e.g. xylophone-query hits
+    // at 0.96 / 0.961 / 0.959), float noise on physics still dominated the
+    // sort even though the cosine differences were semantically meaningful.
+    // Scale epsilon to 5% of the top-K physics range so genuinely-clustered
+    // hits fall through to the cosine tiebreak, while a truly higher physics
+    // score still wins. Degenerate case (all identical -> range 0 -> eps 0)
+    // sends every comparison to cosine, which is the desired behavior.
+    let epsilon = 1e-6;
+    if (scored.length >= 2) {
+        let maxPhysics = scored[0].physics_score;
+        let minPhysics = scored[0].physics_score;
+        for (let i = 1; i < scored.length; i++) {
+            const p = scored[i].physics_score;
+            if (p > maxPhysics) maxPhysics = p;
+            if (p < minPhysics) minPhysics = p;
+        }
+        epsilon = 0.05 * (maxPhysics - minPhysics);
+    }
     scored.sort((a, b) => {
         const dp = b.physics_score - a.physics_score;
-        if (Math.abs(dp) > 1e-6) return dp;
+        if (Math.abs(dp) > epsilon) return dp;
         return b.cosine_score - a.cosine_score;
     });
 

@@ -160,6 +160,13 @@ interface AppState {
     next_idx: number | null
     source_db?: string | null  // present when the mounted cart is split-cart
     paper_id?: string | null   // populated AFTER load-source-from-DB CTA fires
+    // Provenance v1 sidecar — source filename of THIS pattern. Populated for
+    // local-mounted carts whose .npz includes source_paths.npy. Used to
+    // constrain PREV/NEXT navigation to stay within the parent file (see
+    // navigateModal local-cart branch below). Null/undefined for legacy carts
+    // or server-mounted carts (no client-side per-pattern source info),
+    // which fall back to unconstrained neighbor walking.
+    source_path?: string | null
   } | null
   modalLoading: boolean
   openModal: (result: SearchResult) => void
@@ -641,21 +648,38 @@ export const useAppStore = create<AppState>((set, get) => ({
   modalOpen: false,
   modalPassage: null,
   modalLoading: false,
-  openModal: (result) => set({
-    modalOpen: true,
-    modalPassage: {
-      idx: result.idx,
-      title: result.title,
-      full_text: result.full_text,
-      prev_idx: result.prev_idx,
-      next_idx: result.next_idx,
-      // Carry split-cart hints from the search result so the modal can render
-      // the "Load full passage from <db>" CTA. paper_id is only set after the
-      // user clicks load-source (via loadSourceForCurrentPassage below).
-      source_db: result.source_db ?? null,
-      paper_id: result.paper_id ?? null,
-    },
-  }),
+  openModal: (result) => {
+    // Constrain the initial PREV/NEXT to stay within the parent file for
+    // local carts that carry per-pattern source_paths. Only clip when we
+    // actually know the neighbor's source: unknown => preserve today's
+    // unconstrained behavior (legacy carts, server-mounted carts).
+    const { activeLocalCart, localCarts } = get()
+    const cart = activeLocalCart ? localCarts.get(activeLocalCart) : null
+    const sourcePaths = cart?.sourcePaths ?? null
+    const currentSource = result.source_path ?? sourcePaths?.[result.idx] ?? null
+    let prev_idx = result.prev_idx
+    let next_idx = result.next_idx
+    if (sourcePaths && currentSource != null) {
+      if (prev_idx != null && sourcePaths[prev_idx] !== currentSource) prev_idx = null
+      if (next_idx != null && sourcePaths[next_idx] !== currentSource) next_idx = null
+    }
+    set({
+      modalOpen: true,
+      modalPassage: {
+        idx: result.idx,
+        title: result.title,
+        full_text: result.full_text,
+        prev_idx,
+        next_idx,
+        // Carry split-cart hints from the search result so the modal can render
+        // the "Load full passage from <db>" CTA. paper_id is only set after the
+        // user clicks load-source (via loadSourceForCurrentPassage below).
+        source_db: result.source_db ?? null,
+        paper_id: result.paper_id ?? null,
+        source_path: currentSource,
+      },
+    })
+  },
   closeModal: () => set({ modalOpen: false, modalPassage: null }),
   navigateModal: async (idx: number) => {
     set({ modalLoading: true })
@@ -670,21 +694,40 @@ export const useAppStore = create<AppState>((set, get) => ({
           const firstNewline = passage.indexOf('\n')
           const title = (firstNewline > 0 ? passage.slice(0, firstNewline) : passage.slice(0, 80)).trim()
           const total = cart.passages.length
+          // Constrain PREV/NEXT to same-source (parent-file boundary) when the
+          // cart carries source_paths.npy. Legacy carts (sourcePaths == null)
+          // fall through to unconstrained neighbor walking.
+          const sourcePaths = cart.sourcePaths ?? null
+          const currentSource = sourcePaths?.[idx] ?? null
+          const rawPrev = idx > 0 ? idx - 1 : null
+          const rawNext = idx < total - 1 ? idx + 1 : null
+          const prev_idx = sourcePaths && currentSource != null && rawPrev != null && sourcePaths[rawPrev] !== currentSource
+            ? null
+            : rawPrev
+          const next_idx = sourcePaths && currentSource != null && rawNext != null && sourcePaths[rawNext] !== currentSource
+            ? null
+            : rawNext
           set({
             modalPassage: {
               idx,
               title,
               full_text: passage,
-              prev_idx: idx > 0 ? idx - 1 : null,
-              next_idx: idx < total - 1 ? idx + 1 : null,
+              prev_idx,
+              next_idx,
               source_db: null,
               paper_id: null,
+              source_path: currentSource,
             },
           })
           return
         }
       }
       const pattern = await api.getPattern(idx)
+      // Server-mounted carts don't currently return per-pattern source_path;
+      // carry the modal's existing source_path forward (unchanged) so any
+      // client-side constraint remains stable. When the backend starts
+      // returning source_path in PatternResponse, prefer that value.
+      const prevSource = get().modalPassage?.source_path ?? null
       set({
         modalPassage: {
           idx: pattern.idx,
@@ -694,6 +737,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           next_idx: pattern.next_idx,
           source_db: pattern.source_db ?? null,
           paper_id: pattern.paper_id ?? null,
+          source_path: prevSource,
         },
       })
     } catch (e) {
@@ -722,6 +766,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           next_idx: pattern.next_idx,
           source_db: pattern.source_db ?? current.source_db ?? null,
           paper_id: pattern.paper_id ?? null,
+          source_path: current.source_path ?? null,
         },
       })
     } catch (e) {

@@ -21,6 +21,7 @@ import {
   type EmbedderBackend,
   type PipelineProgress,
 } from '../cart-builder-v2'
+import { useAppStore } from '../store/appStore'
 
 // 'detecting'      — initial mount, fast adapter check in flight
 // 'probing'        — adapter exists, running tiny real-workload embed to
@@ -143,6 +144,36 @@ export default function BrowserCartBuilder() {
   const [dragOver, setDragOver] = useState(false)
   const [webgpuStatus, setWebgpuStatus] = useState<WebGPUStatus>('detecting')
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  // Fix #11 (corrected 2026-06-30 PM): while the native file picker dialog is
+  // open, the drop zone must reject drag-and-drop. Otherwise the user can
+  // drag files FROM the picker's own file list INTO the drop zone, which is
+  // confusing dual-input UX. Browsers don't fire a clean "picker closed"
+  // event, so we track it via: set true when we call .click(), set false
+  // on onChange (files selected) OR on window focus regain (dialog dismissed
+  // without selection). The window-focus branch has a small delay so onChange
+  // fires first when files WERE selected — otherwise we'd race.
+  const [pickerOpen, setPickerOpen] = useState(false)
+  useEffect(() => {
+    if (!pickerOpen) return
+    const onFocus = () => {
+      // Small delay lets onChange fire first when the user actually picked
+      // files. If onChange runs, it also clears pickerOpen — this handler
+      // then just no-ops. If the user cancelled, onChange never fires and
+      // this handler is the only thing that clears pickerOpen.
+      window.setTimeout(() => setPickerOpen(false), 150)
+    }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [pickerOpen])
+
+  // Fix #10 — Force unmount before build. A user should have to unmount any
+  // currently mounted cart (backend or browser-side LocalCart) before firing a
+  // new build. Prevents the "why did my old cart disappear?" surprise when the
+  // built cart is saved and then mounted, and keeps mental state one-cart-at-a-
+  // time. Backend mount = status.mounted_cartridge; browser mount = activeLocalCart.
+  const backendMounted = useAppStore((s) => s.status?.mounted_cartridge ?? null)
+  const activeLocalCart = useAppStore((s) => s.activeLocalCart)
+  const hasMountedCart = !!backendMounted || !!activeLocalCart
 
   // Two-stage WebGPU capability probe on mount so the backend badge tells the
   // truth instead of advertising green for "adapter exists but inference will
@@ -247,8 +278,40 @@ export default function BrowserCartBuilder() {
     setError(null)
   }
 
+  // Fix #7 — Post-save clean-slate refresh. After the user successfully saves
+  // the built cart to disk, wipe all component state so the tab returns to a
+  // pristine "ready to build a new cart" surface. We do NOT reset the WebGPU
+  // status — it's device-level, not build-specific, and re-probing on every
+  // save would burn 10-30s on the next build.
+  const resetToCleanSlate = () => {
+    setCartName('')
+    setQueued([])
+    setSkippedNotice(null)
+    setProgress(null)
+    setResult(null)
+    setError(null)
+  }
+
+  // Wraps downloadBuiltCart so the clean-slate reset only fires on a genuine
+  // successful save. If showSaveFilePicker throws (user cancelled, permission
+  // denied), we leave the built cart on-screen so they can try again.
+  const handleSaveBundle = async () => {
+    if (!result) return
+    try {
+      await downloadBuiltCart(result)
+      resetToCleanSlate()
+    } catch (e) {
+      // User cancelled the save picker or the browser blocked it. Leave the
+      // result visible; surface any real error to the user.
+      const msg = e instanceof Error ? e.message : String(e)
+      // AbortError is the standard cancel signal from showSaveFilePicker; not
+      // an error worth showing.
+      if (!/abort/i.test(msg)) setError(`Save failed: ${msg}`)
+    }
+  }
+
   const handleBuild = async () => {
-    if (queued.length === 0 || building) return
+    if (queued.length === 0 || building || hasMountedCart) return
     setBuilding(true)
     setError(null)
     setResult(null)
@@ -340,21 +403,35 @@ export default function BrowserCartBuilder() {
       <div
         onDragOver={(e) => {
           e.preventDefault()
-          if (!building) setDragOver(true)
+          // Fix #11 (corrected 2026-06-30 PM): reject drag when picker is open.
+          if (!building && !pickerOpen) setDragOver(true)
         }}
         onDragLeave={() => setDragOver(false)}
         onDrop={(e) => {
           e.preventDefault()
           setDragOver(false)
-          if (!building) handleFiles(e.dataTransfer.files)
+          // Fix #11 (corrected 2026-06-30 PM): reject drop when picker is open —
+          // otherwise a user could drag files FROM the picker INTO the drop zone.
+          if (!building && !pickerOpen) handleFiles(e.dataTransfer.files)
         }}
-        onClick={() => !building && fileInputRef.current?.click()}
+        onClick={() => {
+          // Fix #11 — During an active drag-over, suppress the picker click so
+          // dropping doesn't ALSO open the OS file browser (double-trigger UX).
+          // Browsers fire click after drop in some sequences; gating on dragOver
+          // keeps the drop path clean. Also guard against re-opening the picker
+          // if it's already open (double-click during animation, etc.).
+          if (building || dragOver || pickerOpen) return
+          setPickerOpen(true)
+          fileInputRef.current?.click()
+        }}
         className={`rounded-lg border-2 border-dashed p-6 text-center transition-colors ${
           building
             ? 'border-slate-800 bg-slate-900/40 cursor-not-allowed opacity-60'
-            : dragOver
-              ? 'border-purple-400 bg-purple-500/10 cursor-pointer'
-              : 'border-slate-700 bg-slate-800/30 hover:border-purple-500/60 cursor-pointer'
+            : pickerOpen
+              ? 'border-slate-700 bg-slate-900/40 cursor-not-allowed opacity-60'
+              : dragOver
+                ? 'border-purple-400 bg-purple-500/10 cursor-pointer'
+                : 'border-slate-700 bg-slate-800/30 hover:border-purple-500/60 cursor-pointer'
         }`}
       >
         <input
@@ -363,7 +440,14 @@ export default function BrowserCartBuilder() {
           multiple
           accept={ACCEPT_TYPES}
           className="hidden"
-          onChange={(e) => handleFiles(e.target.files)}
+          onChange={(e) => {
+            // Fix #11 (corrected 2026-06-30 PM): mark picker closed when the
+            // user finishes selecting. This fires before the window-focus
+            // handler's setTimeout, so pickerOpen goes false cleanly whether
+            // the user selected files or cancelled.
+            setPickerOpen(false)
+            handleFiles(e.target.files)
+          }}
         />
         <Upload
           size={28}
@@ -438,9 +522,9 @@ export default function BrowserCartBuilder() {
       {/* Build button */}
       <button
         onClick={handleBuild}
-        disabled={building || queued.length === 0 || !cartName.trim()}
+        disabled={building || queued.length === 0 || !cartName.trim() || hasMountedCart}
         className={`w-full rounded-lg px-4 py-2.5 text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
-          building || queued.length === 0 || !cartName.trim()
+          building || queued.length === 0 || !cartName.trim() || hasMountedCart
             ? 'bg-slate-800/50 border border-slate-700 text-slate-600 cursor-not-allowed'
             : 'bg-purple-500/30 border border-purple-500/50 text-purple-100 hover:bg-purple-500/40'
         }`}
@@ -452,7 +536,12 @@ export default function BrowserCartBuilder() {
         )}
         {building ? 'Building in browser…' : 'Build cart in browser'}
       </button>
-      {!building && !cartName.trim() && (
+      {!building && hasMountedCart && (
+        <div className="text-xs text-amber-400 font-medium px-1 -mt-1">
+          Unmount the current cart ({backendMounted ?? activeLocalCart}) before building a new one.
+        </div>
+      )}
+      {!building && !hasMountedCart && !cartName.trim() && (
         <div className="text-[10px] text-amber-400/80 italic px-1 -mt-1">
           Enter a cart name above before building.
         </div>
@@ -487,6 +576,11 @@ export default function BrowserCartBuilder() {
       )}
 
       {/* Error */}
+      {/* Fix #9 (2026-06-30 PM): error banner has a dismiss X so build errors
+          don't stick around until the next build attempt. Same pattern as the
+          per-file X button in the queued-files list above — small, low-key,
+          shrink-0 so long error text doesn't push it off-frame. Clears
+          progress + error together so the panel returns to its neutral state. */}
       {error && (
         <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 flex items-start gap-2 text-xs">
           <AlertCircle size={14} className="text-rose-400 shrink-0 mt-0.5" />
@@ -496,6 +590,16 @@ export default function BrowserCartBuilder() {
               {error}
             </div>
           </div>
+          <button
+            onClick={() => {
+              setError(null)
+              setProgress(null)
+            }}
+            className="text-rose-400/60 hover:text-rose-200 transition-colors shrink-0 mt-0.5"
+            title="Dismiss"
+          >
+            <X size={14} />
+          </button>
         </div>
       )}
 
@@ -513,9 +617,9 @@ export default function BrowserCartBuilder() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <button
-              onClick={() => { void downloadBuiltCart(result) }}
+              onClick={() => { void handleSaveBundle() }}
               className="px-3 py-1.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-200 text-xs font-medium hover:bg-emerald-500/30 flex items-center gap-1.5 transition-colors"
-              title="Pick a destination folder (Chrome/Edge/Opera 86+) or fall back to your Downloads folder (Firefox / Safari)."
+              title="Pick a destination folder (Chrome/Edge/Opera 86+) or fall back to your Downloads folder (Firefox / Safari). After saving, the tab resets to a clean slate."
             >
               <Download size={12} />
               Save cart bundle…
