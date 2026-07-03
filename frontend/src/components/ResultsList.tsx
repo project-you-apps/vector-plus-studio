@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useAppStore } from '../store/appStore'
 import ResultCard from './ResultCard'
-import { Clock, Filter, Loader2, Search, Zap } from 'lucide-react'
+import { Clock, Loader2, Search, Zap } from 'lucide-react'
 
 const STOP_WORDS = new Set([
   'the', 'and', 'but', 'for', 'nor', 'not', 'yet', 'are', 'was', 'were',
@@ -36,14 +36,32 @@ function textContainsExactPhrase(text: string, phrase: string): boolean {
 }
 
 export default function ResultsList() {
-  const { results, searchModeLabel, searchElapsed, query, status, strictMode, setStrictMode, exactMatch, setExactMatch, searching, searchMode } = useAppStore()
+  // Note: strictMode / exactMatch toggles moved to SearchBar (Andy 2026-07-02);
+  // ResultsList still reads them here to compute filteredResults + the
+  // "N of M results" stat, but the checkboxes themselves live above the TOC now.
+  const { results, searchModeLabel, searchElapsed, query, status, strictMode, exactMatch, searching, searchMode } = useAppStore()
   const activeLocalCart = useAppStore((s) => s.activeLocalCart)
   const localCarts = useAppStore((s) => s.localCarts)
+  const deletedPatterns = useAppStore((s) => s.deletedPatterns)
 
   const keywords = useMemo(() => extractKeywords(query), [query])
 
+  // Andy 2026-07-03 live tombstone filter: when a user edits a passage in
+  // Edit Carts, the old idx gets tombstoned but any results array computed
+  // before the edit still carries it. Filter tombstoned idx out at render
+  // time (LocalCart tombstones for browser mounts, deletedPatterns for
+  // backend mounts) so edits reflect in already-visible results without a
+  // re-search. Untombstoning restores the card on the next render.
+  const tombstonedIdx = useMemo(() => {
+    if (activeLocalCart) {
+      const cart = localCarts.get(activeLocalCart)
+      return cart?.tombstones ?? new Set<number>()
+    }
+    return new Set<number>(deletedPatterns.map((d) => d.idx))
+  }, [activeLocalCart, localCarts, deletedPatterns])
+
   const filteredResults = useMemo(() => {
-    let filtered = results
+    let filtered = results.filter((r) => !tombstonedIdx.has(r.idx))
 
     // Exact phrase match -- full query string must appear as-is
     if (exactMatch && query.trim().length > 0) {
@@ -89,7 +107,7 @@ export default function ResultsList() {
     }
 
     return filtered
-  }, [results, strictMode, exactMatch, keywords, query])
+  }, [results, strictMode, exactMatch, keywords, query, tombstonedIdx])
 
   if (!status?.mounted_cartridge && !activeLocalCart) {
     return (
@@ -141,48 +159,15 @@ export default function ResultsList() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      {/* Stats bar */}
+      {/* Stats bar — checkboxes moved to SearchBar (Andy 2026-07-02). */}
       <div className="flex items-center gap-4 mb-4 pr-4 text-sm text-slate-500">
         <span className="font-medium text-slate-300">
-          {filtered ? `${filteredResults.length} of ${results.length}` : results.length} results
+          {filtered ? `${filteredResults.length} of ${results.length}` : filteredResults.length} results
         </span>
         <span className="flex items-center gap-1">
           <Clock size={12} /> {searchElapsed.toFixed(0)}ms
         </span>
         <span className="px-2 py-0.5 rounded bg-slate-800/60 text-xs">{searchModeLabel}</span>
-
-        {/* Filter toggles */}
-        <label
-          className="ml-auto flex items-center gap-1.5 cursor-pointer select-none"
-          title="When enabled, only results whose text contains at least one query keyword are shown"
-        >
-          <input
-            type="checkbox"
-            checked={strictMode}
-            onChange={(e) => { setStrictMode(e.target.checked); if (e.target.checked) setExactMatch(false) }}
-            className="w-3.5 h-3.5 rounded border-slate-600 bg-slate-800 text-purple-500 focus:ring-purple-500/30 focus:ring-offset-0 cursor-pointer accent-purple-500"
-          />
-          <Filter size={12} className={strictMode ? 'text-purple-400' : 'text-slate-600'} />
-          <span className={`text-xs ${strictMode ? 'text-purple-400' : 'text-slate-600'}`}>
-            Must contain keywords
-          </span>
-        </label>
-
-        <label
-          className="flex items-center gap-1.5 cursor-pointer select-none"
-          title="When enabled, only results containing the exact query phrase are shown (e.g. &quot;Reed Richards&quot; won't match Keith Richards)"
-        >
-          <input
-            type="checkbox"
-            checked={exactMatch}
-            onChange={(e) => { setExactMatch(e.target.checked); if (e.target.checked) setStrictMode(false) }}
-            className="w-3.5 h-3.5 rounded border-slate-600 bg-slate-800 text-purple-500 focus:ring-purple-500/30 focus:ring-offset-0 cursor-pointer accent-purple-500"
-          />
-          <Filter size={12} className={exactMatch ? 'text-amber-400' : 'text-slate-600'} />
-          <span className={`text-xs ${exactMatch ? 'text-amber-400' : 'text-slate-600'}`}>
-            Must be exact match
-          </span>
-        </label>
       </div>
 
       {/* Results */}

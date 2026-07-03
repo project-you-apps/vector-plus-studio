@@ -334,6 +334,30 @@ export async function parseCartNpz(buffer) {
         }
     }
 
+    // Pattern-0 metadata — single-element unicode NPY of a JSON payload
+    // (see cart-builder-v2/writer/npz.ts:pattern0_data). Only present for
+    // browser-built carts 2026-07-02+ (and for server-built carts that ran
+    // through the equivalent writer). Older carts leave pattern0 = null and
+    // the Pattern-0 TOC panel falls back to derived stats.
+    let pattern0 = null;
+    const pattern0Entry = npzEntries['pattern0'];
+    if (pattern0Entry && pattern0Entry.data) {
+        const p0Dtype = pattern0Entry.dtype || '';
+        const p0Match = p0Dtype.match(/^<U(\d+)$/);
+        if (p0Match) {
+            const p0MaxLen = parseInt(p0Match[1], 10);
+            const decoded = parseUnicodeStrings(pattern0Entry.data, p0MaxLen, pattern0Entry.shape);
+            if (decoded.length > 0 && decoded[0]) {
+                try {
+                    pattern0 = JSON.parse(decoded[0]);
+                } catch {
+                    // Malformed JSON — treat as missing rather than crash the mount.
+                    pattern0 = null;
+                }
+            }
+        }
+    }
+
     // Second pass: figures/* entries. parseNpz already inflated them as
     // "raw" Uint8Array (since they don't look like .npy files, parseNpy errors
     // out and we keep the raw bytes). Walk the entry list to collect them
@@ -348,5 +372,5 @@ export async function parseCartNpz(buffer) {
         figures.set(basename, bytes);
     }
 
-    return { embeddings, embeddingsShape: embEntry.shape, passages, sourcePaths, figures };
+    return { embeddings, embeddingsShape: embEntry.shape, passages, sourcePaths, figures, pattern0 };
 }

@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import {
   AlertCircle,
   CheckCircle,
+  ChevronDown,
+  ChevronRight,
   Cpu,
   Download,
   FileText,
@@ -22,6 +24,12 @@ import {
   type PipelineProgress,
 } from '../cart-builder-v2'
 import { useAppStore } from '../store/appStore'
+import {
+  buildCart as apiBuildCart,
+  clearWorkspace as apiClearWorkspace,
+  getBuildStatus as apiGetBuildStatus,
+  uploadFiles as apiUploadFiles,
+} from '../api/cartbuilder'
 
 // 'detecting'      — initial mount, fast adapter check in flight
 // 'probing'        — adapter exists, running tiny real-workload embed to
@@ -33,6 +41,18 @@ import { useAppStore } from '../store/appStore'
 // 'wasm-fallback'  — probe said WebGPU was fine, but device hung mid-build;
 //                    failover swap happened, the build continued on WASM
 type WebGPUStatus = 'detecting' | 'probing' | 'webgpu' | 'wasm' | 'wasm-fallback'
+
+// Delegated-build progress phases + a stage-weighted overall percentage.
+// clearing: 0-5, uploading: 5-30 (proportional to files done), building: 30-100.
+// Kept separate from PipelineProgress so the browser path's percentage
+// calculations don't need to grow a second case.
+interface DesktopBuildProgress {
+  phase: 'clearing' | 'uploading' | 'building' | 'done' | 'error'
+  message: string
+  pct: number
+  chunksDone?: number
+  chunksTotal?: number
+}
 
 // Block 4 (UI integration) — self-contained browser-side cart builder.
 // Renders inside CartBuilderScreen. Uses Block 1-3 pipeline:
@@ -143,6 +163,14 @@ export default function BrowserCartBuilder() {
   const [error, setError] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const [webgpuStatus, setWebgpuStatus] = useState<WebGPUStatus>('detecting')
+  // Optional Pattern-0 metadata captured via the "Cart metadata" disclosure.
+  // Collapsed by default so the main Cart Name + Drop Zone flow stays uncluttered;
+  // empty inputs let the server apply generic defaults for description/agent_briefing.
+  const [metadataOpen, setMetadataOpen] = useState(false)
+  const [metaDescription, setMetaDescription] = useState('')
+  const [metaAgentBriefing, setMetaAgentBriefing] = useState('')
+  const [metaTags, setMetaTags] = useState('')
+  const [metaOwner, setMetaOwner] = useState('')
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   // Fix #11 (corrected 2026-06-30 PM): while the native file picker dialog is
   // open, the drop zone must reject drag-and-drop. Otherwise the user can
@@ -174,6 +202,30 @@ export default function BrowserCartBuilder() {
   const backendMounted = useAppStore((s) => s.status?.mounted_cartridge ?? null)
   const activeLocalCart = useAppStore((s) => s.activeLocalCart)
   const hasMountedCart = !!backendMounted || !!activeLocalCart
+  // When the Desktop Cart Builder exe is paired, Build delegates to the
+  // loopback exe (native ONNX + GPU cooldown built-in). Unpaired browser
+  // sessions run the client-side WebGPU/WASM pipeline. Header + button label
+  // + Pattern-0 creator all flip on this same flag so the paired state is
+  // consistent across the surface. Primitive selector — Zustand's Object.is
+  // equality re-renders on 'detected-paired' <-> other-state transitions.
+  const desktopHelperState = useAppStore((s) => s.desktopHelperState)
+  const openDesktopHelperPairModal = useAppStore((s) => s.openDesktopHelperPairModal)
+  const isDesktopPaired = desktopHelperState === 'detected-paired'
+  const buildLabelIdle = isDesktopPaired ? 'Build cart on local drive' : 'Build cart in browser'
+  const buildCreator = isDesktopPaired ? 'Cart Builder (local)' : 'Cart Builder (browser)'
+
+  // Delegated-path state. Kept separate from the browser pipeline's
+  // (progress, result) so the two paths don't leak into each other's UI
+  // reducers. desktopProgress mirrors the exe's /build/status shape into a
+  // display-ready form; desktopResult holds the on-disk cart_path returned
+  // when status flips to 'done'.
+  const [desktopProgress, setDesktopProgress] = useState<DesktopBuildProgress | null>(null)
+  const [desktopResult, setDesktopResult] = useState<{
+    cartPath: string
+    cartSizeMb: number | null
+    chunksTotal: number | null
+  } | null>(null)
+  const [repairPromptOpen, setRepairPromptOpen] = useState(false)
 
   // Two-stage WebGPU capability probe on mount so the backend badge tells the
   // truth instead of advertising green for "adapter exists but inference will
@@ -276,6 +328,9 @@ export default function BrowserCartBuilder() {
     setProgress(null)
     setResult(null)
     setError(null)
+    setDesktopProgress(null)
+    setDesktopResult(null)
+    setRepairPromptOpen(false)
   }
 
   // Fix #7 — Post-save clean-slate refresh. After the user successfully saves
@@ -290,6 +345,14 @@ export default function BrowserCartBuilder() {
     setProgress(null)
     setResult(null)
     setError(null)
+    setMetadataOpen(false)
+    setMetaDescription('')
+    setMetaAgentBriefing('')
+    setMetaTags('')
+    setMetaOwner('')
+    setDesktopProgress(null)
+    setDesktopResult(null)
+    setRepairPromptOpen(false)
   }
 
   // Wraps downloadBuiltCart so the clean-slate reset only fires on a genuine
@@ -315,22 +378,157 @@ export default function BrowserCartBuilder() {
     setBuilding(true)
     setError(null)
     setResult(null)
+    setDesktopResult(null)
+    setDesktopProgress(null)
+    setRepairPromptOpen(false)
+    const sanitizedName =
+      cartName.trim().replace(/[^A-Za-z0-9_-]/g, '_') || 'my-cart'
+    // Parse tags from the comma-separated input; drop empties/whitespace-only
+    // entries so the pattern0_data tags list is a clean array of strings.
+    const parsedTags = metaTags
+      .split(',')
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0)
+    const meta = {
+      description: metaDescription.trim(),
+      agent_briefing: metaAgentBriefing.trim(),
+      owner: metaOwner.trim(),
+      tags: parsedTags,
+      creator: buildCreator,
+    }
     try {
-      const sanitizedName =
-        cartName.trim().replace(/[^A-Za-z0-9_-]/g, '_') || 'my-cart'
-      const buildResult = await buildCartFromFiles(
-        queued.map((q) => q.file),
-        {
-          cartName: sanitizedName,
-          onProgress: setProgress,
-          onBackendChange: handleBackendChange,
-        }
-      )
-      setResult(buildResult.cart)
+      if (isDesktopPaired) {
+        await runDesktopBuild(sanitizedName, meta)
+      } else {
+        const buildResult = await buildCartFromFiles(
+          queued.map((q) => q.file),
+          {
+            cartName: sanitizedName,
+            onProgress: setProgress,
+            onBackendChange: handleBackendChange,
+            buildOptions: {
+              pattern0Meta: meta,
+            },
+          }
+        )
+        setResult(buildResult.cart)
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      const msg = e instanceof Error ? e.message : String(e)
+      setError(msg)
+      // The api/cartbuilder client's shared 401 handler already flipped the
+      // store to 'detected-unpaired' before the fetch threw. When we detect
+      // that shape of failure, surface the re-pair CTA in-line instead of
+      // leaving the user staring at a raw "Cart Builder API error 401" that
+      // implies a build failure rather than an auth expiry.
+      if (isDesktopPaired && /\b401\b/.test(msg)) {
+        setRepairPromptOpen(true)
+      }
     } finally {
       setBuilding(false)
+    }
+  }
+
+  // Delegated build path. The exe mounts the same /api/cartbuilder/*
+  // FastAPI router the VPS ships (see api/cartbuilder/__init__.py); the API
+  // client (api/cartbuilder.ts) resolveTarget() routes to loopback + Bearer
+  // when 'detected-paired', so the same request functions hit the exe. The
+  // exe handles the parse/embed/write pipeline natively (ONNX + built-in
+  // GPU cooldown) and reports progress via /build/status polling.
+  const runDesktopBuild = async (
+    sanitizedName: string,
+    meta: {
+      description: string
+      agent_briefing: string
+      owner: string
+      tags: string[]
+      creator: string
+    },
+  ) => {
+    // Phase 1: reset server-side workspace so leftover files from a prior
+    // session in the same exe process don't leak into this build.
+    setDesktopProgress({ phase: 'clearing', message: 'Preparing workspace…', pct: 2 })
+    await apiClearWorkspace()
+
+    // Phase 2: multipart-upload the queued files. One file per request so
+    // we can surface a per-file progress line — the exe parses + chunks on
+    // upload so uploading N files sequentially also lets the user see any
+    // per-file parse error before the whole build kicks off. Upload phase
+    // spans 5-30% of the overall bar.
+    const total = queued.length
+    for (let i = 0; i < total; i++) {
+      const q = queued[i]
+      const uploadPct = 5 + Math.round(((i + 1) / total) * 25)
+      setDesktopProgress({
+        phase: 'uploading',
+        message: `Uploading ${q.file.name} (${i + 1}/${total})`,
+        pct: uploadPct,
+      })
+      await apiUploadFiles([q.file])
+    }
+
+    // Phase 3: kick off the async build. The exe returns immediately after
+    // spawning the background thread; the actual embed/write runs off-thread
+    // and is reflected by /build/status transitions.
+    setDesktopProgress({
+      phase: 'building',
+      message: 'Building cart on local drive…',
+      pct: 30,
+    })
+    await apiBuildCart(sanitizedName, {
+      description: meta.description,
+      agent_briefing: meta.agent_briefing,
+      owner: meta.owner,
+      tags: meta.tags,
+      creator: meta.creator,
+    })
+
+    // Phase 4: poll /build/status at 500ms until done or error. The exe's
+    // build_state.progress reports 0..1 across the whole embed+write span;
+    // we map that onto the 30-100% slice of our display bar. Loop exit is
+    // via return (done) or throw (error) — never falls through.
+    for (;;) {
+      await sleep(500)
+      const s = await apiGetBuildStatus()
+      if (s.status === 'done') {
+        setDesktopProgress({
+          phase: 'done',
+          message: 'Build complete',
+          pct: 100,
+          chunksDone: s.chunks_done,
+          chunksTotal: s.chunks_total,
+        })
+        setDesktopResult({
+          cartPath: s.cart_path ?? '(unknown path)',
+          cartSizeMb: typeof (s as unknown as { cart_size_mb?: number }).cart_size_mb === 'number'
+            ? (s as unknown as { cart_size_mb?: number }).cart_size_mb ?? null
+            : null,
+          chunksTotal: s.chunks_total ?? null,
+        })
+        return
+      }
+      if (s.status === 'error') {
+        const errMsg = s.error || 'Build failed on the desktop helper'
+        setDesktopProgress({ phase: 'error', message: errMsg, pct: 0 })
+        throw new Error(errMsg)
+      }
+      // Still 'building' or 'idle' — feed progress + chunk counters back
+      // into the display. Some transient 'idle' ticks are expected right
+      // after the /build POST returns, before the worker thread flips
+      // status to 'building'.
+      const buildPct = 30 + Math.round(Math.min(Math.max(s.progress ?? 0, 0), 1) * 70)
+      const done = s.chunks_done
+      const totalChunks = s.chunks_total
+      const message = totalChunks
+        ? `Embedding ${done ?? 0}/${totalChunks} chunks…`
+        : 'Building cart on local drive…'
+      setDesktopProgress({
+        phase: 'building',
+        message,
+        pct: buildPct,
+        chunksDone: done,
+        chunksTotal: totalChunks,
+      })
     }
   }
 
@@ -343,11 +541,11 @@ export default function BrowserCartBuilder() {
         <Globe size={22} className="text-purple-300 mt-0.5 flex-shrink-0" />
         <div className="flex-1">
           <h2 className="text-base font-semibold text-purple-100 flex items-center gap-2 flex-wrap">
-            Build a cart in your browser
+            {isDesktopPaired ? 'Build a cart on your local drive' : 'Build a cart in your browser'}
             <span className="text-[10px] uppercase tracking-wider text-purple-300 bg-purple-500/20 px-2 py-0.5 rounded font-mono">
               new
             </span>
-            <BackendBadge status={webgpuStatus} />
+            {!isDesktopPaired && <BackendBadge status={webgpuStatus} />}
             <span
               className="text-[10px] uppercase tracking-wider text-cyan-300 bg-cyan-500/15 border border-cyan-500/40 px-2 py-0.5 rounded font-mono"
               title="Built carts download to your machine. CLOUD mode (carts persist in your own cloud data store — R2, S3, or your hosted Vector+ Studio instance) lands with v1.2."
@@ -374,9 +572,9 @@ export default function BrowserCartBuilder() {
             </span>
           </h2>
           <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-            Your documents never leave your machine — parsing, embedding, and packaging all run client-side via WebGPU
-            (with WASM fallback). The finished cart downloads to your machine — mount it locally, on the public demo,
-            or on any Vector+ Studio instance you control.
+            {isDesktopPaired
+              ? 'Your documents never leave your machine — the paired Desktop Cart Builder handles parsing, embedding, and packaging natively (ONNX GPU with built-in cooldown). The finished cart is written straight to your local drive.'
+              : 'Your documents never leave your machine — parsing, embedding, and packaging all run client-side via WebGPU (with WASM fallback). The finished cart downloads to your machine — mount it locally, on the public demo, or on any Vector+ Studio instance you control.'}
           </p>
         </div>
       </div>
@@ -397,6 +595,88 @@ export default function BrowserCartBuilder() {
         <div className="text-[10px] text-slate-600 mt-1 italic">
           alphanumeric, dashes, underscores only — sanitized at build time
         </div>
+      </div>
+
+      {/* Cart metadata (optional) — collapsed by default. Values flow into the
+          built cart's Pattern-0 so the TOC panel can surface them at mount time.
+          Empty description / agent briefing get generic server-side defaults;
+          tags + owner stay empty when the user leaves them blank. */}
+      <div className="rounded-lg border border-slate-800 bg-slate-900/40">
+        <button
+          type="button"
+          onClick={() => setMetadataOpen((v) => !v)}
+          disabled={building}
+          aria-expanded={metadataOpen}
+          className="w-full px-3 py-2 flex items-center gap-2 text-xs text-slate-300 hover:text-slate-100 disabled:opacity-50"
+        >
+          {metadataOpen ? (
+            <ChevronDown size={12} className="text-slate-500" />
+          ) : (
+            <ChevronRight size={12} className="text-slate-500" />
+          )}
+          <span className="uppercase tracking-wider text-[10px] text-slate-500">
+            Cart metadata
+          </span>
+          <span className="text-[10px] text-slate-600 italic normal-case">
+            (optional)
+          </span>
+        </button>
+        {metadataOpen && (
+          <div className="px-3 pb-3 pt-1 space-y-3 border-t border-slate-800">
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">
+                Description
+              </label>
+              <textarea
+                value={metaDescription}
+                onChange={(e) => setMetaDescription(e.target.value)}
+                placeholder="Describe what this cart contains. Leave blank for a generic description."
+                disabled={building}
+                rows={3}
+                className="w-full rounded-lg bg-slate-950/60 border border-slate-800 px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-purple-500/60 disabled:opacity-50 resize-y"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">
+                Agent briefing
+              </label>
+              <textarea
+                value={metaAgentBriefing}
+                onChange={(e) => setMetaAgentBriefing(e.target.value)}
+                placeholder="How should agents use this cart? Leave blank for a generic briefing."
+                disabled={building}
+                rows={5}
+                className="w-full rounded-lg bg-slate-950/60 border border-slate-800 px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-purple-500/60 disabled:opacity-50 resize-y"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">
+                Tags
+              </label>
+              <input
+                type="text"
+                value={metaTags}
+                onChange={(e) => setMetaTags(e.target.value)}
+                placeholder="comma, separated, tags"
+                disabled={building}
+                className="w-full rounded-lg bg-slate-950/60 border border-slate-800 px-3 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-purple-500/60 disabled:opacity-50"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 block">
+                Owner
+              </label>
+              <input
+                type="text"
+                value={metaOwner}
+                onChange={(e) => setMetaOwner(e.target.value)}
+                placeholder="Leave blank to use your account name."
+                disabled={building}
+                className="w-full rounded-lg bg-slate-950/60 border border-slate-800 px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-purple-500/60 disabled:opacity-50"
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Drop zone */}
@@ -534,7 +814,9 @@ export default function BrowserCartBuilder() {
         ) : (
           <Hammer size={14} />
         )}
-        {building ? 'Building in browser…' : 'Build cart in browser'}
+        {building
+          ? (isDesktopPaired ? 'Building on local drive…' : 'Building in browser…')
+          : buildLabelIdle}
       </button>
       {!building && hasMountedCart && (
         <div className="text-xs text-amber-400 font-medium px-1 -mt-1">
@@ -547,8 +829,8 @@ export default function BrowserCartBuilder() {
         </div>
       )}
 
-      {/* Progress */}
-      {building && progress && (
+      {/* Progress — browser pipeline */}
+      {building && progress && !isDesktopPaired && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 space-y-2">
           <div className="flex items-center gap-2 text-xs">
             <Loader2 size={12} className="text-amber-400 animate-spin shrink-0" />
@@ -572,6 +854,37 @@ export default function BrowserCartBuilder() {
               />
             </div>
           )}
+        </div>
+      )}
+
+      {/* Progress — delegated desktop path. Kept in sync with the exe's
+          /build/status polling loop; phase drives the badge, pct drives the
+          bar, chunks_done/total shows when the exe reports them. */}
+      {building && desktopProgress && isDesktopPaired && (
+        <div className="rounded-lg border border-purple-500/30 bg-purple-500/5 p-3 space-y-2">
+          <div className="flex items-center gap-2 text-xs">
+            <Loader2 size={12} className="text-purple-300 animate-spin shrink-0" />
+            <span className="text-purple-200 font-mono uppercase tracking-wider text-[10px]">
+              {desktopProgress.phase}
+            </span>
+            <span className="text-slate-400 font-mono truncate flex-1">
+              {desktopProgress.message}
+            </span>
+            <span className="text-purple-300 font-mono shrink-0">
+              {desktopProgress.pct}%
+            </span>
+          </div>
+          <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-gradient-to-r from-purple-400 to-indigo-500 transition-all duration-300"
+              style={{ width: `${desktopProgress.pct}%` }}
+            />
+          </div>
+          {desktopProgress.chunksTotal ? (
+            <div className="text-[10px] text-slate-500 font-mono">
+              {desktopProgress.chunksDone ?? 0}/{desktopProgress.chunksTotal} chunks
+            </div>
+          ) : null}
         </div>
       )}
 
@@ -603,7 +916,40 @@ export default function BrowserCartBuilder() {
         </div>
       )}
 
-      {/* Result */}
+      {/* Re-pair prompt — surfaced when the exe returns 401 mid-build (usually
+          because the exe restarted between pair and this call, or the persisted
+          token was stale). The api/cartbuilder client's shared handler already
+          flipped the store to 'detected-unpaired'; this banner just makes the
+          recovery obvious instead of leaving the user staring at a raw 401. */}
+      {repairPromptOpen && !building && (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 flex items-start gap-2 text-xs">
+          <AlertCircle size={14} className="text-amber-400 shrink-0 mt-0.5" />
+          <div className="text-amber-200 min-w-0 flex-1">
+            <div className="font-medium mb-0.5">Desktop helper needs re-pairing</div>
+            <div className="text-amber-300/80 mb-2">
+              The exe rejected the saved pairing token — it may have restarted since the last pair. Re-pair to continue building on your local drive, or the build will fall back to the browser pipeline.
+            </div>
+            <button
+              onClick={() => {
+                setRepairPromptOpen(false)
+                openDesktopHelperPairModal()
+              }}
+              className="px-2.5 py-1 rounded bg-amber-500/20 border border-amber-500/40 text-amber-200 text-xs font-medium hover:bg-amber-500/30"
+            >
+              Re-pair Desktop Helper
+            </button>
+          </div>
+          <button
+            onClick={() => setRepairPromptOpen(false)}
+            className="text-amber-400/60 hover:text-amber-200 transition-colors shrink-0 mt-0.5"
+            title="Dismiss"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* Result — browser pipeline. Local blob → user picks save destination. */}
       {result && !building && (
         <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 space-y-2">
           <div className="flex items-center gap-2 text-sm flex-wrap">
@@ -630,8 +976,48 @@ export default function BrowserCartBuilder() {
           </div>
         </div>
       )}
+
+      {/* Result — delegated desktop path. The exe writes the cart to disk
+          directly (default: ~/Downloads, or whatever save_dir the user last
+          picked), so we don't trigger a browser download — that would produce
+          a duplicate. Just surface the on-disk path so Andy can find it. */}
+      {desktopResult && !building && (
+        <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 space-y-2">
+          <div className="flex items-center gap-2 text-sm flex-wrap">
+            <CheckCircle size={14} className="text-emerald-400 shrink-0" />
+            <span className="text-emerald-200 font-medium">Cart saved to local drive</span>
+            {desktopResult.chunksTotal !== null && (
+              <span className="text-slate-400 font-mono text-[10px] ml-auto">
+                {desktopResult.chunksTotal} chunks
+                {desktopResult.cartSizeMb !== null ? ` · ${desktopResult.cartSizeMb.toFixed(2)} MB` : ''}
+              </span>
+            )}
+          </div>
+          <div className="text-[11px] text-slate-300 font-mono break-all bg-slate-950/40 border border-slate-800 rounded px-2 py-1">
+            {desktopResult.cartPath}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={resetToCleanSlate}
+              className="px-3 py-1.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-200 text-xs font-medium hover:bg-emerald-500/30"
+            >
+              Build another cart
+            </button>
+            <span className="text-[10px] text-slate-500">
+              Mount from the Search screen to try it out.
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   )
+}
+
+// Timer-based sleep for the /build/status polling loop. Kept as a
+// module-local helper rather than pulling in a scheduler dependency —
+// this is the only place we need it.
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 // WebGPU/WASM status badge. Surfaces the embedder backend before the user

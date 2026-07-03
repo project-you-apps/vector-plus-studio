@@ -1,5 +1,5 @@
-import { lazy, Suspense } from 'react'
-import { Hammer, Loader2 } from 'lucide-react'
+import { lazy, Suspense, useEffect } from 'react'
+import { Hammer, Loader2, Cpu, RefreshCw } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { useCartBuilderStore } from '../store/cartBuilderStore'
 import CartBrowser from './CartBrowser'
@@ -27,6 +27,17 @@ const BrowserCartBuilder = lazy(() => import('./BrowserCartBuilder'))
 export default function CartBuilderScreen() {
   const readOnlyMode = useAppStore((s) => s.status?.read_only_mode ?? false)
   const refreshBrowser = useCartBuilderStore((s) => s.refreshBrowser)
+  const detectDesktopHelper = useAppStore((s) => s.detectDesktopHelper)
+  const desktopHelperState = useAppStore((s) => s.desktopHelperState)
+  const openDesktopHelperPairModal = useAppStore((s) => s.openDesktopHelperPairModal)
+
+  // Probe for the Desktop Cart Builder exe when the user lands on this tab.
+  // 1-sec timeout inside the store action; failure is silent (badge falls
+  // through to GPU/WebGPU/CPU). We fire on mount rather than app boot so
+  // Search-only sessions never do a loopback probe (Andy 2026-07-01).
+  useEffect(() => {
+    void detectDesktopHelper()
+  }, [detectDesktopHelper])
 
   return (
     <main className="flex-1 flex flex-col p-6 overflow-y-auto">
@@ -41,6 +52,22 @@ export default function CartBuilderScreen() {
             Drag-and-drop documents to build a Membot brain cartridge — entirely in your browser.
           </p>
         </div>
+
+        {/* Desktop Helper status banner — Andy 2026-07-02. The header
+            BackendBadge is generic; Cart Builder specifically needs to show
+            whether Build will route to the local exe or run in the browser.
+            Detection re-fires on tab mount (see useEffect above); the
+            Recheck button lets the user re-probe after starting the exe
+            without leaving + returning to the tab.
+            Rendered as a full-width banner (Andy 2026-07-02 revisit — the
+            prior corner-pill was easy to miss and users were confused when
+            the header BackendBadge kept reading GPU). Hidden only in the
+            'unknown' pre-detection flicker window. */}
+        <DesktopHelperStatusPill
+          state={desktopHelperState}
+          onPair={openDesktopHelperPairModal}
+          onRecheck={() => void detectDesktopHelper()}
+        />
 
         {/* Browser-side cart builder. WebGPU pipeline with WASM fallback,
             self-contained: parses → chunks → embeds → packages → downloads. */}
@@ -81,5 +108,104 @@ export default function CartBuilderScreen() {
       {/* FolderPickerModal lives at App level (App.tsx) — it's store-driven
           and used by CartBrowser from both Cart Builder AND Edit Carts. */}
     </main>
+  )
+}
+
+// Full-width banner telling the user whether Build will run natively on
+// their GPU via the paired Desktop Cart Builder exe, or fall back to the
+// browser. Color-coded per state and left-anchored with a Recheck button
+// on the right so users can re-probe after starting the exe. Hidden in
+// 'unknown' state to avoid flashing before detection fires.
+function DesktopHelperStatusPill({
+  state,
+  onPair,
+  onRecheck,
+}: {
+  state: 'unknown' | 'detecting' | 'not-found' | 'detected-unpaired' | 'detected-paired'
+  onPair: () => void
+  onRecheck: () => void
+}) {
+  if (state === 'unknown') return null
+
+  // Shared banner shell — colors + interior swapped per state below.
+  const bannerBase = 'flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl border w-full'
+
+  if (state === 'detecting') {
+    return (
+      <div className={`${bannerBase} bg-slate-800/60 border-slate-700/50 text-slate-300`}>
+        <div className="flex items-center gap-2 text-sm">
+          <Loader2 size={14} className="animate-spin text-slate-400" />
+          <span>Checking for Desktop Helper…</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (state === 'detected-paired') {
+    return (
+      <div
+        className={`${bannerBase} bg-purple-500/10 border-purple-500/50`}
+        title="Builds run natively on your GPU via the local exe."
+      >
+        <div className="flex items-center gap-2 text-sm">
+          <Cpu size={14} className="text-purple-300" />
+          <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
+          <span className="font-semibold text-purple-200">Desktop Helper: Connected</span>
+          <span className="text-purple-300/70">— builds run on your GPU</span>
+        </div>
+        <RecheckButton onRecheck={onRecheck} />
+      </div>
+    )
+  }
+
+  if (state === 'detected-unpaired') {
+    return (
+      <div className={`${bannerBase} bg-amber-500/10 border-amber-500/50`}>
+        <button
+          type="button"
+          onClick={onPair}
+          className="flex items-center gap-2 text-sm hover:opacity-80 transition-opacity"
+          title="Desktop Cart Builder detected on this machine — click to pair"
+        >
+          <Cpu size={14} className="text-amber-400" />
+          <span className="w-2 h-2 rounded-full bg-amber-400" />
+          <span className="font-semibold text-amber-300">Desktop Helper: Detected</span>
+          <span className="text-amber-300/70">(click to pair)</span>
+        </button>
+        <RecheckButton onRecheck={onRecheck} />
+      </div>
+    )
+  }
+
+  // state === 'not-found' — running in browser only. Kept prominent so
+  // Andy knows why the header BackendBadge shows GPU/WebGPU instead of
+  // DESKTOP HELPER (2026-07-02 confusion).
+  return (
+    <div
+      className={`${bannerBase} bg-slate-800/60 border-slate-700/50`}
+      title="No Desktop Cart Builder detected on 127.0.0.1:7878 — builds run in your browser via WebGPU/WASM."
+    >
+      <div className="flex items-center gap-2 text-sm">
+        <Cpu size={14} className="text-slate-400" />
+        <span className="w-2 h-2 rounded-full bg-slate-500" />
+        <span className="font-semibold text-slate-300">Desktop Helper: Not detected</span>
+        <span className="text-slate-500">— running in browser (WebGPU/WASM)</span>
+      </div>
+      <RecheckButton onRecheck={onRecheck} />
+    </div>
+  )
+}
+
+function RecheckButton({ onRecheck }: { onRecheck: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onRecheck}
+      className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-slate-300 hover:text-slate-100 hover:bg-slate-700/40 transition-colors shrink-0"
+      title="Re-probe 127.0.0.1:7878 for the Desktop Cart Builder exe"
+    >
+      <RefreshCw size={12} />
+      Recheck
+    </button>
   )
 }

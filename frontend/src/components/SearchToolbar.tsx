@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, Database, FolderOpen, Loader2, Trash2, Upload, Zap, Footprints, X } from 'lucide-react'
+import { BookOpen, ChevronDown, Database, FolderOpen, Loader2, Trash2, Upload, Zap, Footprints, X } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { useCartBuilderStore } from '../store/cartBuilderStore'
 import type { SearchMode } from '../api/types'
@@ -30,6 +30,7 @@ export default function SearchToolbar() {
     walkTrail, clearWalk, restoreTrailStep,
     localCarts, activeLocalCart, localCartLoading,
     mountLocalCart, unmountLocalCart, selectLocalCart,
+    showTocPanel, setShowTocPanel,
   } = useAppStore()
   const localFileInputRef = useRef<HTMLInputElement>(null)
   const [walkTrailOpen, setWalkTrailOpen] = useState(false)
@@ -416,6 +417,25 @@ export default function SearchToolbar() {
         <span className="text-xs text-slate-500 font-mono">
           {status.pattern_count.toLocaleString()} patterns
         </span>
+      )}
+
+      {/* Pattern-0 button — return the Search tab to the TOC view after a
+          search. Visible only when a cart is mounted (server or local). When
+          the TOC is already visible, dims to signal "already here." */}
+      {(status?.mounted_cartridge || activeLocalCart) && (
+        <button
+          onClick={() => setShowTocPanel(true)}
+          disabled={showTocPanel}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+            showTocPanel
+              ? 'border-slate-800 bg-slate-800/20 text-slate-500 cursor-default'
+              : 'border-slate-700 bg-slate-800/40 hover:bg-slate-800/70 hover:border-purple-500/40 text-slate-200'
+          }`}
+          title={showTocPanel ? 'Pattern-0 TOC is already visible' : 'Return to the Pattern-0 table of contents for this cart'}
+        >
+          <BookOpen size={14} className={showTocPanel ? 'text-slate-500' : 'text-purple-400'} />
+          <span className="font-medium">Pattern-0</span>
+        </button>
       )}
 
       {/* Search mode dropdown */}

@@ -658,7 +658,9 @@ export default function CRUDScreen() {
                 specific single file") flows through here: lists every distinct
                 sourcePath in the cart with its active+total passage counts and
                 a Delete-file button that tombstones every passage from that
-                source. */}
+                source. Clicking a row drills into a per-file passages view
+                (Andy 2026-06-28) so individual passages can be edited or
+                tombstoned without leaving Edit Carts. */}
             {isLocalMount && activeLocalCart && (
               <SourceFilesPanel
                 sources={localCartListSources()}
@@ -1039,10 +1041,17 @@ function ActivityLog({ entries }: { entries: ActivityEntry[] }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SourceFilesPanel — for LocalCart-mounted carts only. Lists each unique
-// source file in the cart with its passage counts and a Delete-file button
-// that tombstones every passage from that file. Demo step 6's "delete the
-// specific single file" UX lives here.
+// SourceFilesPanel — for LocalCart-mounted carts only.
+//
+// Two view modes (Andy 2026-06-28 spec):
+//   • list — every unique source file with active/total counts + Delete-file
+//   • drill — one file's passages, paginated 25/page with per-row Edit +
+//             Tombstone/Restore. Other files hide while drilled.
+//
+// Drill state is component-local so browsing back and forth doesn't affect
+// the rest of the screen. Pagination block is lifted verbatim from the
+// backend PassageBrowser (PASSAGE_PAGE_SIZE, Prev/Next/jump-to-page) so the
+// muscle memory carries over.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function SourceFilesPanel({
@@ -1052,12 +1061,211 @@ function SourceFilesPanel({
   sources: Array<{ sourcePath: string; count: number; activeCount: number }>
   onDeleteSource: (sourcePath: string, activeCount: number) => void
 }) {
+  const [drillPath, setDrillPath] = useState<string | null>(null)
+  const [drillOffset, setDrillOffset] = useState(0)
+  const [drillPageJump, setDrillPageJump] = useState('')
+
+  const listPassagesBySource = useAppStore((s) => s.localCartListPassagesBySource)
+  const openEditor = useAppStore((s) => s.openEditor)
+  const localCartTombstone = useAppStore((s) => s.localCartTombstone)
+  const localCartRestore = useAppStore((s) => s.localCartRestore)
+  // Trigger re-render when the active cart's tombstones/passages mutate. The
+  // listPassagesBySource selector reads from the store internally, but React
+  // only re-renders this panel if the selector's *identity* or a subscribed
+  // value changes — subscribing to activeLocalCart keeps the drill view in
+  // sync with edits.
+  useAppStore((s) => s.activeLocalCart)
+  useAppStore((s) => s.localCarts)
+
   // Sort by activeCount descending (most-impactful files first), with all-
   // tombstoned files at the bottom and same-counts alphabetically.
   const sorted = [...sources].sort((a, b) => {
     if (b.activeCount !== a.activeCount) return b.activeCount - a.activeCount
     return a.sourcePath.localeCompare(b.sourcePath)
   })
+
+  // ── Drill view ─────────────────────────────────────────────────────────
+  if (drillPath !== null) {
+    const window = listPassagesBySource(drillPath, drillOffset, PASSAGE_PAGE_SIZE)
+    const total = window.total
+    const totalPages = Math.max(1, Math.ceil(total / PASSAGE_PAGE_SIZE))
+    const currentPage = Math.floor(drillOffset / PASSAGE_PAGE_SIZE) + 1
+    const goPrev = () => setDrillOffset(Math.max(0, drillOffset - PASSAGE_PAGE_SIZE))
+    const goNext = () =>
+      setDrillOffset(Math.min((totalPages - 1) * PASSAGE_PAGE_SIZE, drillOffset + PASSAGE_PAGE_SIZE))
+    const goPage = (page: number) => {
+      const clamped = Math.max(1, Math.min(totalPages, page))
+      setDrillOffset((clamped - 1) * PASSAGE_PAGE_SIZE)
+    }
+    const exitDrill = () => {
+      setDrillPath(null)
+      setDrillOffset(0)
+      setDrillPageJump('')
+    }
+    return (
+      <div className="rounded-lg border border-cyan-500/40 bg-cyan-500/5">
+        {/* Drill header — back-arrow · SOURCE FILE label · filename · PASSAGES
+            counts. Cyan accent (matches parent list) and light-mode-safe
+            text-slate-100 on the filename per 6/28 contrast lesson. */}
+        <div className="px-4 py-2 border-b border-cyan-500/40 flex items-center gap-3">
+          <button
+            onClick={exitDrill}
+            className="flex items-center gap-1 px-2 py-1 rounded text-[11px] uppercase tracking-wider
+                       bg-cyan-500/10 border border-cyan-500/30 text-cyan-200
+                       hover:bg-cyan-500/20 hover:text-cyan-100 transition-colors"
+            title="Back to Source files list"
+          >
+            <ChevronLeft size={11} />
+            Back
+          </button>
+          <span className="text-[10px] uppercase tracking-wider text-cyan-400 shrink-0">
+            Source file
+          </span>
+          <span
+            className="text-xs font-mono text-slate-100 truncate flex-1"
+            title={drillPath}
+          >
+            {drillPath}
+          </span>
+          <span className="text-[10px] uppercase tracking-wider text-cyan-400 shrink-0">
+            Passages
+          </span>
+          <span className="text-[10px] font-mono text-slate-400 shrink-0">
+            ({window.activeCount} active / {total} total)
+          </span>
+        </div>
+
+        {/* Per-passage rows */}
+        <div className="max-h-[320px] overflow-y-auto divide-y divide-cyan-500/20">
+          {total === 0 ? (
+            <div className="p-4 text-center text-xs text-slate-500 italic">
+              No passages found for this source file.
+            </div>
+          ) : (
+            window.passages.map((p) => (
+              <div
+                key={p.idx}
+                className={`px-4 py-2 flex items-start gap-3 text-xs ${
+                  p.tombstoned ? 'opacity-60' : ''
+                }`}
+              >
+                <span className="font-mono text-[11px] text-slate-500 w-12 shrink-0 mt-0.5">
+                  #{p.idx}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div
+                    className={`text-xs truncate ${
+                      p.tombstoned ? 'text-slate-500 line-through' : 'text-slate-200'
+                    }`}
+                    title={p.title}
+                  >
+                    {p.title || '[empty]'}
+                  </div>
+                  {p.preview && (
+                    <div className="text-[10px] text-slate-500 truncate mt-0.5">
+                      {p.preview}
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    onClick={() => {
+                      // Reuse the existing PassageEditor + editorOriginalIdx
+                      // machinery. saveEditor() will add-then-tombstone the old
+                      // idx for backend carts; for LocalCart it flows through
+                      // localCartAddPassage + tombstone via the same path.
+                      const state = useAppStore.getState()
+                      const activeName = state.activeLocalCart
+                      const cart = activeName ? state.localCarts.get(activeName) : null
+                      const fullText = cart?.passages[p.idx] ?? ''
+                      openEditor(fullText, p.idx)
+                    }}
+                    disabled={p.tombstoned}
+                    className="px-2 py-1 rounded text-[11px] bg-cyan-500/15 border border-cyan-500/30 text-cyan-200
+                               hover:bg-cyan-500/25 disabled:opacity-30 disabled:cursor-not-allowed
+                               flex items-center gap-1"
+                    title={p.tombstoned ? 'Restore before editing' : 'Edit this passage'}
+                  >
+                    <Pencil size={10} />
+                    Edit
+                  </button>
+                  {p.tombstoned ? (
+                    <button
+                      onClick={() => localCartRestore(p.idx)}
+                      className="px-2 py-1 rounded text-[11px] bg-amber-500/15 border border-amber-500/30 text-amber-200
+                                 hover:bg-amber-500/25 flex items-center gap-1"
+                      title="Restore this passage"
+                    >
+                      <RotateCcw size={10} />
+                      Restore
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => localCartTombstone(p.idx)}
+                      className="px-2 py-1 rounded text-[11px] bg-rose-500/15 border border-rose-500/30 text-rose-300
+                                 hover:bg-rose-500/25 flex items-center gap-1"
+                      title="Tombstone just this passage"
+                    >
+                      <Trash2 size={10} />
+                      Tombstone
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Pagination — same shape as PassageBrowser (Prev/Next + jump-to-page) */}
+        {total > PASSAGE_PAGE_SIZE && (
+          <div className="px-4 py-2 border-t border-cyan-500/20 flex items-center justify-between gap-2 text-xs text-slate-500">
+            <button
+              onClick={goPrev}
+              disabled={drillOffset === 0}
+              className="flex items-center gap-1 px-2 py-0.5 rounded hover:bg-slate-700/40 hover:text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              <ChevronLeft size={11} />
+              Prev
+            </button>
+            <div className="flex items-center gap-2">
+              <span className="font-mono">
+                Page {currentPage.toLocaleString()} of {totalPages.toLocaleString()}
+              </span>
+              <span className="text-slate-600">·</span>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  const n = parseInt(drillPageJump, 10)
+                  if (!isNaN(n)) goPage(n)
+                  setDrillPageJump('')
+                }}
+                className="flex items-center gap-1"
+              >
+                <span className="text-[10px] uppercase tracking-wider">jump</span>
+                <input
+                  type="text"
+                  value={drillPageJump}
+                  onChange={(e) => setDrillPageJump(e.target.value)}
+                  placeholder={String(currentPage)}
+                  className="w-12 rounded bg-slate-950/60 border border-slate-800 px-1.5 py-0.5 text-[11px] text-slate-200 font-mono focus:outline-none focus:border-cyan-500/60"
+                />
+              </form>
+            </div>
+            <button
+              onClick={goNext}
+              disabled={drillOffset + PASSAGE_PAGE_SIZE >= total}
+              className="flex items-center gap-1 px-2 py-0.5 rounded hover:bg-slate-700/40 hover:text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Next
+              <ChevronRight size={11} />
+            </button>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // ── List view ─────────────────────────────────────────────────────────
   return (
     <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5">
       <div className="px-4 py-2 border-b border-cyan-500/30 flex items-center justify-between gap-3">
@@ -1066,7 +1274,7 @@ function SourceFilesPanel({
           Source files ({sorted.length})
         </h2>
         <span className="text-[10px] text-slate-500">
-          click Delete file to tombstone every passage from that source
+          click a filename to drill in; Delete file tombstones the whole source
         </span>
       </div>
       {sorted.length === 0 ? (
@@ -1095,12 +1303,18 @@ function SourceFilesPanel({
                   #{fileIdx}
                 </span>
                 <Folder size={11} className="text-cyan-400 shrink-0" />
-                <span
-                  className="flex-1 truncate font-mono text-slate-300"
-                  title={s.sourcePath}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDrillPath(s.sourcePath)
+                    setDrillOffset(0)
+                    setDrillPageJump('')
+                  }}
+                  className="flex-1 truncate font-mono text-slate-300 hover:text-cyan-200 text-left transition-colors"
+                  title={`Drill into ${s.sourcePath}`}
                 >
                   {s.sourcePath}
-                </span>
+                </button>
                 <span className="text-[10px] text-slate-500 font-mono shrink-0">
                   {allDeleted ? (
                     <span className="text-rose-400">all tombstoned</span>

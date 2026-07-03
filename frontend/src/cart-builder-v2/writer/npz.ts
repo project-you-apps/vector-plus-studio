@@ -10,11 +10,35 @@ import {
   buildPermissions,
 } from './permissions'
 
+// Rich Pattern-0 metadata baked into the NPZ at build time. Mirrors the
+// cart-level fields set server-side by api/cartbuilder/builder.py so the
+// Pattern-0 TOC panel (Andy 2026-07-02) surfaces the same shape regardless
+// of whether the cart was built via the browser pipeline or the VPS /build
+// endpoint. Empty strings become generic-fallback text; empty tags stay
+// empty. `owner` propagates to the top-level pattern0 record.
+export interface Pattern0Meta {
+  description?: string
+  agent_briefing?: string
+  owner?: string
+  tags?: string[]
+  creator?: string
+}
+
 export interface BuildCartOptions {
   cartName: string
   hippocampus?: HippocampusOptions
   permissions?: CartPermissionsSpec
+  pattern0Meta?: Pattern0Meta
 }
+
+// Kept in sync with GENERIC_DESCRIPTION / GENERIC_AGENT_BRIEFING in
+// api/cartbuilder/__init__.py so browser-built and server-built carts show
+// identical fallback text in the Pattern-0 TOC panel.
+const GENERIC_DESCRIPTION = 'A data or information cartridge for easy information access.'
+const GENERIC_AGENT_BRIEFING =
+  'This cart contains reference material. When answering questions, ' +
+  'search it for relevant passages and cite them by source. Do not ' +
+  'invent content that isn\'t present in the cart.'
 
 export interface BuiltCart {
   /** ZIP container with embeddings.npy + hippocampus.npy + passages.json + compressed_texts.json. */
@@ -73,12 +97,46 @@ export async function buildCart(
   const manifest = await buildManifest(embeddings, count, NOMIC_DIM)
   const permissions = buildPermissions(options.permissions)
 
+  // Build the pattern0_data payload with the same shape as
+  // api/cartbuilder/builder.py: cart-level metadata + per-file list. The
+  // Pattern-0 TOC panel reader (api/main.py:_parse_pattern0_from_npz)
+  // consumes this JSON directly when the cart is mounted on the VPS.
+  const meta = options.pattern0Meta ?? {}
+  const uniqueSources = new Map<string, number>()
+  for (const s of sections) {
+    uniqueSources.set(s.source, (uniqueSources.get(s.source) ?? 0) + 1)
+  }
+  const pattern0_data = {
+    cart_name: options.cartName,
+    creator: meta.creator || 'Cart Builder (browser)',
+    created_at: new Date().toISOString(),
+    file_count: uniqueSources.size,
+    total_chunks: count,
+    embedding_model: 'nomic-ai/nomic-embed-text-v1.5',
+    embedding_dim: NOMIC_DIM,
+    files: Array.from(uniqueSources.entries()).map(([name, chunks]) => ({
+      name,
+      owner: meta.owner ?? '',
+      description: '',
+      tags: [],
+      chunks,
+    })),
+    description: (meta.description ?? '').trim() || GENERIC_DESCRIPTION,
+    agent_briefing: (meta.agent_briefing ?? '').trim() || GENERIC_AGENT_BRIEFING,
+    owner: meta.owner ?? '',
+    tags: meta.tags ?? [],
+  }
+  const pattern0Json = JSON.stringify(pattern0_data)
+
   const zip = new JSZip()
   zip.file('embeddings.npy', dumpFloat32(embeddings, [count, NOMIC_DIM]))
   zip.file('hippocampus.npy', dumpUint8(hippocampus, [count, 64]))
   zip.file('passages.npy', dumpUnicode(passages, [count]))
   zip.file('compressed_texts.npy', dumpUnicode(compressed_texts, [count]))
   zip.file('source_paths.npy', dumpUnicode(source_paths, [count]))
+  // pattern0.npy — single-element unicode array of the JSON payload. Matches
+  // the Cart Builder GUI schema so api/cart/pattern-0 reads it uniformly.
+  zip.file('pattern0.npy', dumpUnicode([pattern0Json], [1]))
 
   const cartBlob = await zip.generateAsync({
     type: 'blob',

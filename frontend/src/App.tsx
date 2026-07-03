@@ -16,6 +16,7 @@ import CartBuilderScreen from './components/CartBuilderScreen'
 import CRUDScreen from './components/CRUDScreen'
 import FolderPickerModal from './components/FolderPickerModal'
 import SignInModal from './components/SignInModal'
+import DesktopHelperPairModal from './components/DesktopHelperPairModal'
 import CookieBanner from './components/CookieBanner'
 import Toaster from './components/Toaster'
 
@@ -31,55 +32,45 @@ function ScreenStub({ title, body }: { title: string; body: string }) {
 }
 
 
-// Search screen layout — Andy 2026-07-01 (revised same day).
-// • Search input full-width at top.
-// • When a cart is mounted (server-side OR browser LocalCart): stack the
-//   Pattern-0 TOC above the results, both centered under a max-w-7xl
-//   container. The TOC gets a max-h so it can't push results off-screen;
-//   Pattern0TocPanel handles its own overflow via internal list scroll +
-//   JUMP pagination at >25 items.
-// • When nothing is mounted: TOC hidden; results/placeholder alone.
-// Editor path unchanged — Add/Edit Passage takes over the whole main.
-function SearchScreenLayout({ editorOpen }: { editorOpen: boolean }) {
+// Search screen layout — Andy 2026-07-01, revised 2026-07-02.
+// Old-flow restore (2026-07-02): TOC and results are MUTUALLY EXCLUSIVE.
+// TOC visible on fresh cart mount; a search hides it and results fill the
+// space; the Pattern-0 button in SearchToolbar brings the TOC back. Store
+// field `showTocPanel` drives which surface renders.
+// Editor path 2026-07-02: PassageEditor promoted to App-level modal overlay
+// so Edit works from Edit Carts too. Search UI stays visible behind it.
+function SearchScreenLayout() {
   const mountedCartridge = useAppStore((s) => s.status?.mounted_cartridge ?? null)
   const activeLocalCart = useAppStore((s) => s.activeLocalCart)
-  const showToc = !!(mountedCartridge || activeLocalCart) && !editorOpen
+  const showTocPanel = useAppStore((s) => s.showTocPanel)
+  const cartMounted = !!(mountedCartridge || activeLocalCart)
+  const showToc = cartMounted && showTocPanel
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {!editorOpen && <SearchToolbar />}
+      <SearchToolbar />
       <main className="flex-1 flex flex-col p-6 overflow-hidden w-full max-w-7xl mx-auto">
-        {editorOpen ? (
-          <PassageEditor />
-        ) : (
-          <>
-            <SearchBar />
-            <div className="mt-6 flex-1 overflow-hidden flex flex-col gap-6">
-              {showToc && (
-                // min-h reserves ~5-7 items worth of breathing room even for
-                // small carts, so the panel subconsciously reads as "there is
-                // room to grow here." As items accumulate, the flex-1 list
-                // inside naturally consumes that whitespace; past that the
-                // panel grows up to max-h and then pagination (TOC_PAGE_SIZE
-                // = 25 inside Pattern0TocPanel) takes over. Not an always-
-                // there buffer — just visible for small lists.
-                <div className="flex-shrink-0 min-h-[315px] max-h-[45vh] flex flex-col overflow-hidden">
-                  <Pattern0TocPanel />
-                </div>
-              )}
-              <div className="flex-1 overflow-hidden flex flex-col">
-                <ResultsList />
-              </div>
+        <SearchBar />
+        <div className="mt-6 flex-1 overflow-hidden flex flex-col">
+          {showToc ? (
+            // TOC fills the space below the search bar until the user runs a
+            // search. Internal list scroll + JUMP pagination handles overflow.
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              <Pattern0TocPanel />
             </div>
-          </>
-        )}
+          ) : (
+            <div className="flex-1 overflow-hidden flex flex-col">
+              <ResultsList />
+            </div>
+          )}
+        </div>
       </main>
     </div>
   )
 }
 
 export default function App() {
-  const { fetchStatus, status, editorOpen, activeScreen, detectWebGpuOnce } = useAppStore()
+  const { fetchStatus, status, activeScreen, detectWebGpuOnce } = useAppStore()
   const initAuth = useAuthStore((s) => s.init)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -154,9 +145,7 @@ export default function App() {
             in the 2026-05-04 reorg; Build Cartridge moved to its own screen,
             Add Passage and Tombstoned restore deferred to the CRUD planning
             session. */}
-        {activeScreen === 'search' && (
-          <SearchScreenLayout editorOpen={editorOpen} />
-        )}
+        {activeScreen === 'search' && <SearchScreenLayout />}
 
         {activeScreen === 'overview' && <OverviewScreen />}
 
@@ -179,7 +168,11 @@ export default function App() {
           which screen the user is on (Cart Builder OR Edit Carts). Mounted at
           app level so it renders no matter which screen owns the trigger. */}
       <FolderPickerModal />
+      {/* PassageEditor promoted to App-level modal 2026-07-02 so Edit works
+          from both Search + Edit Carts. Self-guards on editorOpen. */}
+      <PassageEditor />
       <SignInModal />
+      <DesktopHelperPairModal />
       <CookieBanner />
       <Toaster />
     </div>

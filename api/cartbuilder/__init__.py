@@ -23,7 +23,7 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, Form
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, Form
 from fastapi.responses import JSONResponse
 
 
@@ -39,6 +39,28 @@ except Exception as _e:  # pragma: no cover
     _CART_BUILDER_AVAILABLE = False
     _IMPORT_ERROR = str(_e)
     print(f"[cartbuilder] WARNING: cart-builder modules unavailable: {_e}")
+
+# Auth import is soft — desktop-builder vendors this module without the
+# parent api/auth.py, so we stub get_current_user to return None (anonymous)
+# when running outside the VPS. On the VPS this pulls the Supabase JWT
+# dependency and lets /build capture the caller's email/UUID as creator.
+try:
+    from ..auth import get_current_user  # type: ignore
+except Exception:  # pragma: no cover
+    async def get_current_user(request: Request):
+        return None
+
+
+# Fallback text used when the caller doesn't supply a description or
+# agent briefing. Kept adjacent to /build so the defaults are auditable
+# alongside the endpoint that applies them. If a canonical Pattern-I
+# template ever lands in docs/_canon or membot/, swap these constants.
+GENERIC_DESCRIPTION = "A data or information cartridge for easy information access."
+GENERIC_AGENT_BRIEFING = (
+    "This cart contains reference material. When answering questions, "
+    "search it for relevant passages and cite them by source. Do not "
+    "invent content that isn't present in the cart."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -297,12 +319,46 @@ async def pattern0(name: str = "hackathon-cart"):
 
 
 @router.post("/build")
-async def build(payload: dict):
-    """Kick off async cart build from current workspace state."""
+async def build(payload: dict, user: dict | None = Depends(get_current_user)):
+    """Kick off async cart build from current workspace state.
+
+    Accepts optional cart-level metadata (description, agent_briefing, owner,
+    tags) alongside cart_name — these land in the built NPZ's pattern0_data
+    so the Pattern-0 TOC panel can surface them at mount time. Empty
+    description/agent_briefing get filled with generic fallbacks so the panel
+    never shows a null "no metadata" state for user-built carts.
+    """
     _check_writable()
     _check_available()
     cart_name = payload.get("cart_name", "hackathon-cart")
     cart_name = "".join(c if c.isalnum() or c in "-_" else "-" for c in cart_name)
+
+    # Cart-level Pattern-0 metadata. All optional; description + agent_briefing
+    # default to generic strings if the caller omits them (or sends "").
+    description = (payload.get("description") or "").strip() or GENERIC_DESCRIPTION
+    agent_briefing = (payload.get("agent_briefing") or "").strip() or GENERIC_AGENT_BRIEFING
+    owner = (payload.get("owner") or "").strip()
+    raw_tags = payload.get("tags") or []
+    if isinstance(raw_tags, str):
+        raw_tags = [t.strip() for t in raw_tags.split(",")]
+    tags = [str(t).strip() for t in raw_tags if isinstance(t, (str, int, float)) and str(t).strip()]
+
+    # Creator resolution, most-specific first:
+    #   1. Explicit payload override — the desktop-paired browser Cart Builder
+    #      sends "Cart Builder (local)" so Pattern-0 reflects that the build
+    #      ran on the user's own machine even though this handler is running
+    #      inside the vendored exe (no JWT user).
+    #   2. JWT email / sub — the VPS-hosted browser Cart Builder ships the
+    #      Supabase access token; the exe context has get_current_user stubbed
+    #      to None so this branch is VPS-only.
+    #   3. "Cart Builder (cloud)" fallback for anonymous / server-side builds.
+    payload_creator = (payload.get("creator") or "").strip()
+    if payload_creator:
+        creator = payload_creator
+    elif user:
+        creator = user.get("email") or user.get("sub") or "Cart Builder (cloud)"
+    else:
+        creator = "Cart Builder (cloud)"
 
     active = _active_files()
     all_chunks: list = []
@@ -328,7 +384,17 @@ async def build(payload: dict):
     else:
         output_dir = str(BUILD_DIR)
 
-    build_cart_async(all_chunks, cart_name, output_dir, file_metadata=file_meta)
+    build_cart_async(
+        all_chunks,
+        cart_name,
+        output_dir,
+        file_metadata=file_meta,
+        description=description,
+        agent_briefing=agent_briefing,
+        owner=owner,
+        tags=tags,
+        creator=creator,
+    )
     return {"status": "building", "cart_name": cart_name, "chunks": len(all_chunks)}
 
 

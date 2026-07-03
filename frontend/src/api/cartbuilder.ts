@@ -4,25 +4,62 @@
 // (Phase 2 frontend port).
 
 import { useAuthStore } from '../store/authStore'
+import { useAppStore } from '../store/appStore'
 
 // Set VITE_API_BASE at build time for hosted deploys (e.g. '/vps/api'). Local
 // dev uses '/api' which the Vite proxy routes to localhost:8000.
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) || '/api'
-const BASE = `${API_BASE}/cartbuilder`
+const VPS_BASE = `${API_BASE}/cartbuilder`
+
+// When the Desktop Cart Builder helper (Day 1 exe) is paired, all cartbuilder
+// requests are routed to loopback + Bearer-authed with the pairing token
+// instead of hitting the VPS backend. Same router shape on both sides — the
+// exe mounts the identical /api/cartbuilder/* FastAPI router — so the only
+// difference is base URL + Authorization header.
+function resolveTarget(): { base: string; usingDesktop: boolean } {
+  const s = useAppStore.getState()
+  if (s.desktopHelperState === 'detected-paired' && s.desktopHelperCapabilities && s.desktopHelperToken) {
+    const port = s.desktopHelperCapabilities.port
+    const prefix = s.desktopHelperCapabilities.router_prefix // e.g. "/api/cartbuilder"
+    return { base: `http://127.0.0.1:${port}${prefix}`, usingDesktop: true }
+  }
+  return { base: VPS_BASE, usingDesktop: false }
+}
 
 // Mirror of client.ts authHeaders() — reads current Supabase token from the
-// auth store. Returns empty object when signed out so anonymous builders still
-// work end-to-end against sandbox endpoints.
-function authHeaders(): Record<string, string> {
+// auth store. When routing to the paired desktop exe we send the pairing
+// token instead; the exe doesn't know about Supabase, and the VPS backend
+// isn't in the request path. Returns empty object when neither applies so
+// anonymous sandbox endpoints on the VPS still work.
+function authHeaders(usingDesktop: boolean): Record<string, string> {
+  if (usingDesktop) {
+    const token = useAppStore.getState().desktopHelperToken
+    return token ? { Authorization: `Bearer ${token}` } : {}
+  }
   const session = useAuthStore.getState().session
   return session ? { Authorization: `Bearer ${session.access_token}` } : {}
 }
 
+// Central 401 handler for desktop mode. If the exe was restarted between
+// pair and request, its token file changed and every authed call comes back
+// 401 — drop the client back to 'detected-unpaired' so the badge flips amber
+// and the pair-modal CTA reappears. Silent no-op when we weren't in desktop
+// mode to begin with (VPS 401s are handled by the Supabase-side flow).
+function handleUnauthorized(usingDesktop: boolean) {
+  if (!usingDesktop) return
+  const s = useAppStore.getState()
+  if (s.desktopHelperState === 'detected-paired') {
+    s.unpairDesktopHelper()
+  }
+}
+
 async function fetchJSON<T>(url: string, opts?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${url}`, {
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+  const { base, usingDesktop } = resolveTarget()
+  const res = await fetch(`${base}${url}`, {
+    headers: { 'Content-Type': 'application/json', ...authHeaders(usingDesktop) },
     ...opts,
   })
+  if (res.status === 401) handleUnauthorized(usingDesktop)
   if (!res.ok) {
     const text = await res.text()
     throw new Error(`Cart Builder API error ${res.status}: ${text}`)
@@ -127,13 +164,15 @@ export interface CartBuilderLoadCartResponse {
 // ---------------------------------------------------------------------------
 
 export async function uploadFiles(files: File[]): Promise<{ files: CartBuilderFile[] }> {
+  const { base, usingDesktop } = resolveTarget()
   const form = new FormData()
   for (const f of files) form.append('files', f)
-  const res = await fetch(`${BASE}/upload`, {
+  const res = await fetch(`${base}/upload`, {
     method: 'POST',
     body: form,
-    headers: authHeaders(),
+    headers: authHeaders(usingDesktop),
   })
+  if (res.status === 401) handleUnauthorized(usingDesktop)
   if (!res.ok) {
     const text = await res.text()
     throw new Error(`Upload failed ${res.status}: ${text}`)
@@ -162,12 +201,37 @@ export async function getPattern0(name = 'hackathon-cart'): Promise<CartBuilderP
   return fetchJSON(`/pattern0?name=${encodeURIComponent(name)}`)
 }
 
-export async function buildCart(cart_name: string): Promise<{
+// Optional cart-level metadata forwarded to the /build handler. All fields
+// are optional so the legacy single-arg callsite (cartBuilderStore.startBuild)
+// keeps working; the desktop-delegated path in BrowserCartBuilder passes the
+// full payload so Pattern-0 lands with the honest creator + user metadata.
+export interface BuildCartMeta {
+  description?: string
+  agent_briefing?: string
+  owner?: string
+  tags?: string[]
+  creator?: string
+  save_dir?: string
+}
+
+export async function buildCart(
+  cart_name: string,
+  meta?: BuildCartMeta,
+): Promise<{
   status: string
   cart_name: string
   chunks: number
 }> {
-  return fetchJSON('/build', { method: 'POST', body: JSON.stringify({ cart_name }) })
+  const body: Record<string, unknown> = { cart_name }
+  if (meta) {
+    if (meta.description !== undefined) body.description = meta.description
+    if (meta.agent_briefing !== undefined) body.agent_briefing = meta.agent_briefing
+    if (meta.owner !== undefined) body.owner = meta.owner
+    if (meta.tags !== undefined) body.tags = meta.tags
+    if (meta.creator !== undefined) body.creator = meta.creator
+    if (meta.save_dir !== undefined) body.save_dir = meta.save_dir
+  }
+  return fetchJSON('/build', { method: 'POST', body: JSON.stringify(body) })
 }
 
 export async function getBuildStatus(): Promise<CartBuilderBuildState> {
@@ -240,6 +304,7 @@ export async function buildToFolder(payload: {
   cartName: string
   replace?: boolean
 }): Promise<BuildToFolderResponse> {
+  const { base, usingDesktop } = resolveTarget()
   const form = new FormData()
   form.append('cart', payload.cartBlob, `${payload.cartName}.cart.npz`)
   form.append('manifest', payload.manifestBlob, `${payload.cartName}.cart_manifest.json`)
@@ -247,11 +312,12 @@ export async function buildToFolder(payload: {
   form.append('folder', payload.folder)
   form.append('cart_name', payload.cartName)
   form.append('replace', payload.replace ? 'true' : 'false')
-  const res = await fetch(`${BASE}/build-to-folder`, {
+  const res = await fetch(`${base}/build-to-folder`, {
     method: 'POST',
     body: form,
-    headers: authHeaders(),
+    headers: authHeaders(usingDesktop),
   })
+  if (res.status === 401) handleUnauthorized(usingDesktop)
   if (!res.ok) {
     let detail = `${res.status}`
     try { detail = (await res.json()).detail || detail } catch { /* keep */ }

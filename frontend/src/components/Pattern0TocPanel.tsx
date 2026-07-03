@@ -27,9 +27,12 @@ import {
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import * as api from '../api/client'
-import type { Pattern0Response, Pattern0TocItem } from '../api/types'
+import type { Pattern0Response, Pattern0TocItem, SearchResult } from '../api/types'
 
 const TOC_PAGE_SIZE = 25
+// Drill view (per-file passages preview) — smaller page so the panel doesn't
+// grow past its ~45vh cap set by the parent container.
+const DRILL_PAGE_SIZE = 25
 
 
 function BriefingModal({
@@ -91,6 +94,8 @@ export default function Pattern0TocPanel() {
   const mountedCartridge = useAppStore((s) => s.status?.mounted_cartridge ?? null)
   const activeLocalCart = useAppStore((s) => s.activeLocalCart)
   const localCarts = useAppStore((s) => s.localCarts)
+  const listPassagesBySource = useAppStore((s) => s.localCartListPassagesBySource)
+  const openModal = useAppStore((s) => s.openModal)
 
   const [data, setData] = useState<Pattern0Response | null>(null)
   const [loading, setLoading] = useState(false)
@@ -100,6 +105,14 @@ export default function Pattern0TocPanel() {
   const [offset, setOffset] = useState(0)
   const [pageJump, setPageJump] = useState('')
   const [briefingOpen, setBriefingOpen] = useState(false)
+
+  // Drill-down state (Andy 2026-07-02) — click a file row to expand its
+  // passages inline. LocalCart-only (backend Pattern-0 doesn't expose
+  // per-source passage lookup). Read-only preview; editing lives in Edit
+  // Carts.
+  const [drillPath, setDrillPath] = useState<string | null>(null)
+  const [drillOffset, setDrillOffset] = useState(0)
+  const [drillPageJump, setDrillPageJump] = useState('')
 
   // Fetch whenever the mounted cart changes. LocalCart doesn't have a
   // server-side Pattern-0 (nothing was uploaded); in that case we synthesize
@@ -111,46 +124,76 @@ export default function Pattern0TocPanel() {
     setOffset(0)
     setPageJump('')
     setFilter('')
+    // Exit drill on cart change — the drillPath belongs to whichever cart was
+    // previously active and won't resolve against the new one.
+    setDrillPath(null)
+    setDrillOffset(0)
+    setDrillPageJump('')
 
     if (activeLocalCart) {
-      // Browser-mounted cart — synthesize response client-side.
+      // Browser-mounted cart — synthesize response client-side. Prefer the
+      // pattern0.npy sidecar baked at build time (Andy 2026-07-02 bug 3);
+      // fall back to derived-only stats when the cart predates the sidecar.
       const cart = localCarts.get(activeLocalCart)
       if (!cart) {
         setData(null)
         return
       }
-      const counts = new Map<string, number>()
+      // Live per-source counts respecting tombstones. Used both for the
+      // derived-only branch and to override the baked pattern0's chunks
+      // number so tombstoned edits show accurate counts.
+      const liveCounts = new Map<string, number>()
       if (cart.sourcePaths) {
         for (let i = 0; i < cart.sourcePaths.length; i++) {
           const sp = cart.sourcePaths[i]
           if (!sp) continue
           if (cart.tombstones.has(i)) continue
-          counts.set(sp, (counts.get(sp) ?? 0) + 1)
+          liveCounts.set(sp, (liveCounts.get(sp) ?? 0) + 1)
         }
       }
-      const toc_items: Pattern0TocItem[] = counts.size > 0
-        ? Array.from(counts.entries()).map(([name, pattern_count]) => ({
-            name,
-            description: null,
-            pattern_count,
-          }))
-        : [{
-            name: cart.filename || cart.name,
-            description: null,
-            pattern_count: cart.passages.length,
-          }]
+
+      const p0 = cart.pattern0Meta
+      const hasBakedMeta = !!p0 && (
+        !!(p0.description && p0.description.trim())
+        || !!(p0.agent_briefing && p0.agent_briefing.trim())
+        || !!(p0.creator && p0.creator.trim())
+        || !!(p0.owner && p0.owner.trim())
+        || (Array.isArray(p0.tags) && p0.tags.length > 0)
+        || (Array.isArray(p0.files) && p0.files.length > 0)
+      )
+
+      let toc_items: Pattern0TocItem[]
+      if (p0 && Array.isArray(p0.files) && p0.files.length > 0) {
+        toc_items = p0.files.map((f) => ({
+          name: f.name,
+          description: f.description ?? null,
+          pattern_count: liveCounts.get(f.name) ?? f.chunks ?? 0,
+        }))
+      } else if (liveCounts.size > 0) {
+        toc_items = Array.from(liveCounts.entries()).map(([name, pattern_count]) => ({
+          name,
+          description: null,
+          pattern_count,
+        }))
+      } else {
+        toc_items = [{
+          name: cart.filename || cart.name,
+          description: null,
+          pattern_count: cart.passages.length,
+        }]
+      }
 
       setData({
         mounted: true,
-        name: cart.filename || cart.name,
-        description: null,
-        creator: null,
-        created_at: null,
-        owner: null,
+        name: (p0?.cart_name && p0.cart_name.trim()) || cart.filename || cart.name,
+        description: (p0?.description && p0.description.trim()) || null,
+        creator: (p0?.creator && p0.creator.trim()) || null,
+        created_at: (p0?.created_at && p0.created_at.trim()) || null,
+        owner: (p0?.owner && p0.owner.trim()) || null,
         pattern_count: cart.passages.length,
-        agent_briefing: null,
+        agent_briefing: (p0?.agent_briefing && p0.agent_briefing.trim()) || null,
         toc_items,
-        is_derived: true,
+        is_derived: !hasBakedMeta,
       })
       setError(null)
       setLoading(false)
@@ -240,6 +283,191 @@ export default function Pattern0TocPanel() {
   // mounted_cartridge string. Spec says "<filename> TOC".
   const cartName = data.name || mountedCartridge || activeLocalCart || 'Cart'
   const hasBriefing = !!(data.agent_briefing && data.agent_briefing.trim().length > 0)
+  // Backend Pattern-0 has no per-source passage lookup; only LocalCarts get
+  // the click-to-drill affordance for now.
+  const drillEnabled = !!activeLocalCart
+
+  // ── Drill view — read-only per-file passage preview ──────────────────────
+  // Only reachable for LocalCarts (see drillEnabled). Uses the same selector
+  // that Edit Carts' Source Files drill does, so pagination + preview format
+  // stays consistent across surfaces. NO edit/tombstone/restore buttons —
+  // Search tab is read-only; Andy's spec.
+  if (drillPath !== null && drillEnabled) {
+    const window = listPassagesBySource(drillPath, drillOffset, DRILL_PAGE_SIZE)
+    const total = window.total
+    const totalDrillPages = Math.max(1, Math.ceil(total / DRILL_PAGE_SIZE))
+    const currentDrillPage = Math.floor(drillOffset / DRILL_PAGE_SIZE) + 1
+    const drillPrev = () => setDrillOffset(Math.max(0, drillOffset - DRILL_PAGE_SIZE))
+    const drillNext = () =>
+      setDrillOffset(Math.min((totalDrillPages - 1) * DRILL_PAGE_SIZE, drillOffset + DRILL_PAGE_SIZE))
+    const drillGoPage = (page: number) => {
+      const clamped = Math.max(1, Math.min(totalDrillPages, page))
+      setDrillOffset((clamped - 1) * DRILL_PAGE_SIZE)
+    }
+    const exitDrill = () => {
+      setDrillPath(null)
+      setDrillOffset(0)
+      setDrillPageJump('')
+    }
+
+    // Andy 2026-07-02: clicking a drilled passage opens the standard
+    // PassageModal (same MORE + PREV|NEXT UX as search results). PREV|NEXT
+    // stays inside this file because the modal's navigator uses the cart's
+    // sourcePaths sidecar to clip to same-source neighbors. NO edit affordance
+    // on the Search tab per spec — editing lives in Edit Carts.
+    const openDrilledPassage = (p: { idx: number; title: string; preview: string }) => {
+      if (!activeLocalCart) return
+      const cart = localCarts.get(activeLocalCart)
+      if (!cart) return
+      const fullText = cart.passages[p.idx] ?? ''
+      const total = cart.passages.length
+      const result: SearchResult = {
+        rank: 0,
+        idx: p.idx,
+        score: 0,
+        cosine_score: null,
+        physics_score: null,
+        hamming_score: null,
+        keyword_boost: null,
+        title: p.title || `#${p.idx}`,
+        preview: p.preview,
+        full_text: fullText,
+        from_lattice: false,
+        // openModal clips these to same-source when the cart carries a
+        // sourcePaths sidecar (which is the case for every drill target —
+        // drillEnabled implies activeLocalCart, and the drill only appears
+        // when sourcePaths exists). So even though we pass raw ±1 neighbors,
+        // they collapse to null at file boundaries.
+        prev_idx: p.idx > 0 ? p.idx - 1 : null,
+        next_idx: p.idx < total - 1 ? p.idx + 1 : null,
+        source_path: drillPath,
+      }
+      openModal(result)
+    }
+    return (
+      <div className="h-full flex flex-col border border-slate-700/50 rounded-xl bg-slate-800/20 overflow-hidden">
+        {/* Drill header — back arrow + filename + counts. Matches Edit Carts'
+            SourceFilesPanel drill visual language but slate (not cyan) since
+            this is Search context, not Edit context. */}
+        <div className="px-4 py-2 border-b border-slate-700/50 flex items-center gap-2">
+          <button
+            onClick={exitDrill}
+            className="flex items-center gap-1 px-2 py-1 rounded text-[11px] uppercase tracking-wider
+                       bg-slate-800/60 border border-slate-700/50 text-slate-300
+                       hover:bg-slate-700/60 hover:text-slate-100 transition-colors"
+            title="Back to file list"
+          >
+            <ChevronLeft size={11} />
+            Back
+          </button>
+          <span
+            className="text-xs font-mono text-slate-100 truncate flex-1"
+            title={drillPath}
+          >
+            {drillPath}
+          </span>
+          <span className="text-[10px] font-mono text-slate-500 shrink-0">
+            {window.activeCount} active / {total} total
+          </span>
+        </div>
+
+        {/* Passage rows — idx + truncated preview. Click opens the standard
+            PassageModal (MORE + PREV|NEXT scoped to this file). Read-only —
+            no edit affordance per spec (Andy 2026-07-02). */}
+        <ul className="flex-1 overflow-y-auto divide-y divide-slate-800/60 list-none">
+          {total === 0 ? (
+            <li className="py-6 text-xs text-slate-500 italic text-center list-none">
+              No passages found for this file.
+            </li>
+          ) : (
+            window.passages.map((p) => (
+              <li key={p.idx} className="list-none">
+                <button
+                  type="button"
+                  onClick={() => openDrilledPassage(p)}
+                  className={`w-full text-left px-4 py-2 flex items-start gap-3 text-xs
+                              hover:bg-slate-700/20 transition-colors cursor-pointer ${
+                                p.tombstoned ? 'opacity-50' : ''
+                              }`}
+                  title={`Open passage #${p.idx}`}
+                >
+                  <span className="font-mono text-[10px] text-slate-500 w-10 shrink-0 mt-0.5">
+                    #{p.idx}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div
+                      className={`text-xs truncate ${
+                        p.tombstoned ? 'text-slate-500 line-through' : 'text-slate-200'
+                      }`}
+                      title={p.title}
+                    >
+                      {p.title || '[empty]'}
+                    </div>
+                    {p.preview && (
+                      <div className="text-[10px] text-slate-500 truncate mt-0.5">
+                        {p.preview}
+                      </div>
+                    )}
+                  </div>
+                </button>
+              </li>
+            ))
+          )}
+        </ul>
+
+        {/* Pagination — same Prev/Next/jump pattern as the file list. */}
+        {total > DRILL_PAGE_SIZE && (
+          <div className="px-4 py-2 border-t border-slate-800 flex items-center justify-between gap-2 text-xs text-slate-500">
+            <button
+              onClick={drillPrev}
+              disabled={drillOffset === 0}
+              className="flex items-center gap-1 px-2 py-0.5 rounded hover:bg-slate-700/40 hover:text-slate-200
+                         disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              aria-label="Previous page"
+            >
+              <ChevronLeft size={11} />
+              Prev
+            </button>
+            <div className="flex items-center gap-2">
+              <span className="font-mono">
+                Page {currentDrillPage} of {totalDrillPages}
+              </span>
+              <span className="text-slate-600">·</span>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  const n = parseInt(drillPageJump, 10)
+                  if (!isNaN(n)) drillGoPage(n)
+                  setDrillPageJump('')
+                }}
+                className="flex items-center gap-1"
+              >
+                <span className="text-[10px] uppercase tracking-wider">jump</span>
+                <input
+                  type="text"
+                  value={drillPageJump}
+                  onChange={(e) => setDrillPageJump(e.target.value)}
+                  placeholder={String(currentDrillPage)}
+                  className="w-12 rounded bg-slate-950/60 border border-slate-800 px-1.5 py-0.5 text-[11px] text-slate-200 font-mono focus:outline-none focus:border-purple-500/60"
+                  aria-label="Jump to page"
+                />
+              </form>
+            </div>
+            <button
+              onClick={drillNext}
+              disabled={drillOffset + DRILL_PAGE_SIZE >= total}
+              className="flex items-center gap-1 px-2 py-0.5 rounded hover:bg-slate-700/40 hover:text-slate-200
+                         disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              aria-label="Next page"
+            >
+              More
+              <ChevronRight size={11} />
+            </button>
+          </div>
+        )}
+      </div>
+    )
+  }
 
   return (
     <>
@@ -273,7 +501,7 @@ export default function Pattern0TocPanel() {
           <div className="px-4 py-2 border-b border-slate-800 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-400">
             {data.creator && (
               <span>
-                <span className="text-slate-500">Created By</span> <span className="text-slate-300">{data.creator}</span>
+                <span className="text-slate-500">Created with</span> <span className="text-slate-300">{data.creator}</span>
               </span>
             )}
             {data.created_at && (
@@ -336,26 +564,57 @@ export default function Pattern0TocPanel() {
                 : 'This cart has no TOC entries.'}
             </li>
           ) : (
-            pageItems.map((item, i) => (
-              <li key={`${offset + i}-${item.name}`} className="py-1.5 flex items-start gap-2 text-xs">
-                <span className="text-slate-600 mt-0.5 shrink-0" aria-hidden>•</span>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-slate-200 truncate" title={item.name}>{item.name}</span>
-                    {item.pattern_count > 0 && (
-                      <span className="text-[10px] text-slate-500 font-mono shrink-0">
-                        {item.pattern_count}p
+            pageItems.map((item, i) => {
+              const clickable = drillEnabled && item.pattern_count > 0
+              const rowInner = (
+                <>
+                  <span className="text-slate-600 mt-0.5 shrink-0" aria-hidden>•</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-baseline gap-2">
+                      <span
+                        className={`truncate ${clickable ? 'text-slate-200 group-hover:text-purple-200' : 'text-slate-200'}`}
+                        title={item.name}
+                      >
+                        {item.name}
                       </span>
+                      {item.pattern_count > 0 && (
+                        <span className="text-[10px] text-slate-500 font-mono shrink-0">
+                          {item.pattern_count}p
+                        </span>
+                      )}
+                    </div>
+                    {item.description && (
+                      <div className="text-[10px] text-slate-500 truncate mt-0.5" title={item.description}>
+                        {item.description}
+                      </div>
                     )}
                   </div>
-                  {item.description && (
-                    <div className="text-[10px] text-slate-500 truncate mt-0.5" title={item.description}>
-                      {item.description}
-                    </div>
-                  )}
-                </div>
-              </li>
-            ))
+                </>
+              )
+              if (clickable) {
+                return (
+                  <li key={`${offset + i}-${item.name}`} className="list-none">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDrillPath(item.name)
+                        setDrillOffset(0)
+                        setDrillPageJump('')
+                      }}
+                      className="w-full py-1.5 flex items-start gap-2 text-xs text-left group hover:bg-slate-700/20 rounded transition-colors px-1 -mx-1"
+                      title={`Show passages from ${item.name}`}
+                    >
+                      {rowInner}
+                    </button>
+                  </li>
+                )
+              }
+              return (
+                <li key={`${offset + i}-${item.name}`} className="py-1.5 flex items-start gap-2 text-xs">
+                  {rowInner}
+                </li>
+              )
+            })
           )}
         </ul>
 

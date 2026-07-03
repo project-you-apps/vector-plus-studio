@@ -5,7 +5,7 @@
  * file without uploading anything.
  */
 
-import type { LocalCart } from '../store/appStore';
+import type { LocalCart, LocalCartPattern0Meta } from '../store/appStore';
 import type { SearchResult } from '../api/types';
 
 interface ParsedCart {
@@ -18,6 +18,10 @@ interface ParsedCart {
     // only when this is present. See CC_cart-provenance-schema_2026-06-15.
     sourcePaths?: string[] | null;
     figures?: Map<string, Uint8Array>;
+    // Pattern-0 metadata parsed from pattern0.npy (single-element unicode
+    // NPY holding the same JSON payload as api/cartbuilder/builder.py). Null
+    // for legacy carts that predate the sidecar.
+    pattern0?: LocalCartPattern0Meta | null;
 }
 
 let parseCartNpz: ((buffer: ArrayBuffer) => Promise<ParsedCart>) | null = null;
@@ -56,6 +60,7 @@ export async function parseCartFile(file: File): Promise<LocalCart> {
         sizeBytes: file.size,
         mountedAt: performance.now(),
         figures: cart.figures ?? new Map(),
+        pattern0Meta: cart.pattern0 ?? null,
         // Editable-state defaults: no tombstones, not dirty. Edit Carts mutates
         // these via the localCart* store actions; cosineSearchLocal filters
         // tombstoned idx out of search results.

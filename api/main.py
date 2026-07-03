@@ -513,13 +513,16 @@ async def get_cart_pattern_0():
             except Exception:
                 created_at = None
 
-        # Owner: not stored on the cart-level Pattern-0 in builder.py schema
-        # (owner is per-file in the `files` list). Surface the FIRST file's
-        # owner when the cart is single-source; else None per spec ("hide if
-        # null/empty").
+        # Owner: prefer the cart-level `owner` field (added 2026-07-02 for the
+        # rich Pattern-0 UI path). Fall back to the FIRST file's owner when the
+        # cart is single-source and the top-level owner isn't set (pre-2026-07-02
+        # carts). Else None per spec ("hide if null/empty").
         owner = None
+        top_owner = payload.get('owner')
+        if top_owner:
+            owner = str(top_owner)
         files_meta = payload.get('files') or []
-        if isinstance(files_meta, list) and len(files_meta) == 1:
+        if not owner and isinstance(files_meta, list) and len(files_meta) == 1:
             first_owner = (files_meta[0] or {}).get('owner')
             if first_owner:
                 owner = str(first_owner)

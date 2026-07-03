@@ -7,6 +7,29 @@ import * as api from '../api/client'
 import { detectWebGPU, runWebGpuAssociate, loadBrainForCart, isBrainLoadedFor } from '../lib/webgpuAssociate'
 import { parseCartFile, cosineSearchLocal } from '../lib/localCart'
 
+// Pattern-0 metadata baked into a browser-built cart. Mirrors the shape of
+// api.getCartPattern0's Pattern0Response so Pattern0TocPanel can consume it
+// uniformly regardless of mount origin. Fields are all optional/nullable
+// since browser-side JSON parse can't guarantee schema conformance.
+export interface LocalCartPattern0Meta {
+  cart_name?: string | null
+  creator?: string | null
+  created_at?: string | null
+  owner?: string | null
+  description?: string | null
+  agent_briefing?: string | null
+  tags?: string[]
+  file_count?: number
+  total_chunks?: number
+  files?: Array<{
+    name: string
+    owner?: string | null
+    description?: string | null
+    tags?: string[]
+    chunks?: number
+  }>
+}
+
 // A cart that lives on the user's local disk and was parsed client-side.
 // Nothing ever leaves the browser; search runs locally over these embeddings.
 // Read-only in F1-A; brain/signatures + RW come in later phases.
@@ -30,6 +53,12 @@ export interface LocalCart {
   // hash extracted from a figure passage's '[figure | hash: <h>]' header.
   // Empty Map when no figures are embedded.
   figures: Map<string, Uint8Array>
+  // Pattern-0 metadata parsed from the cart's pattern0.npy (single-element
+  // unicode NPY holding a JSON payload; see cart-builder-v2/writer/npz.ts).
+  // Populated for browser-built carts 2026-07-02+ that carry the sidecar;
+  // null for older carts, in which case Pattern0TocPanel falls back to the
+  // hippocampus-derived stats view.
+  pattern0Meta: LocalCartPattern0Meta | null
   // In-memory tombstones for Edit Carts support on LocalCart (Andy 2026-06-16
   // PM: the demo path requires editing browser-mounted carts on the public
   // VPS where the droplet can't reach the user's local filesystem). Tombstoned
@@ -57,6 +86,35 @@ export interface WalkStep {
 // 'search' is the default; the original VPS 1.0 search/CRUD experience. Other
 // screens are stubbed in this iteration and fleshed out incrementally.
 export type ActiveScreen = 'search' | 'overview' | 'cartBuilder' | 'crud' | 'sql' | 'settings'
+
+// Desktop Cart Builder helper — detection + pairing state. The exe (Day 1)
+// runs a local FastAPI on http://127.0.0.1:7878 wrapping the same
+// /api/cartbuilder/* router the VPS backend exposes. When paired, Cart
+// Builder API calls swap base to loopback + attach a Bearer token so builds
+// run natively on the user's GPU. See docs/vps-internal/Vector+ Desktop
+// Builder Day 1 Spec.md for the endpoint contract.
+export type DesktopHelperState =
+  | 'unknown'
+  | 'detecting'
+  | 'not-found'
+  | 'detected-unpaired'
+  | 'detected-paired'
+
+export interface DesktopHelperCapabilities {
+  exe: string
+  version?: string
+  capabilities: string[]
+  port: number
+  router_prefix: string
+}
+
+// localStorage key for the persisted pairing token. The value is regenerated
+// by the exe on first launch and printed to its console; user pastes it into
+// the pairing modal.
+export const DESKTOP_HELPER_TOKEN_KEY = 'vp-desktop-token'
+// Fixed for MVP; capabilities.port could override in the future if the exe
+// falls back to a different port (7879+) because 7878 was busy.
+const DESKTOP_HELPER_ORIGIN = 'http://127.0.0.1:7878'
 
 interface AppState {
   // Active screen (nav rail)
@@ -129,6 +187,17 @@ interface AppState {
   localCartRestore: (idx: number) => void
   localCartTombstoneBySource: (sourcePath: string) => number[]
   localCartListSources: () => Array<{ sourcePath: string; count: number; activeCount: number }>
+  // Windowed list of passages belonging to a single source file — powers the
+  // Edit Carts File→Passages drill-down (Andy 2026-06-28 spec). Walks the
+  // cart's sourcePaths, slices a page's worth of matching idx, returns
+  // enough per-row info for the drill-down UI to render preview + tombstone
+  // status + reuse editorOriginalIdx for per-passage edits.
+  localCartListPassagesBySource: (sourcePath: string, offset: number, limit: number) => {
+    total: number
+    activeCount: number
+    tombstonedCount: number
+    passages: Array<{ idx: number; title: string; preview: string; tombstoned: boolean }>
+  }
   localCartAddPassage: (text: string, source: string) => Promise<{ success: boolean; message: string; idx?: number }>
   localCartSave: () => Promise<{ success: boolean; message: string }>
 
@@ -139,6 +208,13 @@ interface AppState {
   // Exact phrase match filter
   exactMatch: boolean
   setExactMatch: (exact: boolean) => void
+
+  // Pattern-0 TOC visibility on Search tab (Andy 2026-07-02). Old flow:
+  // TOC shows on first cart mount, replaced by results after first search,
+  // user can navigate back via the Pattern-0 button in SearchToolbar.
+  // Reset true on cart mount/unmount/select; false when search runs.
+  showTocPanel: boolean
+  setShowTocPanel: (show: boolean) => void
 
   // Editor -- used for both Add Passage and Edit Passage
   editorOpen: boolean
@@ -185,6 +261,18 @@ interface AppState {
   selectMemboxCart: (cartId: string | null) => void
   fetchMemboxStatus: (cartId: string) => Promise<void>
 
+  // Desktop Cart Builder helper
+  desktopHelperState: DesktopHelperState
+  desktopHelperCapabilities: DesktopHelperCapabilities | null
+  desktopHelperToken: string | null
+  desktopHelperError: string | null            // last pair error surface
+  desktopHelperPairModalOpen: boolean
+  detectDesktopHelper: () => Promise<void>
+  pairDesktopHelper: (token: string) => Promise<{ success: boolean; message: string }>
+  unpairDesktopHelper: () => void
+  openDesktopHelperPairModal: () => void
+  closeDesktopHelperPairModal: () => void
+
   // Actions
   fetchStatus: () => Promise<void>
   fetchCartridges: () => Promise<void>
@@ -230,6 +318,128 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ webgpuStatus: available ? 'available' : 'unavailable' })
   },
 
+  // ---- Desktop Cart Builder helper ----
+  // Hydrate token from localStorage synchronously so a page reload with a
+  // still-valid token surfaces as paired the moment detection succeeds
+  // (no extra pair round-trip needed for the happy path — the /api call's
+  // Bearer header is authoritative; if the token's stale we 401 and drop back).
+  desktopHelperState: 'unknown',
+  desktopHelperCapabilities: null,
+  desktopHelperToken: (() => {
+    try {
+      return localStorage.getItem(DESKTOP_HELPER_TOKEN_KEY)
+    } catch {
+      return null
+    }
+  })(),
+  desktopHelperError: null,
+  desktopHelperPairModalOpen: false,
+
+  detectDesktopHelper: async () => {
+    const { desktopHelperState } = get()
+    // Avoid overlapping probes if the tab remounts fast.
+    if (desktopHelperState === 'detecting') return
+    set({ desktopHelperState: 'detecting', desktopHelperError: null })
+    // 1 sec timeout — fast-fail when the exe isn't running so the tab render
+    // isn't gated on a stalled connection.
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 1000)
+    try {
+      const healthResp = await fetch(`${DESKTOP_HELPER_ORIGIN}/health`, {
+        method: 'GET',
+        signal: controller.signal,
+      })
+      if (!healthResp.ok) {
+        set({ desktopHelperState: 'not-found', desktopHelperCapabilities: null })
+        return
+      }
+      // Follow-up capabilities call gets the router_prefix + port so the API
+      // client can build the correct base URL. Same 1-sec budget — reuse the
+      // remaining time from the shared controller so the whole probe caps
+      // at ~1 sec worst case.
+      const capsResp = await fetch(`${DESKTOP_HELPER_ORIGIN}/capabilities`, {
+        method: 'GET',
+        signal: controller.signal,
+      })
+      if (!capsResp.ok) {
+        set({ desktopHelperState: 'not-found', desktopHelperCapabilities: null })
+        return
+      }
+      const caps = (await capsResp.json()) as DesktopHelperCapabilities
+      const token = get().desktopHelperToken
+      // If we have a persisted token, optimistically promote to paired. The
+      // first authenticated call from cartbuilder.ts will 401 (via the shared
+      // handler) if the exe restarted with a new token — which flips us back
+      // to 'detected-unpaired' + surfaces the re-pair prompt.
+      set({
+        desktopHelperCapabilities: caps,
+        desktopHelperState: token ? 'detected-paired' : 'detected-unpaired',
+      })
+    } catch {
+      // Abort, network error, CORS — all indistinguishable at this layer
+      // and all mean "no exe on 7878." Rare false-negative if the user
+      // has a machine so loaded the loopback probe times out; a rerun
+      // fixes it.
+      set({ desktopHelperState: 'not-found', desktopHelperCapabilities: null })
+    } finally {
+      clearTimeout(timer)
+    }
+  },
+
+  pairDesktopHelper: async (token: string) => {
+    const trimmed = token.trim()
+    if (!trimmed) {
+      const msg = 'Pairing code is empty'
+      set({ desktopHelperError: msg })
+      return { success: false, message: msg }
+    }
+    try {
+      const resp = await fetch(`${DESKTOP_HELPER_ORIGIN}/pair`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: trimmed }),
+      })
+      if (resp.status === 401) {
+        const msg = 'Pairing code rejected — check the code from the Desktop Builder console'
+        set({ desktopHelperError: msg })
+        return { success: false, message: msg }
+      }
+      if (!resp.ok) {
+        const msg = `Pair failed: ${resp.status}`
+        set({ desktopHelperError: msg })
+        return { success: false, message: msg }
+      }
+      try { localStorage.setItem(DESKTOP_HELPER_TOKEN_KEY, trimmed) } catch { /* private mode etc. */ }
+      set({
+        desktopHelperToken: trimmed,
+        desktopHelperState: 'detected-paired',
+        desktopHelperError: null,
+        desktopHelperPairModalOpen: false,
+      })
+      return { success: true, message: 'Paired with Desktop Cart Builder' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Pair request failed'
+      set({ desktopHelperError: msg })
+      return { success: false, message: msg }
+    }
+  },
+
+  unpairDesktopHelper: () => {
+    try { localStorage.removeItem(DESKTOP_HELPER_TOKEN_KEY) } catch { /* ignore */ }
+    // Preserve the capabilities so the badge stays on 'detected-unpaired'
+    // rather than falling back to GPU/WebGPU/CPU — the exe is still there,
+    // the user just isn't authorized. detectDesktopHelper() sets 'not-found'
+    // when the exe actually disappears.
+    const { desktopHelperCapabilities } = get()
+    set({
+      desktopHelperToken: null,
+      desktopHelperState: desktopHelperCapabilities ? 'detected-unpaired' : 'not-found',
+    })
+  },
+
+  openDesktopHelperPairModal: () => set({ desktopHelperPairModalOpen: true, desktopHelperError: null }),
+  closeDesktopHelperPairModal: () => set({ desktopHelperPairModalOpen: false }),
+
   localCarts: new Map(),
   activeLocalCart: null,
   localCartLoading: false,
@@ -238,11 +448,30 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ localCartLoading: true })
     try {
       const cart = await parseCartFile(file)
+      // Rich Pattern-0 path (Andy 2026-07-02): when the NPZ lacks a
+      // source_paths.npy entry — legacy server-built carts, or any cart built
+      // before browser-side provenance landed — synthesize sourcePaths from
+      // each passage's first line. Mirrors the backend's load_cart source
+      // extraction (splits first line, strips " (part N/M)" suffix) so the
+      // Source Files panel + Pattern0TocPanel derived-stats path get a
+      // populated array instead of the "provenance sidecar missing" empty
+      // state. Only synthesize when genuinely absent — never clobber real data.
+      const sourcePathsWereSynthesized = !cart.sourcePaths
+      if (sourcePathsWereSynthesized) {
+        cart.sourcePaths = cart.passages.map((passage, i) => {
+          const firstLine = passage.includes('\n') ? passage.split('\n')[0] : ''
+          const trimmed = firstLine.includes(' (part ')
+            ? firstLine.split(' (part ')[0].trim()
+            : firstLine.trim()
+          return trimmed || `passage_${i}`
+        })
+      }
       console.log('[mountLocalCart] parsed', {
         name: cart.name,
         embeddings: cart.embeddings.length,
         embeddingsShape: cart.embeddingsShape,
         passages: cart.passages.length,
+        sourcePathsSynthesized: sourcePathsWereSynthesized,
       })
       const next = new Map(get().localCarts)
       next.set(cart.name, cart)
@@ -254,6 +483,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         searchModeLabel: '',
         searchElapsed: 0,
         walkTrail: [],
+        showTocPanel: true,
       })
       console.log('[mountLocalCart] active set to', cart.name)
       return { success: true, message: `Mounted ${cart.name} (${cart.passages.length.toLocaleString()} passages)` }
@@ -273,6 +503,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       searchModeLabel: '',
       searchElapsed: 0,
       walkTrail: [],
+      showTocPanel: true,
     })
   },
 
@@ -357,6 +588,45 @@ export const useAppStore = create<AppState>((set, get) => ({
       count: c.count,
       activeCount: c.activeCount,
     }))
+  },
+
+  // Windowed drill-down of a single source file's passages. Walks the cart's
+  // sourcePaths, collects every matching idx (preserving cart order), then
+  // slices the requested page. Returns preview + title + tombstone state per
+  // row so the drill-down UI can render without any additional lookups.
+  localCartListPassagesBySource: (sourcePath: string, offset: number, limit: number) => {
+    const empty = { total: 0, activeCount: 0, tombstonedCount: 0, passages: [] }
+    const { activeLocalCart, localCarts } = get()
+    if (!activeLocalCart) return empty
+    const cart = localCarts.get(activeLocalCart)
+    if (!cart || !cart.sourcePaths) return empty
+    const matching: number[] = []
+    let activeCount = 0
+    let tombstonedCount = 0
+    for (let i = 0; i < cart.sourcePaths.length; i++) {
+      if (cart.sourcePaths[i] !== sourcePath) continue
+      matching.push(i)
+      if (cart.tombstones.has(i)) tombstonedCount++
+      else activeCount++
+    }
+    const start = Math.max(0, offset)
+    const end = Math.min(matching.length, start + Math.max(0, limit))
+    const pageIdx = matching.slice(start, end)
+    const passages = pageIdx.map((idx) => {
+      const text = cart.passages[idx] ?? ''
+      const firstNewline = text.indexOf('\n')
+      const rawTitle = firstNewline > 0 ? text.slice(0, firstNewline) : text.slice(0, 120)
+      const rawBody = firstNewline > 0 ? text.slice(firstNewline + 1) : text
+      const title = rawTitle.trim() || `#${idx}`
+      const preview = rawBody.replace(/\s+/g, ' ').trim().slice(0, 160)
+      return { idx, title, preview, tombstoned: cart.tombstones.has(idx) }
+    })
+    return {
+      total: matching.length,
+      activeCount,
+      tombstonedCount,
+      passages,
+    }
   },
 
   // Add a new passage to the active LocalCart. Embeds the text via the
@@ -461,6 +731,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       searchModeLabel: '',
       searchElapsed: 0,
       walkTrail: [],
+      showTocPanel: true,
     })
   },
 
@@ -606,6 +877,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   exactMatch: false,
   setExactMatch: (exact) => set({ exactMatch: exact }),
 
+  showTocPanel: true,
+  setShowTocPanel: (show) => set({ showTocPanel: show }),
+
   editorOpen: false,
   editorText: '',
   editorOriginalIdx: null,
@@ -624,9 +898,38 @@ export const useAppStore = create<AppState>((set, get) => ({
   }),
   setEditorText: (text) => set({ editorText: text }),
   saveEditor: async () => {
-    const { editorText, editorOriginalIdx, addPassage, deleteResult, closeEditor } = get()
+    const {
+      editorText, editorOriginalIdx,
+      addPassage, deleteResult, closeEditor,
+      activeLocalCart, localCarts,
+      localCartAddPassage, localCartTombstone,
+    } = get()
     const text = editorText.trim()
     if (!text) return { success: false, message: 'Text is empty' }
+
+    // LocalCart branch — backend api.addPassage / api.deletePattern only
+    // mutate server state, so LocalCart edits made from Edit Carts would
+    // silently no-op (Andy 2026-07-02). Route through localCart* actions
+    // so the in-memory cart updates + React re-renders + dirty flag flips.
+    // Reuse the original passage's sourcePath so the new pattern stays
+    // attached to the same file for TOC + drill-down groupings.
+    if (activeLocalCart) {
+      const cart = localCarts.get(activeLocalCart)
+      set({ addingPassage: true })
+      try {
+        const source =
+          editorOriginalIdx !== null && cart?.sourcePaths
+            ? cart.sourcePaths[editorOriginalIdx] ?? '<inline>'
+            : '<inline>'
+        const resp = await localCartAddPassage(text, source)
+        if (!resp.success) return resp
+        if (editorOriginalIdx !== null) localCartTombstone(editorOriginalIdx)
+        closeEditor()
+        return resp
+      } finally {
+        set({ addingPassage: false })
+      }
+    }
 
     // Save new passage
     const resp = await addPassage(text)
@@ -855,6 +1158,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         results: [], query: '', deletedPatterns: [],
         strictMode: false, exactMatch: false,
         walkTrail: [], searchModeLabel: '', searchElapsed: 0,
+        showTocPanel: true,
       })
       pushToast('success', `Mounted ${resp.name} (${resp.pattern_count} patterns)`, 4000)
     } catch (e) {
@@ -873,6 +1177,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({
         results: [], query: '', deletedPatterns: [],
         walkTrail: [], searchModeLabel: '', searchElapsed: 0,
+        showTocPanel: true,
       })
     } catch (e) {
       console.error('Unmount failed:', e)
@@ -923,8 +1228,10 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   doSearch: async (query: string) => {
     const { searchMode, blendAlpha, topK, status, webgpuStatus, webgpuBrainLoadedFor, cartridges, activeLocalCart, localCarts } = get()
-    // A fresh text query exits walk-mode — the user is starting over.
-    set({ searching: true, query, walkTrail: [] })
+    // A fresh text query exits walk-mode — the user is starting over. Also
+    // hides the Pattern-0 TOC so results fill the space; the user brings the
+    // TOC back via the Pattern-0 button in SearchToolbar.
+    set({ searching: true, query, walkTrail: [], showTocPanel: false })
 
     // F1 — local cart path. The user's file never leaves the browser; we
     // embed the query via /api/embed (server-side Nomic), then cosine-rank

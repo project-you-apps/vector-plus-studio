@@ -322,11 +322,17 @@ export default function PassageModal() {
           </div>
         )}
 
-        {/* Footer with navigation */}
+        {/* Footer with navigation.
+            Andy 2026-07-03 boundary UX: at first/last passage of a drilled
+            file the disabled button was previously silent — the browser's
+            not-allowed cursor read as a STOP glyph with no explanation.
+            Now the disabled side shows an explicit "No previous" / "No next"
+            label so the boundary state is legible without hovering. */}
         <div className="flex items-center justify-between px-6 py-4 border-t border-slate-700/40">
           <button
             onClick={handleNavPrev}
             disabled={!hasPrev || loading}
+            title={!hasPrev ? 'No linked previous passage' : undefined}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
               hasPrev && !loading
                 ? 'bg-slate-800 hover:bg-slate-700 text-cyan-400 hover:text-cyan-300'
@@ -334,7 +340,7 @@ export default function PassageModal() {
             }`}
           >
             <ChevronLeft size={16} />
-            Prev
+            {hasPrev ? 'Prev' : 'No previous'}
           </button>
 
           <span className="text-xs text-slate-600">
@@ -344,13 +350,14 @@ export default function PassageModal() {
           <button
             onClick={handleNavNext}
             disabled={!hasNext || loading}
+            title={!hasNext ? 'No linked next passage' : undefined}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
               hasNext && !loading
                 ? 'bg-slate-800 hover:bg-slate-700 text-cyan-400 hover:text-cyan-300'
                 : 'bg-slate-800/50 text-slate-600 cursor-not-allowed'
             }`}
           >
-            Next
+            {hasNext ? 'Next' : 'No next'}
             <ChevronRight size={16} />
           </button>
         </div>

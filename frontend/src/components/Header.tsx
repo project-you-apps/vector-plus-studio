@@ -20,6 +20,8 @@ export default function Header() {
   const localCarts = useAppStore((s) => s.localCarts)
   const unmount = useAppStore((s) => s.unmount)
   const unmountLocalCart = useAppStore((s) => s.unmountLocalCart)
+  const desktopHelperState = useAppStore((s) => s.desktopHelperState)
+  const openDesktopHelperPairModal = useAppStore((s) => s.openDesktopHelperPairModal)
 
   // Fix #1 (2026-06-30) — clicking the mounted-cart pill unmounts the cart.
   // Since mount state lives in the store, unmounting propagates to every tab
@@ -184,16 +186,48 @@ export default function Header() {
           </button>
         )}
 
-        <div
-          className="flex items-center gap-2"
-          title={gpuTooltip}
-        >
-          <Cpu size={14} className={physicsAvailable ? 'text-slate-400' : 'text-amber-400'} />
-          <span className={`w-2 h-2 rounded-full ${physicsAvailable ? 'bg-green-400 animate-pulse' : 'bg-amber-400'}`} />
-          <span className={`text-xs font-medium ${physicsAvailable ? 'text-slate-500' : 'text-amber-400'}`}>
-            {gpuLabel}
-          </span>
-        </div>
+        {/* BackendBadge. Priority order:
+              1. DESKTOP HELPER paired  — purple, Build routes to the local exe
+              2. DESKTOP HELPER unpaired — amber, click to open pair modal
+              3. Fall through to GPU / WebGPU / CPU (existing physics readout)
+            The desktop-helper states only appear after detectDesktopHelper()
+            has fired (Cart Builder tab mount) and found an exe on 7878. */}
+        {desktopHelperState === 'detected-paired' ? (
+          <div
+            className="flex items-center gap-2"
+            title="Desktop Cart Builder detected -- Build requests run natively on your GPU via local exe"
+          >
+            <Cpu size={14} className="text-purple-300" />
+            <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
+            <span className="text-xs font-medium text-purple-300">
+              DESKTOP HELPER
+            </span>
+          </div>
+        ) : desktopHelperState === 'detected-unpaired' ? (
+          <button
+            type="button"
+            onClick={openDesktopHelperPairModal}
+            className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-amber-500/10 transition-colors"
+            title="Desktop Cart Builder detected -- click Pair to connect"
+          >
+            <Cpu size={14} className="text-amber-400" />
+            <span className="w-2 h-2 rounded-full bg-amber-400" />
+            <span className="text-xs font-medium text-amber-400">
+              DESKTOP HELPER
+            </span>
+          </button>
+        ) : (
+          <div
+            className="flex items-center gap-2"
+            title={gpuTooltip}
+          >
+            <Cpu size={14} className={physicsAvailable ? 'text-slate-400' : 'text-amber-400'} />
+            <span className={`w-2 h-2 rounded-full ${physicsAvailable ? 'bg-green-400 animate-pulse' : 'bg-amber-400'}`} />
+            <span className={`text-xs font-medium ${physicsAvailable ? 'text-slate-500' : 'text-amber-400'}`}>
+              {gpuLabel}
+            </span>
+          </div>
+        )}
 
         {SHOW_MEMBOX_TOGGLE && (
           <button

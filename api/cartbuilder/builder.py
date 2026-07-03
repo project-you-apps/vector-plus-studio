@@ -48,7 +48,12 @@ def _update(kv: dict):
 
 
 def build_cart_async(chunks: list[dict], cart_name: str, output_dir: str,
-                     file_metadata: dict = None):
+                     file_metadata: dict = None,
+                     description: str = "",
+                     agent_briefing: str = "",
+                     owner: str = "",
+                     tags: list = None,
+                     creator: str = "Cart Builder (cloud)"):
     """Run cart build in a background thread.
 
     Args:
@@ -56,15 +61,39 @@ def build_cart_async(chunks: list[dict], cart_name: str, output_dir: str,
         cart_name: name for the cart file
         output_dir: where to save the cart
         file_metadata: {source_name: {"owner": str, "description": str, "tags": list}}
+        description: cart-level description string (baked into pattern0_data)
+        agent_briefing: cart-level agent-briefing string (baked into pattern0_data)
+        owner: cart-level owner string (baked into pattern0_data)
+        tags: cart-level list of tag strings (baked into pattern0_data)
+        creator: cart-level creator string; falls back to "Cart Builder (cloud)"
+                 for server-side builds. Frontend paths pass "Cart Builder
+                 (browser)" or "Cart Builder (local)" (via the __init__ /build
+                 handler's creator resolution); the "(cloud)" suffix labels
+                 anything that lands here without a JWT-user or client-side
+                 creator override.
     """
-    t = threading.Thread(target=_build_cart,
-                         args=(chunks, cart_name, output_dir, file_metadata or {}),
-                         daemon=True)
+    t = threading.Thread(
+        target=_build_cart,
+        args=(chunks, cart_name, output_dir, file_metadata or {}),
+        kwargs={
+            "description": description,
+            "agent_briefing": agent_briefing,
+            "owner": owner,
+            "tags": tags or [],
+            "creator": creator,
+        },
+        daemon=True,
+    )
     t.start()
 
 
 def _build_cart(chunks: list[dict], cart_name: str, output_dir: str,
-                file_metadata: dict):
+                file_metadata: dict,
+                description: str = "",
+                agent_briefing: str = "",
+                owner: str = "",
+                tags: list = None,
+                creator: str = "Cart Builder GUI"):
     try:
         n = len(chunks)
         _update({"status": "building", "chunks_total": n, "chunks_done": 0, "progress": 0.0, "error": None})
@@ -143,13 +172,21 @@ def _build_cart(chunks: list[dict], cart_name: str, output_dir: str,
 
         pattern0_data = {
             "cart_name": cart_name,
-            "creator": "Cart Builder GUI",
+            "creator": creator or "Cart Builder (cloud)",
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "file_count": len(unique_sources),
             "total_chunks": n,
             "embedding_model": "nomic-ai/nomic-embed-text-v1.5",
             "embedding_dim": embeddings.shape[1] if len(embeddings) > 0 else 768,
             "files": list(unique_sources.values()),
+            # Cart-level metadata surfaced in the Pattern-0 TOC panel. Description
+            # and agent_briefing get generic-fallback text from the /build handler
+            # when the caller doesn't supply one, so these fields are always
+            # populated on user-built carts (Andy 2026-07-02 rich Pattern-0 path).
+            "description": description or "",
+            "agent_briefing": agent_briefing or "",
+            "owner": owner or "",
+            "tags": list(tags or []),
         }
 
         _update({"progress": 0.85})
