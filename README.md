@@ -1,6 +1,15 @@
-# Vector+ Studio v1.2 — Hosted Demo + Browser-Side Cart Builder + OAuth
+# Vector+ Studio v1.3 — Rich Pattern-0, Desktop Cart Builder, Edit Carts Drill-Down
 
- I built Vector+ Studio (with Claude's help) to answer a specific question: what would search feel like if it found *related* ideas, not just matching words? The substrate is a neuromorphic lattice — physics-based retrieval that finds neighbors-by-meaning rather than nearest-by-distance. Try it at **https://project-you.app/vps/app** on the bundled sample carts, or drop in your own PDFs and the browser will build you a cartridge while you watch. No install, no GPU required. Sign in if you want your own private library; the demo carts are public and ready to search without signup.
+ I built Vector+ Studio (with Claude's help) to answer a specific question: what would search feel like if it found *related* ideas, not just matching words? The substrate is a neuromorphic lattice — physics-based retrieval that finds neighbors-by-meaning rather than nearest-by-distance. Try it at **https://project-you.app/vps/app** on the bundled sample carts, or drop in your own PDFs and the browser will build you a cartridge while you watch. No install, no GPU required. Sign in if you want your own private library; the demo carts are public and ready to search without signup. If your machine has real GPU horsepower and you want to build big carts locally, pair the [Vector+ Desktop Builder](https://github.com/project-you-apps/vector-plus-desktop-builder) — the web UI detects it and delegates builds automatically.
+
+**What's new in v1.3:**
+07-03-26
+
+- **Rich Pattern-0 TOC on the Search tab** — carts now carry description, creator, owner, tags, and an optional agent briefing that agents can read before using the cart. The TOC panel surfaces all of it with click-through to per-file passages (LocalCart mounts). BRIEFING modal appears when a cart has an agent_briefing block.
+- **Cart Builder metadata dropdown** — optional description, agent briefing, owner, and tags at build time; browser and desktop paths both bake this into `pattern0.npy` inside the NPZ. Same schema whether the build runs in-browser, on the paired Desktop Builder, or on the hosted backend.
+- **[Vector+ Desktop Builder](https://github.com/project-you-apps/vector-plus-desktop-builder)** — small local exe (Python + FastAPI + PyInstaller onefile) that pairs with the web UI via loopback. **Use this to build carts with the resources of your local drive (GPU, etc.).** It delegates cart builds to native ONNX (with GPU cooldown pauses) instead of browser WebGPU allowing cart building to escape the 2 GiB buffer caps + sandbox constraints, and saves your UPS on big jobs. Files stay local; only the token travels between browser and exe.
+- **Edit Carts File→Passages drill-down** — click a source file in Edit Carts to open a per-file passage browser with Edit / Tombstone / Restore. Handles legacy carts that lack a `source_paths` sidecar via first-line-of-passage synthesis.
+- **Search tab UX polish** — search results and Pattern-0 TOC now toggle instead of stacking. A **Pattern-0** button in the toolbar brings the TOC back after searching. Keyword and exact-match filters right-aligned under the Search button. **Live tombstone filter** — edits and restores in Edit Carts propagate to Search results without needing to re-search. PassageModal PREV|NEXT stay within the drilled file's scope.
 
 **What's new in v1.2:**
 
