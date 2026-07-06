@@ -34,6 +34,17 @@ const TOC_PAGE_SIZE = 25
 // grow past its ~45vh cap set by the parent container.
 const DRILL_PAGE_SIZE = 25
 
+// Andy 2026-07-06 AM: Cart Builder prefixes disk uploads with an 8-hex hash +
+// underscore. The passage-first-line label prepend strips this prefix as of
+// 2026-07-05 PM, so LocalCart's synthesized sourcePaths carry the stripped
+// name — but pattern0's files[].name and source_paths.npy (both baked at
+// build time) still carry the hashed name. Normalize everywhere the TOC
+// derives drillPath or looks up counts, so hashed and stripped forms unify.
+const HASH_PREFIX_RE = /^[0-9a-f]{8}_/
+function displayName(name: string): string {
+  return name.replace(HASH_PREFIX_RE, '')
+}
+
 
 function BriefingModal({
   briefing,
@@ -183,14 +194,16 @@ export default function Pattern0TocPanel() {
       }
       // Live per-source counts respecting tombstones. Used both for the
       // derived-only branch and to override the baked pattern0's chunks
-      // number so tombstoned edits show accurate counts.
+      // number so tombstoned edits show accurate counts. Normalized through
+      // displayName so hashed and stripped sourcePaths unify.
       const liveCounts = new Map<string, number>()
       if (cart.sourcePaths) {
         for (let i = 0; i < cart.sourcePaths.length; i++) {
           const sp = cart.sourcePaths[i]
           if (!sp) continue
           if (cart.tombstones.has(i)) continue
-          liveCounts.set(sp, (liveCounts.get(sp) ?? 0) + 1)
+          const key = displayName(sp)
+          liveCounts.set(key, (liveCounts.get(key) ?? 0) + 1)
         }
       }
 
@@ -206,11 +219,16 @@ export default function Pattern0TocPanel() {
 
       let toc_items: Pattern0TocItem[]
       if (p0 && Array.isArray(p0.files) && p0.files.length > 0) {
-        toc_items = p0.files.map((f) => ({
-          name: f.name,
-          description: f.description ?? null,
-          pattern_count: liveCounts.get(f.name) ?? f.chunks ?? 0,
-        }))
+        toc_items = p0.files.map((f) => {
+          const display = displayName(f.name)
+          return {
+            name: display,
+            description: f.description ?? null,
+            // Look up counts under both forms so we hit whichever shape the
+            // synthesized sourcePaths came out as.
+            pattern_count: liveCounts.get(display) ?? liveCounts.get(f.name) ?? f.chunks ?? 0,
+          }
+        })
       } else if (liveCounts.size > 0) {
         toc_items = Array.from(liveCounts.entries()).map(([name, pattern_count]) => ({
           name,

@@ -90,6 +90,9 @@ export default function PassageModal() {
   const navigateModal = useAppStore((s) => s.navigateModal)
   const loadSource = useAppStore((s) => s.loadSourceForCurrentPassage)
   const mountedCart = useAppStore((s) => s.status?.mounted_cartridge)
+  // Andy 2026-07-06 AM: surface the query term in the modal so users don't
+  // lose the "why am I looking at this?" thread when navigating Prev/Next.
+  const currentQuery = useAppStore((s) => s.query)
   const activeLocalCart = useAppStore((s) => s.activeLocalCart)
   const localCarts = useAppStore((s) => s.localCarts)
   const sandboxPerPatternMeta = useAppStore((s) => s.sandboxPerPatternMeta)
@@ -270,18 +273,34 @@ export default function PassageModal() {
     >
       <div className="relative w-full max-w-3xl max-h-[85vh] mx-4 flex flex-col rounded-2xl border border-slate-700/50 bg-slate-900 shadow-2xl">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700/40">
-          <div className="flex items-center gap-3 min-w-0">
-            <span className="text-xs text-slate-500 font-mono shrink-0">#{passage.idx}</span>
-            <h2 className="text-lg font-medium text-slate-200 truncate">{passage.title}</h2>
+        <div className="flex flex-col px-6 py-4 border-b border-slate-700/40 gap-1.5">
+          <div className="flex items-center justify-between gap-3 min-w-0">
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="text-xs text-slate-500 font-mono shrink-0">#{passage.idx}</span>
+              <h2 className="text-lg font-medium text-slate-200 truncate">{passage.title}</h2>
+            </div>
+            <button
+              onClick={closeModal}
+              className="shrink-0 p-2 rounded-lg hover:bg-slate-700/50 text-slate-500 hover:text-slate-300 transition-colors"
+              title="Close (Esc)"
+            >
+              <X size={18} />
+            </button>
           </div>
-          <button
-            onClick={closeModal}
-            className="shrink-0 p-2 rounded-lg hover:bg-slate-700/50 text-slate-500 hover:text-slate-300 transition-colors"
-            title="Close (Esc)"
-          >
-            <X size={18} />
-          </button>
+          {/* Query-pill — surfaces the query that led here. Andy 2026-07-06
+              AM: helps keep the "why am I looking at this" thread across
+              Prev/Next navigation. Truncated to 47 chars + ellipsis. */}
+          {currentQuery && currentQuery.trim().length > 0 && (
+            <div className="flex items-center gap-1.5 text-[11px] pl-8">
+              <span className="text-slate-500 font-mono uppercase tracking-wider">Query</span>
+              <span
+                className="px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20 font-mono truncate max-w-full"
+                title={currentQuery}
+              >
+                {currentQuery.length > 47 ? `${currentQuery.slice(0, 47)}…` : currentQuery}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Body — markdown rendered with remark-gfm (tables, autolinks, strikethrough).

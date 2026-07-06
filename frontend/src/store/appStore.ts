@@ -722,11 +722,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!activeLocalCart) return empty
     const cart = localCarts.get(activeLocalCart)
     if (!cart || !cart.sourcePaths) return empty
+    // Andy 2026-07-06 AM: hash-strip both sides so the match works whether
+    // the caller passed a hashed pattern0-derived name or a stripped
+    // synthesized-sourcePaths name. Cart Builder exe carts have hashed
+    // sourcePaths.npy, browser-built carts have stripped ones.
+    const stripHash = (s: string) => s.replace(/^[0-9a-f]{8}_/, '')
+    const targetKey = stripHash(sourcePath)
     const matching: number[] = []
     let activeCount = 0
     let tombstonedCount = 0
     for (let i = 0; i < cart.sourcePaths.length; i++) {
-      if (cart.sourcePaths[i] !== sourcePath) continue
+      if (stripHash(cart.sourcePaths[i] ?? '') !== targetKey) continue
       matching.push(i)
       if (cart.tombstones.has(i)) tombstonedCount++
       else activeCount++
