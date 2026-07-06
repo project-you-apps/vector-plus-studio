@@ -245,18 +245,17 @@ export default function ResultCard({ result }: Props) {
     return getFigureUrl(activeLocalCart, filename, bytes, figureMeta.format)
   })()
 
-  // Day 2 graphic — if this result is a graphic-type pattern (Image Builder
-  // extracted), pull the base64 PNG bytes out of per_pattern_meta and hand
-  // back a data URL for inline rendering. Andy 2026-07-05 PM: this is the
-  // "images visible in the demo" path for Docling-extracted graphics.
-  const graphicPatternMeta = useMemo(() => {
+  // Day 2 pattern metadata — raw record for THIS result's idx. Used for
+  // both graphic-image rendering (when content_type='graphic') and
+  // edit-affordance gating on graphic/table patterns.
+  const patternMeta = useMemo(() => {
     if (!activeLocalCart) return null
     const cart = localCarts.get(activeLocalCart)
     if (!cart?.perPatternMeta) return null
-    const rec = cart.perPatternMeta[result.idx]
-    if (!rec || rec.content_type !== 'graphic' || !rec.image_b64) return null
-    return rec
+    return cart.perPatternMeta[result.idx] ?? null
   }, [activeLocalCart, localCarts, result.idx])
+  const graphicPatternMeta =
+    patternMeta?.content_type === 'graphic' && patternMeta.image_b64 ? patternMeta : null
   const graphicDataUrl: string | null = graphicPatternMeta
     ? `data:image/png;base64,${graphicPatternMeta.image_b64}`
     : null
@@ -294,6 +293,15 @@ export default function ResultCard({ result }: Props) {
     || !!status?.read_only
     || !!activeLocalCart  // local-disk carts are read-only in F1-A (RW writeback comes later)
   const patternLocked = !!(result.perms && !result.perms.w)
+  // Andy 2026-07-05 PM: graphic/table patterns can't be edited without
+  // losing the link to their extracted image (which is a real design
+  // issue we'll solve properly post-demo). For now: disable Edit on
+  // graphic/table patterns; Delete stays available so users can still
+  // tombstone them.
+  const isGraphicOrTable =
+    patternMeta?.content_type === 'graphic'
+    || patternMeta?.content_type === 'table'
+  const editDisabled = cartReadOnly || patternLocked || isGraphicOrTable
   const writeDisabled = cartReadOnly || patternLocked
 
   // Surface the specific reason in tooltips so the user knows WHY a button
@@ -477,13 +485,19 @@ export default function ResultCard({ result }: Props) {
           )}
           <button
             onClick={() => openEditor(result.full_text, result.idx)}
-            disabled={writeDisabled}
+            disabled={editDisabled}
             className={`p-2 rounded-lg transition-colors ${
-              writeDisabled
+              editDisabled
                 ? 'text-slate-600 opacity-40 cursor-not-allowed'
                 : 'hover:bg-slate-700/50 text-slate-500 hover:text-purple-400'
             }`}
-            title={writeDisabled ? (disabledReason ?? 'Read-only') : 'Edit passage'}
+            title={
+              isGraphicOrTable
+                ? `Editing ${patternMeta?.content_type} patterns is disabled — the extracted image would be lost. Use the trash icon to tombstone instead.`
+                : editDisabled
+                  ? (disabledReason ?? 'Read-only')
+                  : 'Edit passage'
+            }
           >
             <Pencil size={16} />
           </button>
