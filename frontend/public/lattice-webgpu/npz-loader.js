@@ -371,7 +371,6 @@ export async function parseCartNpz(buffer) {
                 if (asStrings.length > 0 && asStrings[0]) {
                     try {
                         pattern0 = JSON.parse(asStrings[0]);
-                        console.log('[npz-loader] pattern0 parsed via pickle fallback', pattern0);
                     } catch (e) {
                         console.warn('[npz-loader] pickle-parsed pattern0 string is not JSON:', e);
                     }
@@ -385,7 +384,6 @@ export async function parseCartNpz(buffer) {
             if (decoded.length > 0 && decoded[0]) {
                 try {
                     pattern0 = JSON.parse(decoded[0]);
-                    console.log('[npz-loader] pattern0 parsed via unicode', pattern0);
                 } catch {
                     // Malformed JSON — treat as missing rather than crash the mount.
                     pattern0 = null;

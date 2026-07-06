@@ -20,7 +20,14 @@ import { useAppStore } from '../store/appStore'
 // section / different file) have no overlap → algorithm returns 0 → no
 // graying. Random-access from search results clears the prevText state so
 // the first view is always full content, no false-positive graying.
-function findOverlap(suffixOf: string, prefixOf: string, maxChars = 600): number {
+function findOverlap(suffixOf: string, prefixOf: string, maxChars = 300): number {
+  // Andy 2026-07-05 PM: reduced default cap from 600 → 300 chars. The
+  // line-aware chunker landed 2026-07-05 preserves whole lines in overlap,
+  // so a single long line at the boundary can drive the actual overlap
+  // north of 500 chars. Capping the graying at 300 keeps the divider
+  // legible without eating half the visible chunk. The larger structural
+  // question (should the chunker's overlap window be smaller?) is filed
+  // for post-demo revisit.
   const cap = Math.min(maxChars, suffixOf.length, prefixOf.length)
   for (let len = cap; len >= 5; len--) {
     if (suffixOf.slice(-len) === prefixOf.slice(0, len)) {
@@ -102,6 +109,22 @@ export default function PassageModal() {
   const graphicDataUrl: string | null = graphicPatternMeta
     ? `data:image/png;base64,${graphicPatternMeta.image_b64}`
     : null
+
+  // Andy 2026-07-05 PM: click-to-zoom lightbox for graphic images. Any
+  // inline `<img>` in the passage viewer can be clicked to open a
+  // full-viewport view. Escape or backdrop click closes.
+  const [zoomedSrc, setZoomedSrc] = useState<{ src: string; alt: string } | null>(null)
+  useEffect(() => {
+    if (!zoomedSrc) return
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        setZoomedSrc(null)
+      }
+    }
+    window.addEventListener('keydown', handler, true)
+    return () => window.removeEventListener('keydown', handler, true)
+  }, [zoomedSrc])
 
   // Andy 2026-07-05 PM: inline-image replacement. Docling leaves
   // `<!-- image -->` markers wherever graphics live in the reading flow.
@@ -261,7 +284,13 @@ export default function PassageModal() {
                   <img
                     src={graphicDataUrl}
                     alt={graphicPatternMeta?.caption || 'Extracted graphic'}
-                    className="max-h-[50vh] max-w-full object-contain bg-slate-950 rounded-lg border border-slate-700/40"
+                    onClick={() =>
+                      setZoomedSrc({
+                        src: graphicDataUrl,
+                        alt: graphicPatternMeta?.caption || 'Extracted graphic',
+                      })
+                    }
+                    className="max-h-[50vh] max-w-full object-contain bg-slate-950 rounded-lg border border-slate-700/40 cursor-zoom-in hover:brightness-110 transition-all"
                   />
                 </div>
               )}
@@ -349,12 +378,15 @@ export default function PassageModal() {
                       const idx = parseInt(srcStr.slice('graphic:'.length), 10)
                       const g = sourceGraphics[idx]
                       if (!g?.image_b64) return null
+                      const dataUrl = `data:image/png;base64,${g.image_b64}`
+                      const altText = g.caption || alt || 'Extracted graphic'
                       return (
                         <span className="block my-3 flex flex-col items-center gap-1">
                           <img
-                            src={`data:image/png;base64,${g.image_b64}`}
-                            alt={g.caption || alt || 'Extracted graphic'}
-                            className="max-h-96 max-w-full object-contain bg-slate-950 rounded-lg border border-slate-700/40"
+                            src={dataUrl}
+                            alt={altText}
+                            onClick={() => setZoomedSrc({ src: dataUrl, alt: altText })}
+                            className="max-h-96 max-w-full object-contain bg-slate-950 rounded-lg border border-slate-700/40 cursor-zoom-in hover:brightness-110 transition-all"
                           />
                           {g.caption && (
                             <span className="text-[11px] text-slate-500 italic text-center">
@@ -462,6 +494,29 @@ export default function PassageModal() {
           </button>
         </div>
       </div>
+      {/* Click-to-zoom lightbox — full-viewport overlay above the passage
+          modal. Escape or backdrop click closes. Andy 2026-07-05 PM: the
+          modal-from-modal we joked about earlier. */}
+      {zoomedSrc && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-md cursor-zoom-out"
+          onClick={() => setZoomedSrc(null)}
+        >
+          <img
+            src={zoomedSrc.src}
+            alt={zoomedSrc.alt}
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[92vh] max-w-[92vw] object-contain rounded-xl border border-slate-700/40 shadow-2xl cursor-default"
+          />
+          <button
+            onClick={() => setZoomedSrc(null)}
+            className="absolute top-4 right-4 p-2 rounded-full bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-slate-100 transition-colors"
+            title="Close (Esc)"
+          >
+            <X size={18} />
+          </button>
+        </div>
+      )}
     </div>
   )
 }

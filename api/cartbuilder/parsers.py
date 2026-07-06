@@ -143,15 +143,6 @@ def classify_pdf(filepath: Path) -> str:
         except Exception:
             pass
     readable_fraction = readable_chars / total_chars if total_chars else 0.0
-    # Diagnostic (Andy 2026-07-05) — remove after Grant's deck routing tunes correctly.
-    print(
-        f"[classify_pdf] {filepath.name}: total_chars={total_chars}, "
-        f"readable_chars={readable_chars}, readable_fraction={readable_fraction:.3f}, "
-        f"pages_sampled={pages_to_check}, "
-        f"corrupt_page={corrupt_page_idx if corrupt_page_found else 'none'}"
-        + (f" (fraction {corrupt_page_fraction:.3f})" if corrupt_page_found else ""),
-        flush=True,
-    )
     if total_chars <= PDF_CLASSIFY_TEXT_THRESHOLD:
         return "scanned"
     if corrupt_page_found:

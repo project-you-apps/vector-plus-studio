@@ -144,13 +144,6 @@ export async function classifyPdf(file: File): Promise<'text' | 'scanned'> {
     }
   }
   const readableFraction = totalChars > 0 ? readableChars / totalChars : 0
-  // Diagnostic (Andy 2026-07-05) — remove after Grant's deck routing tunes correctly.
-  // eslint-disable-next-line no-console
-  console.log(
-    `[classifyPdf] ${file.name}: totalChars=${totalChars}, readableChars=${readableChars}, ` +
-    `readableFraction=${readableFraction.toFixed(3)}, pagesSampled=${pagesToCheck}, ` +
-    `corruptPage=${corruptPageFound ? `${corruptPageIdx} (fraction ${corruptPageFraction.toFixed(3)})` : 'none'}`
-  )
   if (totalChars <= PDF_CLASSIFY_TEXT_THRESHOLD) return 'scanned'
   if (corruptPageFound) return 'scanned'
   if (readableFraction < PDF_CLASSIFY_READABLE_THRESHOLD) return 'scanned'

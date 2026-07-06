@@ -549,7 +549,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeLocalCart: null,
   localCartLoading: false,
   mountLocalCart: async (file: File) => {
-    console.log('[mountLocalCart] start', { name: file.name, size: file.size })
     set({ localCartLoading: true })
     try {
       const cart = await parseCartFile(file)
@@ -571,18 +570,6 @@ export const useAppStore = create<AppState>((set, get) => ({
           return trimmed || `passage_${i}`
         })
       }
-      console.log('[mountLocalCart] parsed', {
-        name: cart.name,
-        embeddings: cart.embeddings.length,
-        embeddingsShape: cart.embeddingsShape,
-        passages: cart.passages.length,
-        sourcePathsSynthesized: sourcePathsWereSynthesized,
-        // 2026-07-04 debug: pattern0Meta visibility. If this is null, npz-loader
-        // isn't parsing pattern0.npy. If it has fields, the panel side needs to be
-        // debugged next. Remove this line once the LocalCart Pattern-0 path is verified.
-        pattern0Meta: cart.pattern0Meta,
-        figuresCount: cart.figures?.size ?? 0,
-      })
       const next = new Map(get().localCarts)
       next.set(cart.name, cart)
       set({
@@ -595,7 +582,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         walkTrail: [],
         showTocPanel: true,
       })
-      console.log('[mountLocalCart] active set to', cart.name)
       return { success: true, message: `Mounted ${cart.name} (${cart.passages.length.toLocaleString()} passages)` }
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Unknown error'
@@ -1348,7 +1334,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     // against the in-memory embeddings. Fast/Hamming/Smart/Associate aren't
     // available on local carts yet (no brain or sigs locally); we fall back
     // to plain cosine for any mode requested.
-    console.log('[doSearch] start', { query, activeLocalCart, hasLocalCart: !!localCarts.get(activeLocalCart ?? '') })
     if (activeLocalCart) {
       const cart = localCarts.get(activeLocalCart)
       if (!cart) {
@@ -1359,7 +1344,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       try {
         const t0 = performance.now()
         const apiBase = (import.meta.env.VITE_API_BASE as string | undefined) || '/api'
-        console.log('[doSearch] local branch — fetching embedding from', apiBase)
         const embResp = await fetch(`${apiBase}/embed`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1368,9 +1352,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (!embResp.ok) throw new Error(`Embed failed: ${embResp.status}`)
         const embData = await embResp.json()
         const queryEmb = new Float32Array(embData.embedding)
-        console.log('[doSearch] running cosineSearchLocal on', cart.passages.length, 'passages')
         const results = cosineSearchLocal(queryEmb, cart, topK)
-        console.log('[doSearch] got', results.length, 'results, top score', results[0]?.score)
         set({
           results,
           searchModeLabel: 'Local cart · cosine (browser)',
