@@ -109,8 +109,6 @@ export async function classifyPdf(file: File): Promise<'text' | 'scanned'> {
   let totalChars = 0
   let readableChars = 0
   let corruptPageFound = false
-  let corruptPageIdx = -1
-  let corruptPageFraction = 0
   for (let i = 1; i <= pagesToCheck; i++) {
     let pageChars = 0
     let pageReadable = 0
@@ -138,8 +136,6 @@ export async function classifyPdf(file: File): Promise<'text' | 'scanned'> {
       const pageFraction = pageReadable / pageChars
       if (pageFraction < PDF_CLASSIFY_PAGE_READABLE_THRESHOLD) {
         corruptPageFound = true
-        corruptPageIdx = i
-        corruptPageFraction = pageFraction
       }
     }
   }

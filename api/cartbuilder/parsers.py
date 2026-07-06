@@ -108,9 +108,6 @@ def classify_pdf(filepath: Path) -> str:
     total_chars = 0
     readable_chars = 0
     corrupt_page_found = False
-    corrupt_page_idx = -1
-    corrupt_page_fraction = 0.0
-    pages_to_check = 0
     try:
         pages_to_check = min(len(doc), PDF_CLASSIFY_MAX_PAGES)
         for i in range(pages_to_check):
@@ -128,10 +125,6 @@ def classify_pdf(filepath: Path) -> str:
                     page_fraction = page_readable / page_len
                     if page_fraction < PDF_CLASSIFY_PAGE_READABLE_THRESHOLD:
                         corrupt_page_found = True
-                        corrupt_page_idx = i + 1  # 1-indexed for logs
-                        corrupt_page_fraction = page_fraction
-                        # Don't early-exit — keep aggregating so the
-                        # diagnostic shows the full document picture.
             except Exception:
                 # Skip page on error; partial score still useful — a truly
                 # scanned PDF stays under threshold no matter which page
