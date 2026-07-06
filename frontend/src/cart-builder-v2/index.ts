@@ -78,6 +78,7 @@ export { buildCart, downloadBuiltCart, saveBuiltCartToDirectory } from './writer
 
 // Pipeline (Block 4)
 export type {
+  FileRoute,
   PipelineOptions,
   PipelineProgress,
   PipelineResult,
@@ -88,4 +89,21 @@ export {
   buildCartFromPassages,
   DEFAULT_MAX_CHUNKS_PER_BUILD,
   DEFAULT_MAX_FILE_SIZE_BYTES,
+  routeForFile,
+  syncRouteForFile,
 } from './pipeline'
+
+// Day 2 — Image Builder integration surface
+export type {
+  ContentType,
+  Graphic,
+  ImageBuilderOcrResult,
+  Table,
+} from './types'
+export {
+  classifyPdf,
+  isImageFile,
+  parseViaImageBuilder,
+  PDF_CLASSIFY_MAX_PAGES,
+  PDF_CLASSIFY_TEXT_THRESHOLD,
+} from './parsers'

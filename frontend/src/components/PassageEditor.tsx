@@ -80,8 +80,11 @@ export default function PassageEditor() {
             <div className="mb-3 px-4 py-2.5 rounded-lg bg-slate-800/60 border border-slate-700/50 text-xs text-slate-400 flex items-center gap-2">
               <FileText size={14} className="text-slate-500 shrink-0" />
               <span>
-                Saving changes will create a new pattern with the updated text and retire the original.
-                The old version can be restored from the Tombstones panel.
+                Saving changes creates a new pattern with the updated text and retires the original.
+                The old version can be restored from the Tombstones panel.{' '}
+                <strong className="text-slate-300">NOTE:</strong> Restoring an edited passage still
+                leaves the edited version of the passage appended to the cart too, so you will see
+                it also returned in search results if matched.
               </span>
             </div>
           )}

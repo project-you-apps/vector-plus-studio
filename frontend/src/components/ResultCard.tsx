@@ -245,6 +245,22 @@ export default function ResultCard({ result }: Props) {
     return getFigureUrl(activeLocalCart, filename, bytes, figureMeta.format)
   })()
 
+  // Day 2 graphic — if this result is a graphic-type pattern (Image Builder
+  // extracted), pull the base64 PNG bytes out of per_pattern_meta and hand
+  // back a data URL for inline rendering. Andy 2026-07-05 PM: this is the
+  // "images visible in the demo" path for Docling-extracted graphics.
+  const graphicPatternMeta = useMemo(() => {
+    if (!activeLocalCart) return null
+    const cart = localCarts.get(activeLocalCart)
+    if (!cart?.perPatternMeta) return null
+    const rec = cart.perPatternMeta[result.idx]
+    if (!rec || rec.content_type !== 'graphic' || !rec.image_b64) return null
+    return rec
+  }, [activeLocalCart, localCarts, result.idx])
+  const graphicDataUrl: string | null = graphicPatternMeta
+    ? `data:image/png;base64,${graphicPatternMeta.image_b64}`
+    : null
+
   // In walk mode the user isn't searching for keywords — they're physics-walking.
   // Suppress text-keyword highlighting so old query words don't reinforce a stale
   // frame on the walk results. The trail dropdown already communicates the path.
@@ -406,6 +422,19 @@ export default function ResultCard({ result }: Props) {
                 {figureMeta.caption || <span className="italic text-slate-600">(no caption detected)</span>}
               </p>
             </div>
+          ) : graphicDataUrl ? (
+            <div className="flex gap-3 items-start">
+              <img
+                src={graphicDataUrl}
+                alt={graphicPatternMeta?.caption || 'Extracted graphic'}
+                className="h-24 w-24 object-contain bg-slate-900/60 rounded border border-slate-700/40 shrink-0"
+              />
+              <p className="text-sm text-slate-400 line-clamp-3 flex-1">
+                {graphicPatternMeta?.caption || result.preview || (
+                  <span className="italic text-slate-600">(no caption detected)</span>
+                )}
+              </p>
+            </div>
           ) : result.preview ? (
             <p className="text-sm text-slate-500 line-clamp-2">{renderTextWithLinks(result.preview, highlightQuery)}</p>
           ) : null}
@@ -505,6 +534,15 @@ export default function ResultCard({ result }: Props) {
               <img
                 src={figureUrl}
                 alt={figureMeta.caption || `Figure from ${figureMeta.source}`}
+                className="max-h-96 max-w-full object-contain bg-slate-950 rounded border border-slate-700/40"
+              />
+            </div>
+          )}
+          {graphicDataUrl && (
+            <div className="mb-3 flex justify-center">
+              <img
+                src={graphicDataUrl}
+                alt={graphicPatternMeta?.caption || 'Extracted graphic'}
                 className="max-h-96 max-w-full object-contain bg-slate-950 rounded border border-slate-700/40"
               />
             </div>

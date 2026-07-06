@@ -5,7 +5,7 @@
  * file without uploading anything.
  */
 
-import type { LocalCart, LocalCartPattern0Meta } from '../store/appStore';
+import type { LocalCart, LocalCartPattern0Meta, LocalCartPatternMeta } from '../store/appStore';
 import type { SearchResult } from '../api/types';
 
 interface ParsedCart {
@@ -22,6 +22,11 @@ interface ParsedCart {
     // NPY holding the same JSON payload as api/cartbuilder/builder.py). Null
     // for legacy carts that predate the sidecar.
     pattern0?: LocalCartPattern0Meta | null;
+    // Per-pattern metadata sidecar parsed from per_pattern_meta.npy.
+    // One record per pattern in `passages` (parallel-indexed). Null for
+    // legacy carts. Andy 2026-07-05 PM: image_b64 for graphic patterns
+    // flows through here to the UI thumbnail rendering.
+    perPatternMeta?: LocalCartPatternMeta[] | null;
 }
 
 let parseCartNpz: ((buffer: ArrayBuffer) => Promise<ParsedCart>) | null = null;
@@ -61,6 +66,7 @@ export async function parseCartFile(file: File): Promise<LocalCart> {
         mountedAt: performance.now(),
         figures: cart.figures ?? new Map(),
         pattern0Meta: cart.pattern0 ?? null,
+        perPatternMeta: cart.perPatternMeta ?? null,
         // Editable-state defaults: no tombstones, not dirty. Edit Carts mutates
         // these via the localCart* store actions; cosineSearchLocal filters
         // tombstoned idx out of search results.

@@ -7,7 +7,12 @@ import type { ChunkOptions } from './chunker'
 import { chunkSections } from './chunker'
 import type { EmbedOptions } from './embedder/embed'
 import { embedTexts } from './embedder/embed'
-import { parseFile } from './parsers'
+import {
+  classifyPdf,
+  isImageFile,
+  parseFile,
+  parseViaImageBuilder,
+} from './parsers'
 import type { Section } from './types'
 import type { BuildCartOptions, BuiltCart } from './writer/npz'
 import { buildCart } from './writer/npz'
@@ -71,6 +76,49 @@ export interface PipelineOptions {
 export const DEFAULT_MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024 // 50 MB per file
 export const DEFAULT_MAX_CHUNKS_PER_BUILD = 10_000
 
+// Per-file route decision (Day 2). Mirrors the design doc Option C heuristic:
+// images always go to Image Builder, PDFs are text-checked, everything else
+// stays on the existing chunker fast path. The router is intentionally
+// separate from the parsers so UI code can call it too (per-file badges).
+//
+// 'text' = existing parseFile → chunker path
+// 'image' = POST to Image Builder → markdown + graphics + tables
+// 'scanned' = same as 'image' route, but reached via PDF text-check
+// 'pending' = PDF classification hasn't run yet (browser-side, async pdfjs)
+export type FileRoute = 'text' | 'image' | 'scanned' | 'pending'
+
+/**
+ * Synchronous per-file route decision based on MIME/extension alone.
+ *
+ * Returns 'image' for any image MIME/extension, 'text' for everything else
+ * INCLUDING PDFs — PDFs need an async classifyPdf() call to decide between
+ * 'text' and 'scanned', so this sync helper returns 'pending' for PDFs and
+ * the caller drives the async follow-up. Used by the UI to paint badges
+ * without triggering the pdfjs classification eagerly.
+ */
+export function syncRouteForFile(file: File): FileRoute {
+  if (isImageFile(file)) return 'image'
+  const name = file.name.toLowerCase()
+  if (name.endsWith('.pdf') || file.type === 'application/pdf') return 'pending'
+  return 'text'
+}
+
+/**
+ * Full async route decision. For PDFs, runs classifyPdf(); everything else
+ * matches syncRouteForFile. Used by the pipeline to decide where to send
+ * each file at build time, and by the badge renderer to upgrade a PDF's
+ * label from "PDF (checking…)" to "TEXT PDF" or "SCANNED PDF".
+ */
+export async function routeForFile(file: File): Promise<'text' | 'image' | 'scanned'> {
+  if (isImageFile(file)) return 'image'
+  const name = file.name.toLowerCase()
+  if (name.endsWith('.pdf') || file.type === 'application/pdf') {
+    const kind = await classifyPdf(file)
+    return kind === 'text' ? 'text' : 'scanned'
+  }
+  return 'text'
+}
+
 export interface PipelineResult {
   cart: BuiltCart
   fileCount: number
@@ -127,7 +175,13 @@ export async function buildCartFromFiles(
       message: `Parsing ${files.length} file${files.length === 1 ? '' : 's'}…`,
     })
 
-    const allSections: Section[] = []
+    // Split incoming files into text-only sections (feed the chunker) and
+    // graphic + table sections (Day 2 — bypass the chunker; each is its own
+    // pattern). Text sections come from either the existing parser fast
+    // path or from Image Builder's markdown output (via parseViaImageBuilder).
+    const textSections: Section[] = []
+    const graphicSections: Section[] = []
+    const tableSections: Section[] = []
     for (let i = 0; i < files.length; i++) {
       const file = files[i]
       onProgress({
@@ -137,18 +191,46 @@ export async function buildCartFromFiles(
         currentFile: file.name,
         message: `Parsing ${file.name}…`,
       })
-      const result = await parseFile(file)
-      allSections.push(...result.sections)
+      // Route decision — synchronous MIME check first; PDFs get an async
+      // pdfjs text-check to differentiate text-bearing PDFs (fast path) from
+      // scans (delegate to Image Builder). Non-image / non-PDF files skip
+      // the round-trip entirely.
+      const route = await routeForFile(file)
+      if (route === 'text') {
+        const result = await parseFile(file)
+        textSections.push(...result.sections)
+      } else {
+        // 'image' or 'scanned' — POST to Image Builder /ocr. If Image
+        // Builder is unreachable or the file fails, parseViaImageBuilder
+        // throws; the surrounding try/catch bubbles it up as a build error
+        // so the UI shows a helpful message rather than silently dropping
+        // the file. Fallback (skip vs abort) is handled UPSTREAM in
+        // BrowserCartBuilder before Build fires.
+        onProgress({
+          stage: 'parsing',
+          filesParsed: i,
+          filesTotal: files.length,
+          currentFile: file.name,
+          message: `OCR-ing ${file.name} via Image Builder…`,
+        })
+        const parsed = await parseViaImageBuilder(file)
+        textSections.push(...parsed.textSections)
+        graphicSections.push(...parsed.graphicSections)
+        tableSections.push(...parsed.tableSections)
+      }
     }
     onProgress({
       stage: 'parsing',
       filesParsed: files.length,
       filesTotal: files.length,
-      sectionsTotal: allSections.length,
-      message: `Parsed ${allSections.length} section${allSections.length === 1 ? '' : 's'}.`,
+      sectionsTotal: textSections.length + graphicSections.length + tableSections.length,
+      message: `Parsed ${textSections.length} text section${textSections.length === 1 ? '' : 's'}`
+        + (graphicSections.length ? `, ${graphicSections.length} graphic${graphicSections.length === 1 ? '' : 's'}` : '')
+        + (tableSections.length ? `, ${tableSections.length} table${tableSections.length === 1 ? '' : 's'}` : '')
+        + '.',
     })
 
-    if (allSections.length === 0) {
+    if (textSections.length + graphicSections.length + tableSections.length === 0) {
       throw new Error(
         'No text content extracted. Are the files empty or in an unsupported format?'
       )
@@ -157,10 +239,21 @@ export async function buildCartFromFiles(
     // ── Stage 2: chunk ─────────────────────────────────────────────────
     onProgress({
       stage: 'chunking',
-      sectionsTotal: allSections.length,
+      sectionsTotal: textSections.length,
       message: 'Splitting into overlapping chunks…',
     })
-    const chunks = chunkSections(allSections, options.chunkOptions)
+    // Only text sections go through the chunker's overlapping-window logic.
+    // Graphic + table sections carry contentType metadata and bypass the
+    // overlap step — each is a single pattern. Chunker checks contentType
+    // internally and short-circuits for the non-'document' cases.
+    const textChunks = chunkSections(textSections, options.chunkOptions)
+    // Final section list: text chunks first (preserves the historical
+    // ordering that carts have always had), then graphics, then tables.
+    // Search doesn't care about order, but the Pattern-0 TOC + Edit Carts
+    // drill-down surface groups by source, so keeping content types together
+    // makes the built cart's per-file passage sequence more scannable in
+    // both the drill-down UI and raw index dumps.
+    const chunks: Section[] = [...textChunks, ...graphicSections, ...tableSections]
 
     if (chunks.length > maxChunks) {
       throw new Error(
@@ -223,7 +316,7 @@ export async function buildCartFromFiles(
     return {
       cart,
       fileCount: files.length,
-      sectionCount: allSections.length,
+      sectionCount: textSections.length + graphicSections.length + tableSections.length,
       chunkCount: chunks.length,
     }
   } catch (err) {

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react'
-import { Hammer, Loader2, Cpu, RefreshCw } from 'lucide-react'
+import { Hammer, Loader2, Cpu, Image as ImageIcon, RefreshCw } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { useCartBuilderStore } from '../store/cartBuilderStore'
 import CartBrowser from './CartBrowser'
@@ -30,14 +30,19 @@ export default function CartBuilderScreen() {
   const detectDesktopHelper = useAppStore((s) => s.detectDesktopHelper)
   const desktopHelperState = useAppStore((s) => s.desktopHelperState)
   const openDesktopHelperPairModal = useAppStore((s) => s.openDesktopHelperPairModal)
+  const detectImageBuilder = useAppStore((s) => s.detectImageBuilder)
+  const imageBuilderState = useAppStore((s) => s.imageBuilderState)
 
   // Probe for the Desktop Cart Builder exe when the user lands on this tab.
   // 1-sec timeout inside the store action; failure is silent (badge falls
   // through to GPU/WebGPU/CPU). We fire on mount rather than app boot so
   // Search-only sessions never do a loopback probe (Andy 2026-07-01).
+  // Image Builder gets the same treatment; both probes are Promise.all-ed so
+  // the two 1-sec budgets overlap (~1 sec total instead of 2). Failure is
+  // silent for both — the pills fall through to their 'not-found' state.
   useEffect(() => {
-    void detectDesktopHelper()
-  }, [detectDesktopHelper])
+    void Promise.all([detectDesktopHelper(), detectImageBuilder()])
+  }, [detectDesktopHelper, detectImageBuilder])
 
   return (
     <main className="flex-1 flex flex-col p-6 overflow-y-auto">
@@ -67,6 +72,14 @@ export default function CartBuilderScreen() {
           state={desktopHelperState}
           onPair={openDesktopHelperPairModal}
           onRecheck={() => void detectDesktopHelper()}
+        />
+        {/* Image Builder status pill (Day 2). Distinct from the Desktop
+            Helper pill so users can see at a glance which Builders are
+            available — Cart Builder can build without Image Builder as long
+            as they don't drop any images or scanned PDFs. */}
+        <ImageBuilderStatusPill
+          state={imageBuilderState}
+          onRecheck={() => void detectImageBuilder()}
         />
 
         {/* Browser-side cart builder. WebGPU pipeline with WASM fallback,
@@ -207,5 +220,86 @@ function RecheckButton({ onRecheck }: { onRecheck: () => void }) {
       <RefreshCw size={12} />
       Recheck
     </button>
+  )
+}
+
+// Image Builder status pill (Day 2). Same banner shape as
+// DesktopHelperStatusPill but on port 7879. Simpler than the Cart Builder
+// pill because Image Builder shares Cart Builder's pairing token — there's
+// no separate pair modal to open. When neither Builder is paired yet, the
+// pill just reads "Detected" (color: amber) and pairing happens via the
+// Desktop Helper flow (same token unlocks both).
+function ImageBuilderStatusPill({
+  state,
+  onRecheck,
+}: {
+  state: 'unknown' | 'detecting' | 'not-found' | 'detected-unpaired' | 'detected-paired'
+  onRecheck: () => void
+}) {
+  if (state === 'unknown') return null
+
+  const bannerBase = 'flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl border w-full'
+
+  if (state === 'detecting') {
+    return (
+      <div className={`${bannerBase} bg-slate-800/60 border-slate-700/50 text-slate-300`}>
+        <div className="flex items-center gap-2 text-sm">
+          <Loader2 size={14} className="animate-spin text-slate-400" />
+          <span>Checking for Image Builder…</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (state === 'detected-paired') {
+    return (
+      <div
+        className={`${bannerBase} bg-purple-500/10 border-purple-500/50`}
+        title="Images + scanned PDFs will be OCR'd by the local Image Builder exe (127.0.0.1:7879)."
+      >
+        <div className="flex items-center gap-2 text-sm">
+          <ImageIcon size={14} className="text-purple-300" />
+          <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
+          <span className="font-semibold text-purple-200">Image Builder: Connected</span>
+          <span className="text-purple-300/70">— OCR routes to your local exe</span>
+        </div>
+        <RecheckButton onRecheck={onRecheck} />
+      </div>
+    )
+  }
+
+  if (state === 'detected-unpaired') {
+    return (
+      <div
+        className={`${bannerBase} bg-amber-500/10 border-amber-500/50`}
+        title="Image Builder is running but not paired. Pair the Desktop Cart Builder above — Image Builder shares the same token."
+      >
+        <div className="flex items-center gap-2 text-sm">
+          <ImageIcon size={14} className="text-amber-400" />
+          <span className="w-2 h-2 rounded-full bg-amber-400" />
+          <span className="font-semibold text-amber-300">Image Builder: Detected</span>
+          <span className="text-amber-300/70">(pair Desktop Helper to unlock)</span>
+        </div>
+        <RecheckButton onRecheck={onRecheck} />
+      </div>
+    )
+  }
+
+  // 'not-found' — running without an Image Builder exe. Cart Builder still
+  // works for text files; only image / scanned-PDF drops will trigger the
+  // fallback dialog.
+  return (
+    <div
+      className={`${bannerBase} bg-slate-800/60 border-slate-700/50`}
+      title="No Image Builder detected on 127.0.0.1:7879. Text builds work fine; image + scanned-PDF drops will surface a fallback prompt at Build time."
+    >
+      <div className="flex items-center gap-2 text-sm">
+        <ImageIcon size={14} className="text-slate-400" />
+        <span className="w-2 h-2 rounded-full bg-slate-500" />
+        <span className="font-semibold text-slate-300">Image Builder: Not running</span>
+        <span className="text-slate-500">— image / scanned-PDF drops need it</span>
+      </div>
+      <RecheckButton onRecheck={onRecheck} />
+    </div>
   )
 }

@@ -84,6 +84,13 @@ export interface CartBuilderFile {
   description: string
   tags: string[]
   from_cart?: boolean
+  // Day 2 — Image Builder integration. Populated by the exe's /upload +
+  // /ingest handlers when the file was routed to Image Builder. Absent for
+  // the classic text fast path.
+  route?: 'text' | 'image' | 'scanned'
+  graphic_count?: number
+  table_count?: number
+  ocr_error?: string | null
 }
 
 export interface CartBuilderListedCart {

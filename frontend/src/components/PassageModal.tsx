@@ -83,6 +83,43 @@ export default function PassageModal() {
   const navigateModal = useAppStore((s) => s.navigateModal)
   const loadSource = useAppStore((s) => s.loadSourceForCurrentPassage)
   const mountedCart = useAppStore((s) => s.status?.mounted_cartridge)
+  const activeLocalCart = useAppStore((s) => s.activeLocalCart)
+  const localCarts = useAppStore((s) => s.localCarts)
+
+  // Day 2 graphic — if the current passage is a graphic-type pattern (Image
+  // Builder extracted), pull the base64 PNG out of per_pattern_meta and hand
+  // back a data URL for inline rendering above the caption. Andy 2026-07-05
+  // PM: this is the wow moment for the pitch deck demo — click a graphic
+  // result, see the actual graphic.
+  const graphicPatternMeta = useMemo(() => {
+    if (!passage || !activeLocalCart) return null
+    const cart = localCarts.get(activeLocalCart)
+    if (!cart?.perPatternMeta) return null
+    const rec = cart.perPatternMeta[passage.idx]
+    if (!rec || rec.content_type !== 'graphic' || !rec.image_b64) return null
+    return rec
+  }, [passage, activeLocalCart, localCarts])
+  const graphicDataUrl: string | null = graphicPatternMeta
+    ? `data:image/png;base64,${graphicPatternMeta.image_b64}`
+    : null
+
+  // Andy 2026-07-05 PM: inline-image replacement. Docling leaves
+  // `<!-- image -->` markers wherever graphics live in the reading flow.
+  // If the current passage's source has extracted graphics baked into
+  // perPatternMeta, replace each marker with a markdown image referencing a
+  // short placeholder like `graphic:0`. The ReactMarkdown img override
+  // below resolves that placeholder to the real data URL. Effect: images
+  // render in the same order they appeared on the page.
+  const sourceGraphics = useMemo(() => {
+    if (!passage || !activeLocalCart) return []
+    const cart = localCarts.get(activeLocalCart)
+    if (!cart?.perPatternMeta || !cart.sourcePaths) return []
+    const src = cart.sourcePaths[passage.idx]
+    if (!src) return []
+    return cart.perPatternMeta.filter(
+      (r) => r.content_type === 'graphic' && r.source === src && r.image_b64,
+    )
+  }, [passage, activeLocalCart, localCarts])
 
   const hasPrev = passage?.prev_idx != null
   const hasNext = passage?.next_idx != null
@@ -151,6 +188,25 @@ export default function PassageModal() {
     }
   }, [prevTextForOverlap, navDirection, passage?.full_text])
 
+  // Replace Docling's inline `<!-- image -->` HTML-comment markers with
+  // markdown image references pointing to short placeholders (`graphic:N`).
+  // The ReactMarkdown `img` component override resolves each placeholder to
+  // the corresponding graphic's base64 data URL. Ordering: use the source
+  // file's graphic sequence, indexed globally within this passage — so the
+  // Nth `<!-- image -->` on the page maps to the Nth graphic from that file.
+  // Won't always be pixel-perfect (chunks span pages), but the images are
+  // guaranteed to be from the same source and appear in reading order.
+  const brightTextWithGraphics = useMemo(() => {
+    if (!brightText || sourceGraphics.length === 0) return brightText
+    let i = 0
+    return brightText.replace(/<!--\s*image\s*-->/g, () => {
+      if (i >= sourceGraphics.length) return '' // no more graphics; drop the marker rather than show a broken image
+      const marker = `![Graphic ${i + 1}](graphic:${i})`
+      i += 1
+      return marker
+    })
+  }, [brightText, sourceGraphics])
+
   // Close on Escape key + arrow-key navigation (with overlap-tracking handlers)
   useEffect(() => {
     if (!modalOpen) return
@@ -200,6 +256,15 @@ export default function PassageModal() {
             </div>
           ) : passage.full_text ? (
             <div className="text-sm text-slate-300 leading-relaxed space-y-3">
+              {graphicDataUrl && (
+                <div className="mb-4 flex justify-center">
+                  <img
+                    src={graphicDataUrl}
+                    alt={graphicPatternMeta?.caption || 'Extracted graphic'}
+                    className="max-h-[50vh] max-w-full object-contain bg-slate-950 rounded-lg border border-slate-700/40"
+                  />
+                </div>
+              )}
               {/* Overlap-graying (Andy 2026-05-09): when the user navigated
                   via Next from the previous chunk, the first ~50 words of
                   this chunk are usually the same as the last ~50 words of
@@ -225,6 +290,12 @@ export default function PassageModal() {
               )}
               <ReactMarkdown
                 remarkPlugins={[remarkGfm, remarkBreaks]}
+                // Andy 2026-07-05 PM: pass-through URL transform so our
+                // `graphic:N` placeholder scheme survives ReactMarkdown's
+                // default sanitizer (which strips non-http/https/data schemes
+                // and rewrites src to empty). The img component override below
+                // resolves the placeholder to a real data URL.
+                urlTransform={(uri) => uri}
                 components={{
                   h1: ({ children }) => <h1 className="text-xl font-semibold text-slate-100 mt-4 mb-2">{children}</h1>,
                   h2: ({ children }) => <h2 className="text-lg font-semibold text-slate-100 mt-3 mb-2">{children}</h2>,
@@ -266,9 +337,38 @@ export default function PassageModal() {
                   hr: () => <hr className="my-4 border-slate-700/50" />,
                   strong: ({ children }) => <strong className="font-semibold text-slate-100">{children}</strong>,
                   em: ({ children }) => <em className="italic text-slate-200">{children}</em>,
+                  // Andy 2026-07-05 PM: inline-image resolver. Preprocessed
+                  // markdown carries `graphic:N` placeholders where Docling's
+                  // `<!-- image -->` markers used to be. Look up the real
+                  // base64 payload from sourceGraphics and render inline.
+                  // Non-graphic:N srcs (regular markdown images) pass through
+                  // as normal <img>.
+                  img: ({ src, alt }) => {
+                    const srcStr = typeof src === 'string' ? src : ''
+                    if (srcStr.startsWith('graphic:')) {
+                      const idx = parseInt(srcStr.slice('graphic:'.length), 10)
+                      const g = sourceGraphics[idx]
+                      if (!g?.image_b64) return null
+                      return (
+                        <span className="block my-3 flex flex-col items-center gap-1">
+                          <img
+                            src={`data:image/png;base64,${g.image_b64}`}
+                            alt={g.caption || alt || 'Extracted graphic'}
+                            className="max-h-96 max-w-full object-contain bg-slate-950 rounded-lg border border-slate-700/40"
+                          />
+                          {g.caption && (
+                            <span className="text-[11px] text-slate-500 italic text-center">
+                              {g.caption}
+                            </span>
+                          )}
+                        </span>
+                      )
+                    }
+                    return <img src={srcStr} alt={alt ?? ''} className="max-w-full rounded" />
+                  },
                 }}
               >
-                {brightText}
+                {brightTextWithGraphics}
               </ReactMarkdown>
               {/* Overlap-graying suffix variant — when user navigated via
                   Prev, gray out the overlap that was the *prefix* of the

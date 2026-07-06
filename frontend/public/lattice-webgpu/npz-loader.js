@@ -249,7 +249,12 @@ export function parsePickledStrings(bytes) {
  * @returns {string[]}
  */
 export function parseUnicodeStrings(data, maxLen, shape) {
-    const count = shape && shape.length > 0 ? shape[0] : 0;
+    // Shape [] (0-D) means a numpy scalar — semantically one element, not zero.
+    // Passages usually come in as shape [N] (1-D); pattern0 comes in as shape []
+    // (0-D scalar of dtype <U<N>). Before this fix, 0-D fell through to count=0
+    // and pattern0 was silently dropped despite parsing everything else fine.
+    // 2026-07-04: bug found while diagnosing Day 2 pattern0Meta: null in LocalCart mounts.
+    const count = shape && shape.length > 0 ? shape[0] : 1;
     const view = new DataView(data);
     const out = new Array(count);
     const bytesPerStr = maxLen * 4;
@@ -341,18 +346,50 @@ export async function parseCartNpz(buffer) {
     // the Pattern-0 TOC panel falls back to derived stats.
     let pattern0 = null;
     const pattern0Entry = npzEntries['pattern0'];
+    // 2026-07-04 debug: expose what's actually in the pattern0 entry when the
+    // parse would fail, so we can see WHY. Remove once LocalCart Pattern-0 is
+    // fully verified across all cart-build paths.
+    if (!pattern0Entry) {
+        console.warn('[npz-loader] pattern0 entry MISSING from npzEntries. Keys present:', Object.keys(npzEntries));
+    } else if (!pattern0Entry.data) {
+        console.warn('[npz-loader] pattern0 entry present but has no .data field. Entry:', pattern0Entry);
+    }
     if (pattern0Entry && pattern0Entry.data) {
         const p0Dtype = pattern0Entry.dtype || '';
         const p0Match = p0Dtype.match(/^<U(\d+)$/);
-        if (p0Match) {
+        // Try pickle fallback (like passages does) if dtype isn't the unicode
+        // form. Python-side savez sometimes stores a Python str as an object
+        // array (dtype 'O') which we'd otherwise silently drop.
+        if (!p0Match) {
+            console.warn(
+                `[npz-loader] pattern0 dtype '${p0Dtype}' didn't match <U<N>. `
+                + `Trying pickle fallback. Entry shape=${JSON.stringify(pattern0Entry.shape)}.`
+            );
+            try {
+                const pickleBytes = new Uint8Array(pattern0Entry.data);
+                const asStrings = parsePickledStrings(pickleBytes);
+                if (asStrings.length > 0 && asStrings[0]) {
+                    try {
+                        pattern0 = JSON.parse(asStrings[0]);
+                        console.log('[npz-loader] pattern0 parsed via pickle fallback', pattern0);
+                    } catch (e) {
+                        console.warn('[npz-loader] pickle-parsed pattern0 string is not JSON:', e);
+                    }
+                }
+            } catch (e) {
+                console.warn('[npz-loader] pickle fallback for pattern0 failed:', e);
+            }
+        } else {
             const p0MaxLen = parseInt(p0Match[1], 10);
             const decoded = parseUnicodeStrings(pattern0Entry.data, p0MaxLen, pattern0Entry.shape);
             if (decoded.length > 0 && decoded[0]) {
                 try {
                     pattern0 = JSON.parse(decoded[0]);
+                    console.log('[npz-loader] pattern0 parsed via unicode', pattern0);
                 } catch {
                     // Malformed JSON — treat as missing rather than crash the mount.
                     pattern0 = null;
+                    console.warn('[npz-loader] pattern0 unicode-decoded but not valid JSON');
                 }
             }
         }
@@ -372,5 +409,48 @@ export async function parseCartNpz(buffer) {
         figures.set(basename, bytes);
     }
 
-    return { embeddings, embeddingsShape: embEntry.shape, passages, sourcePaths, figures, pattern0 };
+    // per_pattern_meta.npy — Day 2 sidecar carrying content_type + per-pattern
+    // extras (image_b64 for graphics, html for tables, bbox, caption, ...).
+    // Same unicode-array-of-JSON-string shape as pattern0.npy. Andy 2026-07-05
+    // PM: read this so LocalCart mounts can surface graphic thumbnails in the
+    // UI (Result cards, PassageModal, TOC drill-down). Zero-cost passthrough
+    // when the entry is absent (legacy carts).
+    let perPatternMeta = null;
+    const ppmEntry = npzEntries['per_pattern_meta'];
+    if (ppmEntry && ppmEntry.data) {
+        const ppmDtype = ppmEntry.dtype || '';
+        const ppmUnicodeMatch = ppmDtype.match(/^<U(\d+)$/);
+        if (ppmUnicodeMatch) {
+            try {
+                const maxLen = parseInt(ppmUnicodeMatch[1], 10);
+                const decoded = parseUnicodeStrings(ppmEntry.data, maxLen, ppmEntry.shape);
+                if (decoded.length > 0 && decoded[0]) {
+                    perPatternMeta = JSON.parse(decoded[0]);
+                }
+            } catch (e) {
+                console.warn('[npz-loader] per_pattern_meta unicode parse failed:', e);
+            }
+        } else {
+            // Backend variant uses np.savez_compressed → object array (pickled).
+            try {
+                const pickleBytes = new Uint8Array(ppmEntry.data);
+                const asStrings = parsePickledStrings(pickleBytes);
+                if (asStrings.length > 0 && asStrings[0]) {
+                    perPatternMeta = JSON.parse(asStrings[0]);
+                }
+            } catch (e) {
+                console.warn('[npz-loader] per_pattern_meta pickle parse failed:', e);
+            }
+        }
+    }
+
+    return {
+        embeddings,
+        embeddingsShape: embEntry.shape,
+        passages,
+        sourcePaths,
+        figures,
+        pattern0,
+        perPatternMeta,
+    };
 }

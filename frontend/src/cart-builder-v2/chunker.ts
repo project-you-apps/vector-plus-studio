@@ -115,9 +115,43 @@ export function chunkSections(
   const chunks: Section[] = []
 
   for (const section of sections) {
+    // Graphic + table sections (Day 2: Image Builder delegation) are opaque
+    // one-pattern-per-item units — never chunked. Their `text` is the caption
+    // (graphic) or plain-text extraction of the HTML (table); we still cap
+    // char length below via splitByChars so the embedder doesn't get an
+    // oversized input, but each item passes through as a single chunk
+    // (no overlapping windows) so it maps 1-1 to a pattern in the cart.
+    if (section.contentType === 'graphic' || section.contentType === 'table') {
+      if (section.text.length <= maxChars) {
+        chunks.push(section)
+      } else {
+        // Extremely rare — Docling captions and even table plaintext very
+        // rarely blow 6000 chars. If they do, split-and-keep the metadata on
+        // every piece so the writer still emits one per_pattern_meta row per
+        // pattern (the graphic/table gets duplicated across sub-patterns,
+        // which is preferable to losing the tail).
+        const pieces = section.text.split(/\s+/).length > 1
+          ? section.text.length > maxChars
+            ? [section.text.slice(0, maxChars)]  // simple truncation for now
+            : [section.text]
+          : [section.text.slice(0, maxChars)]
+        for (const piece of pieces) {
+          chunks.push({ ...section, text: piece.trim() })
+        }
+      }
+      continue
+    }
+
     // Collect the word-chunked pieces first, without the final `part`
     // renumber, so we can apply the char-cap in a second pass and renumber
     // `part` in one consistent sequence across the whole section.
+    //
+    // Line-aware chunker: chunk boundaries fall between lines, never
+    // mid-line, so markdown structure (tables, lists, headings, paragraph
+    // breaks) survives intact for the passage viewer's markdown renderer.
+    // Andy 2026-07-05: previous split(/\s+/) + join(' ') implementation
+    // destroyed all newlines, turning Docling OCR into a single wall of
+    // piped text — mirror of the backend chunk_texts fix.
     const preCharSplit: Section[] = []
     let wasWordSplit = false
     const words = section.text.split(/\s+/).filter((w) => w.length > 0)
@@ -127,11 +161,19 @@ export function chunkSections(
       preCharSplit.push(section)
     } else {
       wasWordSplit = true
-      let start = 0
+      const lines = section.text.split('\n')
+      const lineWc = lines.map((l) => l.split(/\s+/).filter((w) => w.length > 0).length)
+      const n = lines.length
+      let i = 0
       let part = 0
-      while (start < words.length) {
-        const end = start + chunkSize
-        const chunkText = words.slice(start, end).join(' ').trim()
+      while (i < n) {
+        let j = i
+        let budget = 0
+        while (j < n && (budget === 0 || budget + lineWc[j] <= chunkSize)) {
+          budget += lineWc[j]
+          j += 1
+        }
+        const chunkText = lines.slice(i, j).join('\n').trim()
         if (chunkText) {
           preCharSplit.push({
             text: chunkText,
@@ -141,9 +183,21 @@ export function chunkSections(
           })
           part += 1
         }
-        start += stride
+        if (j >= n) break
+        // Walk backward from j to leave `overlap` words as prefix for next
+        // chunk. Guard: always advance at least one line.
+        let back = j
+        let overlapWc = 0
+        while (back > i + 1 && overlapWc < overlap) {
+          back -= 1
+          overlapWc += lineWc[back]
+        }
+        i = back
       }
     }
+    // Reference stride to keep param-consumption stable (line-aware pass
+    // computes its own overlap window rather than a fixed word stride).
+    void stride
 
     // Second pass: enforce maxChars. Any chunk that exceeds the cap gets
     // split; `part` is renumbered across the whole section so the final

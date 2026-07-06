@@ -43,6 +43,141 @@ def parse_pdf(filepath: Path) -> list[dict]:
     return results
 
 
+# Day 2 — PDF classification for Image Builder routing. Mirrors the
+# frontend classifyPdf() (frontend/src/cart-builder-v2/parsers/pdf.ts).
+# Same constants both sides so paired and browser-only builds route the same
+# file the same way (design doc Q3 golden-path invariant).
+PDF_CLASSIFY_TEXT_THRESHOLD = 500
+# Andy 2026-07-05 PM (Grant's pitch deck): expanded from 3 → 15 pages because
+# the deck was clean on pages 1-3 and only had broken ToUnicode fonts on
+# pages 4-7. Sampling only the head missed the corruption. Cost is
+# ~100-500ms extra classify time on a 15-page deck; a 300-page report caps
+# out at 15 samples so classify stays fast on long documents.
+PDF_CLASSIFY_MAX_PAGES = 15
+# Andy 2026-07-05: PDFs with broken font ToUnicode maps return LOTS of
+# characters (well over the 500-char threshold) but most are Private Use
+# Area / replacement / non-Latin garbage that produces unreadable ingest.
+# Two-level check:
+#   - Per-page: if ANY sampled page has substantial content (>50 chars)
+#     but < PDF_CLASSIFY_PAGE_READABLE_THRESHOLD readable, route to
+#     Image Builder. One bad page = broken font used elsewhere in the doc.
+#   - Aggregate fallback: if overall readable fraction < threshold, same.
+# 0.6 is the initial pick; tune with more samples if false-positives appear.
+PDF_CLASSIFY_READABLE_THRESHOLD = 0.6
+PDF_CLASSIFY_PAGE_READABLE_THRESHOLD = 0.6
+PDF_CLASSIFY_PAGE_MIN_CHARS = 50
+
+
+def _readable_char_count(text: str) -> int:
+    """Count characters that look like real text: printable ASCII, common
+    whitespace, or Latin-1/Extended-A/B codepoints (accents, etc). Everything
+    else (PUA, replacement, most CJK) counts as unreadable for the purposes
+    of ToUnicode-corruption detection."""
+    count = 0
+    for c in text:
+        cp = ord(c)
+        if 0x20 <= cp <= 0x7E:
+            count += 1
+        elif c in "\n\r\t":
+            count += 1
+        elif 0xA0 <= cp <= 0x24F:
+            count += 1
+    return count
+
+
+def classify_pdf(filepath: Path) -> str:
+    """Return 'text' if the PDF has extractable readable text, else 'scanned'.
+
+    Sums PyMuPDF's page.get_text() lengths across the first
+    PDF_CLASSIFY_MAX_PAGES pages, and independently sums the count of
+    readable characters (printable ASCII + Latin extensions). Returns 'text'
+    only when total > PDF_CLASSIFY_TEXT_THRESHOLD (500) AND the readable
+    fraction >= PDF_CLASSIFY_READABLE_THRESHOLD (0.6). Otherwise routes to
+    Image Builder /ocr.
+
+    Failure mode: if PyMuPDF can't open the file, return 'scanned' — Docling
+    is more likely to salvage a malformed PDF than PyMuPDF is, and if it
+    can't either, the calling code surfaces an OCR failure the user can act
+    on (rather than a silent parse-to-empty).
+    """
+    import fitz
+    try:
+        doc = fitz.open(str(filepath))
+    except Exception:
+        return "scanned"
+    total_chars = 0
+    readable_chars = 0
+    corrupt_page_found = False
+    corrupt_page_idx = -1
+    corrupt_page_fraction = 0.0
+    pages_to_check = 0
+    try:
+        pages_to_check = min(len(doc), PDF_CLASSIFY_MAX_PAGES)
+        for i in range(pages_to_check):
+            try:
+                text = (doc[i].get_text() or "").strip()
+                page_len = len(text)
+                page_readable = _readable_char_count(text)
+                total_chars += page_len
+                readable_chars += page_readable
+                # Per-page corruption check: substantial content but low
+                # readable fraction signals a broken ToUnicode font used
+                # somewhere in the document. One bad page taints the whole
+                # ingest because the same font likely appears elsewhere.
+                if page_len >= PDF_CLASSIFY_PAGE_MIN_CHARS:
+                    page_fraction = page_readable / page_len
+                    if page_fraction < PDF_CLASSIFY_PAGE_READABLE_THRESHOLD:
+                        corrupt_page_found = True
+                        corrupt_page_idx = i + 1  # 1-indexed for logs
+                        corrupt_page_fraction = page_fraction
+                        # Don't early-exit — keep aggregating so the
+                        # diagnostic shows the full document picture.
+            except Exception:
+                # Skip page on error; partial score still useful — a truly
+                # scanned PDF stays under threshold no matter which page
+                # blows up.
+                continue
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+    readable_fraction = readable_chars / total_chars if total_chars else 0.0
+    # Diagnostic (Andy 2026-07-05) — remove after Grant's deck routing tunes correctly.
+    print(
+        f"[classify_pdf] {filepath.name}: total_chars={total_chars}, "
+        f"readable_chars={readable_chars}, readable_fraction={readable_fraction:.3f}, "
+        f"pages_sampled={pages_to_check}, "
+        f"corrupt_page={corrupt_page_idx if corrupt_page_found else 'none'}"
+        + (f" (fraction {corrupt_page_fraction:.3f})" if corrupt_page_found else ""),
+        flush=True,
+    )
+    if total_chars <= PDF_CLASSIFY_TEXT_THRESHOLD:
+        return "scanned"
+    if corrupt_page_found:
+        return "scanned"
+    if readable_fraction < PDF_CLASSIFY_READABLE_THRESHOLD:
+        return "scanned"
+    return "text"
+
+
+# Image-file extension set. Aligned with image-builder/main.py's
+# SUPPORTED_FORMATS list. PDFs are handled via classify_pdf, not here.
+_IMAGE_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".heic", ".heif",
+    ".tif", ".tiff", ".webp", ".bmp",
+}
+
+
+def is_image_file(filepath: Path) -> bool:
+    """True when the file extension is one Image Builder can OCR directly.
+
+    Used by builder.py's per-file routing to decide whether to POST straight
+    to Image Builder /ocr (image) vs. classify a PDF first.
+    """
+    return filepath.suffix.lower() in _IMAGE_EXTENSIONS
+
+
 def parse_docx(filepath: Path) -> list[dict]:
     import docx
     doc = docx.Document(str(filepath))
@@ -294,7 +429,19 @@ def parse_file(filepath: Path) -> list[dict]:
 
 
 def chunk_texts(sections: list[dict], chunk_size: int = 300, overlap: int = 50) -> list[dict]:
-    """Split parsed sections into overlapping word-based chunks."""
+    """Split parsed sections into overlapping word-budgeted chunks.
+
+    Line-aware: chunk boundaries fall between lines, never mid-line, so
+    markdown structure (tables, lists, headings, paragraph breaks) survives
+    intact and the passage viewer's react-markdown + remark-gfm renders
+    them as-intended. Overlap is expressed as trailing lines whose combined
+    word count is >= `overlap`.
+
+    Andy 2026-07-05: previous implementation (`text.split()` then
+    `" ".join()`) destroyed all newlines, turning Docling OCR output into
+    a single wall of piped text that remark-gfm parsed as paragraph, not
+    table. This fix restores structural markdown.
+    """
     chunks = []
     for section in sections:
         section_text = scrub_lone_surrogates(section["text"])
@@ -302,18 +449,39 @@ def chunk_texts(sections: list[dict], chunk_size: int = 300, overlap: int = 50) 
         if len(words) <= chunk_size:
             chunks.append({**section, "text": section_text})
             continue
-        start = 0
+        # Line-aware chunker. Take whole lines only; each chunk fills to
+        # roughly `chunk_size` words. Single lines longer than `chunk_size`
+        # are taken atomically (rare on real documents; better one oversize
+        # chunk than a mangled table row).
+        lines = section_text.split("\n")
+        line_wc = [len(l.split()) for l in lines]
+        n = len(lines)
+        i = 0
         part = 0
-        while start < len(words):
-            end = start + chunk_size
-            chunk_text = " ".join(words[start:end])
-            if chunk_text.strip():
+        while i < n:
+            j = i
+            budget = 0
+            while j < n and (budget == 0 or budget + line_wc[j] <= chunk_size):
+                budget += line_wc[j]
+                j += 1
+            chunk_text = "\n".join(lines[i:j]).strip()
+            if chunk_text:
                 chunks.append({
-                    "text": chunk_text.strip(),
+                    "text": chunk_text,
                     "page": section.get("page"),
                     "source": section["source"],
                     "part": part,
                 })
                 part += 1
-            start += chunk_size - overlap
+            if j >= n:
+                break
+            # Walk backward from j to build an `overlap`-word tail that
+            # becomes the next chunk's prefix. Guard: always advance at
+            # least one line so pathological inputs still terminate.
+            back = j
+            overlap_wc = 0
+            while back > i + 1 and overlap_wc < overlap:
+                back -= 1
+                overlap_wc += line_wc[back]
+            i = back
     return chunks

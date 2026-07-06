@@ -4,6 +4,7 @@ import type {
   MemboxCartInfo, MemboxStatus,
 } from '../api/types'
 import * as api from '../api/client'
+import { probeImageBuilder } from '../api/imageBuilder'
 import { detectWebGPU, runWebGpuAssociate, loadBrainForCart, isBrainLoadedFor } from '../lib/webgpuAssociate'
 import { parseCartFile, cosineSearchLocal } from '../lib/localCart'
 
@@ -28,6 +29,35 @@ export interface LocalCartPattern0Meta {
     tags?: string[]
     chunks?: number
   }>
+  // Day 2 — Image Builder integration counts. Zero (or absent) for text-only
+  // carts. Pattern0TocPanel shows a "N graphics + M tables" line under the
+  // header when either exceeds zero.
+  graphic_count?: number
+  table_count?: number
+}
+
+// Per-pattern metadata sidecar (parsed from per_pattern_meta.npy). One record
+// per pattern in `passages`; parallel-indexed. Content-type-specific extras
+// (image_b64 for graphics, html for tables, bbox for both) are optional so
+// legacy carts with only text patterns don't have to populate them.
+// Andy 2026-07-05 PM: added to surface graphic PNG thumbnails throughout the
+// UI (Result cards, PassageModal, TOC drill-down).
+export interface LocalCartPatternMeta {
+  v?: number
+  content_type?: 'document' | 'graphic' | 'table' | string
+  source?: string
+  page?: number | null
+  chunk?: number
+  chunks?: number
+  tags?: string[]
+  created_at?: number
+  tombstone?: boolean
+  // Graphic extras
+  caption?: string
+  image_b64?: string
+  bbox?: number[]
+  // Table extras
+  html?: string
 }
 
 // A cart that lives on the user's local disk and was parsed client-side.
@@ -59,6 +89,11 @@ export interface LocalCart {
   // null for older carts, in which case Pattern0TocPanel falls back to the
   // hippocampus-derived stats view.
   pattern0Meta: LocalCartPattern0Meta | null
+  // Day 2 sidecar — parallel to `passages`, one record per pattern with
+  // content_type + type-specific extras (image_b64 for graphics, html for
+  // tables). Populated for carts built by the 2026-07-05+ pipeline; null for
+  // legacy carts (no thumbnails but everything else works).
+  perPatternMeta: LocalCartPatternMeta[] | null
   // In-memory tombstones for Edit Carts support on LocalCart (Andy 2026-06-16
   // PM: the demo path requires editing browser-mounted carts on the public
   // VPS where the droplet can't reach the user's local filesystem). Tombstoned
@@ -111,10 +146,34 @@ export interface DesktopHelperCapabilities {
 // localStorage key for the persisted pairing token. The value is regenerated
 // by the exe on first launch and printed to its console; user pastes it into
 // the pairing modal.
+// Note: SAME key is read by Image Builder (Day 2) — the pairing token is
+// shared between both Builders per image-builder/auth.py, so one pairing
+// unlocks both.
 export const DESKTOP_HELPER_TOKEN_KEY = 'vp-desktop-token'
 // Fixed for MVP; capabilities.port could override in the future if the exe
 // falls back to a different port (7879+) because 7878 was busy.
 const DESKTOP_HELPER_ORIGIN = 'http://127.0.0.1:7878'
+
+// Image Builder — Day 2 sibling exe on 127.0.0.1:7879. Same state shape as
+// Desktop Helper: unknown → detecting → not-found | detected-unpaired |
+// detected-paired. The token is shared (see DESKTOP_HELPER_TOKEN_KEY), so
+// 'detected-unpaired' only appears when the user has never paired either
+// Builder; otherwise Image Builder inherits the already-paired state on
+// detect.
+export type ImageBuilderState =
+  | 'unknown'
+  | 'detecting'
+  | 'not-found'
+  | 'detected-unpaired'
+  | 'detected-paired'
+
+export interface ImageBuilderCapabilities {
+  exe: string
+  version?: string
+  capabilities: string[]
+  port: number
+  supported_formats: string[]
+}
 
 interface AppState {
   // Active screen (nav rail)
@@ -272,6 +331,13 @@ interface AppState {
   unpairDesktopHelper: () => void
   openDesktopHelperPairModal: () => void
   closeDesktopHelperPairModal: () => void
+
+  // Image Builder — Day 2. Same detection shape as Desktop Helper; token is
+  // shared (see DESKTOP_HELPER_TOKEN_KEY note). detectImageBuilder is called
+  // from CartBuilderScreen mount alongside the Desktop Helper probe.
+  imageBuilderState: ImageBuilderState
+  imageBuilderCapabilities: ImageBuilderCapabilities | null
+  detectImageBuilder: () => Promise<void>
 
   // Actions
   fetchStatus: () => Promise<void>
@@ -440,6 +506,45 @@ export const useAppStore = create<AppState>((set, get) => ({
   openDesktopHelperPairModal: () => set({ desktopHelperPairModalOpen: true, desktopHelperError: null }),
   closeDesktopHelperPairModal: () => set({ desktopHelperPairModalOpen: false }),
 
+  // ---- Image Builder (Day 2) ----
+  // Loopback probe on 127.0.0.1:7879. Fires alongside the Desktop Helper probe
+  // on Cart Builder tab mount (Promise.all in CartBuilderScreen effect); same
+  // 1-sec abort budget so the tab render isn't gated on a stalled connection.
+  // Detection state falls through to 'not-found' on any failure — abort, CORS,
+  // network — since all three mean "no exe on 7879" for our purposes.
+  imageBuilderState: 'unknown',
+  imageBuilderCapabilities: null,
+
+  detectImageBuilder: async () => {
+    const { imageBuilderState, desktopHelperToken } = get()
+    if (imageBuilderState === 'detecting') return
+    set({ imageBuilderState: 'detecting' })
+    // Same 1-sec fast-fail budget as Desktop Helper. Uses shared imageBuilder
+    // client so the origin / port constant lives in one place.
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 1000)
+    try {
+      const result = await probeImageBuilder(controller.signal)
+      if (!result.ok) {
+        set({ imageBuilderState: 'not-found', imageBuilderCapabilities: null })
+        return
+      }
+      // Token is shared with Desktop Helper — inherit its paired state. When a
+      // user has already paired one Builder, the other lights up 'paired'
+      // automatically. If neither has a token, we land 'detected-unpaired'
+      // and the user pairs via the Desktop Helper flow (image-builder/auth.py
+      // reads the same ~/.vector-plus/token file).
+      set({
+        imageBuilderCapabilities: result.capabilities,
+        imageBuilderState: desktopHelperToken ? 'detected-paired' : 'detected-unpaired',
+      })
+    } catch {
+      set({ imageBuilderState: 'not-found', imageBuilderCapabilities: null })
+    } finally {
+      clearTimeout(timer)
+    }
+  },
+
   localCarts: new Map(),
   activeLocalCart: null,
   localCartLoading: false,
@@ -472,6 +577,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         embeddingsShape: cart.embeddingsShape,
         passages: cart.passages.length,
         sourcePathsSynthesized: sourcePathsWereSynthesized,
+        // 2026-07-04 debug: pattern0Meta visibility. If this is null, npz-loader
+        // isn't parsing pattern0.npy. If it has fields, the panel side needs to be
+        // debugged next. Remove this line once the LocalCart Pattern-0 path is verified.
+        pattern0Meta: cart.pattern0Meta,
+        figuresCount: cart.figures?.size ?? 0,
       })
       const next = new Map(get().localCarts)
       next.set(cart.name, cart)

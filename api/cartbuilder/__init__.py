@@ -32,13 +32,25 @@ from fastapi.responses import JSONResponse
 # ---------------------------------------------------------------------------
 
 try:
-    from .parsers import parse_file, chunk_texts
+    from .parsers import parse_file, chunk_texts, classify_pdf, is_image_file
     from .builder import build_cart_async, get_state
     _CART_BUILDER_AVAILABLE = True
 except Exception as _e:  # pragma: no cover
     _CART_BUILDER_AVAILABLE = False
     _IMPORT_ERROR = str(_e)
     print(f"[cartbuilder] WARNING: cart-builder modules unavailable: {_e}")
+
+# Image Builder client is optional — the delegation path fires only when the
+# sibling exe is running on 127.0.0.1:7879. Import failure here would mean
+# httpx is missing (unlikely — it's a FastAPI transitive dep), so we treat
+# a missing client as a hard config error rather than a soft feature toggle.
+try:
+    from . import image_builder_client
+    _IMAGE_BUILDER_CLIENT_AVAILABLE = True
+except Exception as _ie:  # pragma: no cover
+    _IMAGE_BUILDER_CLIENT_AVAILABLE = False
+    _IB_IMPORT_ERROR = str(_ie)
+    print(f"[cartbuilder] WARNING: image_builder_client unavailable: {_ie}")
 
 # Auth import is soft — desktop-builder vendors this module without the
 # parent api/auth.py, so we stub get_current_user to return None (anonymous)
@@ -88,8 +100,18 @@ BUILD_DIR.mkdir(parents=True, exist_ok=True)
 # ---------------------------------------------------------------------------
 
 def _public_file_info(info: dict) -> dict:
-    """Strip server-internal fields from a file_db entry before returning to client."""
-    return {k: v for k, v in info.items() if k not in ("path", "parsed_chunks")}
+    """Strip server-internal fields from a file_db entry before returning to client.
+
+    Day 2 addition: expose route / graphic_count / table_count / ocr_error
+    without the leading underscore so the frontend can render badges and
+    surface OCR failures. Underscore-prefixed keys stay server-internal.
+    """
+    public = {k: v for k, v in info.items() if k not in ("path", "parsed_chunks") and not k.startswith("_")}
+    for src, dst in (("_route", "route"), ("_graphic_count", "graphic_count"),
+                     ("_table_count", "table_count"), ("_ocr_error", "ocr_error")):
+        if src in info:
+            public[dst] = info[src]
+    return public
 
 
 def _active_files() -> dict[str, dict]:
@@ -186,6 +208,203 @@ def _check_available() -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Day 2 — per-file routing helper
+# ---------------------------------------------------------------------------
+
+def _route_for_path(save_path: Path) -> str:
+    """Decide which parse path a file takes: 'text', 'image', or 'scanned'.
+
+    Image extensions always route to Image Builder. PDFs get classified via
+    classify_pdf (< 500 chars extractable text in first 3 pages → scanned).
+    Everything else stays on the existing parse_file fast path.
+    """
+    if is_image_file(save_path):
+        return "image"
+    if save_path.suffix.lower() == ".pdf":
+        kind = classify_pdf(save_path)
+        return "text" if kind == "text" else "scanned"
+    return "text"
+
+
+def _delegate_to_image_builder(save_path: Path) -> dict:
+    """POST the file at save_path to Image Builder /ocr, return parsed JSON.
+
+    Raises the same client-level exceptions image_builder_client.ocr_file
+    does: ImageBuilderNotRunningError, ImageBuilderAuthError,
+    ImageBuilderFailedError. Callers surface these to the /upload response so
+    the browser can decide whether to abort or continue.
+    """
+    if not _IMAGE_BUILDER_CLIENT_AVAILABLE:
+        raise RuntimeError(f"Image Builder client not importable: {_IB_IMPORT_ERROR}")
+    file_bytes = save_path.read_bytes()
+    mime = image_builder_client.guess_mime(save_path.name)
+    return image_builder_client.ocr_file(file_bytes, save_path.name, mime=mime)
+
+
+def _process_upload(save_path: Path) -> dict:
+    """Turn a file on disk into a files_db-shaped info record.
+
+    Handles routing: text → parse_file + chunk_texts (existing fast path);
+    image / scanned → POST to Image Builder /ocr, thread returned markdown
+    through the chunker, keep graphics + tables as separate typed chunks
+    that skip the chunker.
+
+    Returns a dict compatible with the existing files_db entry, extended
+    with:
+      _route         — 'text' | 'image' | 'scanned'
+      graphics       — Docling GraphicItem list (empty for text route)
+      tables         — Docling TableItem list (empty for text route)
+      chunks         — total chunk count including graphics + tables
+      ocr_error      — populated on graceful-failure image/scan; the caller
+                       decides whether to keep the file with a placeholder
+                       pattern or drop it entirely.
+    """
+    route = _route_for_path(save_path)
+    graphics: list = []
+    tables: list = []
+    ocr_error: str | None = None
+
+    if route == "text":
+        sections = parse_file(save_path)
+        text_chunks = chunk_texts(sections)
+    else:
+        try:
+            ocr_result = _delegate_to_image_builder(save_path)
+        except Exception as e:
+            # Graceful failure — keep the file registered with a placeholder
+            # section so the user sees which file didn't process. The
+            # placeholder text carries enough context for a follow-up
+            # search-by-error to find it later.
+            ocr_error = str(e)
+            placeholder = (
+                f"[Image Builder OCR failed for {save_path.name}]\n"
+                f"Reason: {ocr_error}"
+            )
+            sections = [{"text": placeholder, "page": None, "source": save_path.name}]
+            text_chunks = chunk_texts(sections)
+        else:
+            markdown = (ocr_result.get("markdown") or "").strip()
+            graphics = list(ocr_result.get("graphics") or [])
+            tables = list(ocr_result.get("tables") or [])
+            if markdown:
+                # Whole document as one section — the chunker breaks it into
+                # 300-word windows, same as any other text extraction.
+                sections = [{"text": markdown, "page": 1, "source": save_path.name}]
+            else:
+                sections = []
+            text_chunks = chunk_texts(sections)
+
+    # Graphic + table chunks are per-item (Docling returned N graphics, we
+    # emit N patterns). They bypass the word-based chunker — each is one
+    # pattern — but we mark them with content_type so _build_cart writes
+    # the right per_pattern_meta rows.
+    display_source = _display_name(save_path.name)
+    extra_chunks: list[dict] = []
+    for i, g in enumerate(graphics):
+        caption = (g.get("caption") or "").strip()
+        text = caption or f"Graphic {i + 1} of {display_source} Page {g.get('page') or 1}"
+        extra_chunks.append({
+            "text": text,
+            "page": g.get("page") or 1,
+            "source": save_path.name,
+            "content_type": "graphic",
+            "caption": caption,
+            "image_b64": g.get("image_b64") or "",
+            "bbox": list(g.get("bbox") or []),
+        })
+    for i, t in enumerate(tables):
+        html = t.get("html") or ""
+        text = _table_html_to_text(html) or f"Table {i + 1} of {display_source} Page {t.get('page') or 1}"
+        extra_chunks.append({
+            "text": text,
+            "page": t.get("page") or 1,
+            "source": save_path.name,
+            "content_type": "table",
+            "html": html,
+            "bbox": list(t.get("bbox") or []),
+        })
+
+    all_chunks = text_chunks + extra_chunks
+    preview = all_chunks[0]["text"][:200] if all_chunks else ""
+
+    return {
+        "type": save_path.suffix.lstrip(".").lower(),
+        "chars": sum(len(c["text"]) for c in all_chunks),
+        "chunks": len(all_chunks),
+        "preview": preview,
+        "parsed_chunks": all_chunks,
+        "_route": route,
+        "_graphic_count": len(graphics),
+        "_table_count": len(tables),
+        "_ocr_error": ocr_error,
+    }
+
+
+# Regex-only HTML → markdown-table extraction for Docling table markup.
+# Kept minimal because Docling's table HTML is very structured — cells and rows.
+import re as _re
+_TAG_RE = _re.compile(r"<[^>]+>")
+
+# Cart Builder prefixes uploads with an 8-char hex hash + underscore for
+# disk-collision avoidance. That prefix is a storage implementation detail
+# and shouldn't appear in user-facing captions or previews.
+_HASH_PREFIX_RE = _re.compile(r"^[0-9a-f]{8}_")
+
+
+def _display_name(filename: str) -> str:
+    """Return user-facing filename with the hash prefix stripped."""
+    return _HASH_PREFIX_RE.sub("", filename)
+_ENT_MAP = {
+    "&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">",
+    "&quot;": '"', "&#39;": "'",
+}
+_ROW_RE = _re.compile(r"<tr[^>]*>(.*?)</tr>", _re.DOTALL | _re.IGNORECASE)
+_CELL_RE = _re.compile(r"<(th|td)[^>]*>(.*?)</\1>", _re.DOTALL | _re.IGNORECASE)
+
+
+def _table_html_to_text(html: str) -> str:
+    """Convert Docling table HTML to a GFM markdown table.
+
+    Docling emits <table><tr>[<th>|<td>]...</tr>...</table>. We emit standard
+    GFM markdown table syntax (`| cell | cell |` with a separator row) so the
+    passage viewer's react-markdown + remark-gfm renders it as an actual
+    table. Andy 2026-07-05: previous impl produced pipe-delimited flat text
+    with no separator row — remark-gfm parsed it as a paragraph, so tables
+    from JFC-style OCR looked like a wall of piped characters.
+    """
+    if not html:
+        return ""
+
+    def _clean_cell(raw: str) -> str:
+        text = _TAG_RE.sub("", raw)
+        for k, v in _ENT_MAP.items():
+            text = text.replace(k, v)
+        text = _re.sub(r"\s+", " ", text).strip()
+        # Escape literal pipes so they don't break the markdown table.
+        return text.replace("|", "\\|")
+
+    rows: list[list[str]] = []
+    for row_match in _ROW_RE.finditer(html):
+        cells = [_clean_cell(cm.group(2)) for cm in _CELL_RE.finditer(row_match.group(1))]
+        if cells:
+            rows.append(cells)
+
+    if not rows:
+        return ""
+
+    # Rectangular padding — max column count wins, short rows get empty cells.
+    ncols = max(len(r) for r in rows)
+    padded = [r + [""] * (ncols - len(r)) for r in rows]
+
+    def _fmt(cells: list[str]) -> str:
+        return "| " + " | ".join(cells) + " |"
+
+    out = [_fmt(padded[0]), "| " + " | ".join(["---"] * ncols) + " |"]
+    out.extend(_fmt(r) for r in padded[1:])
+    return "\n".join(out)
+
+
 def _check_writable() -> None:
     """Raise 403 if the server is in global read-only mode (VPS_READ_ONLY env var).
     Mirrors main._enforce_writable but kept local to avoid a circular import."""
@@ -219,23 +438,20 @@ async def upload(files: list[UploadFile] = File(...)):
         contents = await f.read()
         save_path.write_bytes(contents)
 
-        sections = parse_file(save_path)
-        chunks = chunk_texts(sections)
-        preview = chunks[0]["text"][:200] if chunks else ""
-
+        # Day 2 — per-file routing. _process_upload() decides between the
+        # text fast path and Image Builder delegation; the returned info
+        # includes _route, _graphic_count, _table_count for the response +
+        # graphics/tables threaded into parsed_chunks alongside text chunks.
+        processed = _process_upload(save_path)
         info = {
             "id": file_id,
             "name": safe_name,
-            "type": save_path.suffix.lstrip(".").lower(),
             "size": save_path.stat().st_size,
-            "chunks": len(chunks),
-            "chars": sum(len(c["text"]) for c in chunks),
-            "preview": preview,
             "owner": "",
             "description": "",
             "tags": [],
             "path": str(save_path),
-            "parsed_chunks": chunks,
+            **processed,
         }
         files_db[file_id] = info
         results.append(_public_file_info(info))
@@ -277,23 +493,18 @@ async def ingest_file(payload: dict):
 
     filepath = Path(file_path)
     file_id = uuid.uuid4().hex[:8]
-    sections = parse_file(filepath)
-    chunks = chunk_texts(sections)
-    preview = chunks[0]["text"][:200] if chunks else ""
-
+    # Day 2 — same routing as /upload. See _process_upload for the split
+    # between text fast path and Image Builder delegation.
+    processed = _process_upload(filepath)
     info = {
         "id": file_id,
         "name": filepath.name,
-        "type": filepath.suffix.lstrip(".").lower(),
         "size": filepath.stat().st_size,
-        "chunks": len(chunks),
-        "chars": sum(len(c["text"]) for c in chunks),
-        "preview": preview,
         "owner": "",
         "description": "",
         "tags": [],
         "path": str(filepath),
-        "parsed_chunks": chunks,
+        **processed,
     }
     files_db[file_id] = info
     return {"file": _public_file_info(info)}

@@ -13,6 +13,7 @@ preserves the cart-builder local copy to keep behavior identical to pre-port
 state; reconciling the divergence is a separate decision.
 """
 import os
+import re
 import time
 import json
 import hashlib
@@ -22,6 +23,18 @@ import numpy as np
 from .cartridge_builder import (
     get_embedder, embed_texts, build_metadata, save_cartridge, chunk_text,
 )
+
+# Cart Builder prefixes uploads with an 8-char hex hash + underscore for
+# disk-collision avoidance. Strip it from the label that becomes the
+# passage title so users see clean filenames like "Pitch Deck.pdf (part 1/13)"
+# rather than "8e4c03fa_Pitch Deck.pdf (part 1/13)". Duplicated from
+# __init__.py to avoid a circular import.
+_HASH_PREFIX_RE = re.compile(r"^[0-9a-f]{8}_")
+
+
+def _display_name(filename: str) -> str:
+    """Return user-facing filename with the hash prefix stripped."""
+    return _HASH_PREFIX_RE.sub("", filename)
 
 # Build state shared with Flask
 build_state = {
@@ -116,9 +129,8 @@ def _build_cart(chunks: list[dict], cart_name: str, output_dir: str,
             src = c["source"]
             idx = source_indices.get(src, 0)
             total = source_counts[src]
-            label = f"{src}"
-            if total > 1:
-                label = f"{src} (part {idx+1}/{total})"
+            display_src = _display_name(src)
+            label = display_src if total <= 1 else f"{display_src} (part {idx+1}/{total})"
             texts.append(f"{label}\n{c['text']}")
             doc_map.append((src, idx, total))
             source_indices[src] = idx + 1
@@ -141,21 +153,37 @@ def _build_cart(chunks: list[dict], cart_name: str, output_dir: str,
         sign_bits = (embeddings > 0).astype(np.uint8)
         packed_signs = np.packbits(sign_bits, axis=1)  # (n, 96)
 
-        # Build per-pattern metadata (h-row style)
+        # Build per-pattern metadata (h-row style).
+        # Day 2 — chunks may carry `content_type` on graphic/table patterns
+        # produced by Image Builder delegation (see _process_upload in
+        # api/cartbuilder/__init__.py). When present, we thread through
+        # image_b64 / bbox / caption / html so per-pattern metadata mirrors
+        # the frontend's writer/npz.ts shape. Absence = classic 'document'.
         per_pattern_meta = []
         for i, cm in enumerate(chunk_meta):
-            per_pattern_meta.append({
+            original = chunks[i]
+            ct = original.get("content_type", "document")
+            record = {
                 "v": 1,
                 "owner": cm["owner"],
                 "description": cm["description"],
-                "tags": cm["tags"],
+                "tags": ["graphic"] if ct == "graphic" else ["table"] if ct == "table" else cm["tags"],
                 "source": cm["source"],
                 "chunk": doc_map[i][1],
                 "chunks": doc_map[i][2],
                 "created_at": time.time(),
                 "tombstone": False,
-                "content_type": "document",
-            })
+                "content_type": ct,
+                "page": original.get("page"),
+            }
+            if ct == "graphic":
+                record["caption"] = original.get("caption", "")
+                record["image_b64"] = original.get("image_b64", "")
+                record["bbox"] = list(original.get("bbox") or [])
+            elif ct == "table":
+                record["html"] = original.get("html", "")
+                record["bbox"] = list(original.get("bbox") or [])
+            per_pattern_meta.append(record)
 
         # Build Pattern 0 — cart manifest
         unique_sources = {}
@@ -169,6 +197,10 @@ def _build_cart(chunks: list[dict], cart_name: str, output_dir: str,
                     "tags": cm["tags"],
                     "chunks": source_counts.get(src, 0),
                 }
+
+        # Day 2 — Image Builder content counts. Reflected in Pattern0TocPanel.
+        graphic_count = sum(1 for c in chunks if c.get("content_type") == "graphic")
+        table_count = sum(1 for c in chunks if c.get("content_type") == "table")
 
         pattern0_data = {
             "cart_name": cart_name,
@@ -187,6 +219,10 @@ def _build_cart(chunks: list[dict], cart_name: str, output_dir: str,
             "agent_briefing": agent_briefing or "",
             "owner": owner or "",
             "tags": list(tags or []),
+            # Day 2 additions — surfaced in the TOC panel header. Zero (or absent)
+            # for text-only carts.
+            "graphic_count": graphic_count,
+            "table_count": table_count,
         }
 
         _update({"progress": 0.85})

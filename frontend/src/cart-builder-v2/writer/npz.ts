@@ -29,6 +29,17 @@ export interface BuildCartOptions {
   hippocampus?: HippocampusOptions
   permissions?: CartPermissionsSpec
   pattern0Meta?: Pattern0Meta
+  // Day 2 — Image Builder integration. Extend the cart with per-pattern
+  // metadata + optional graphic + table pattern data. All three are optional
+  // and default-empty; carts built from purely text sources (Day 1 shape)
+  // continue to write the same NPZ layout they always did, just with a new
+  // per_pattern_meta.npy sidecar attached.
+  //
+  // NOTE: graphics + tables are already threaded through the sections array
+  // by the pipeline (they arrive as Sections with contentType='graphic' or
+  // 'table' and were embedded like any other pattern). The writer just needs
+  // to read section.contentType + optional per-item metadata (image_b64,
+  // bbox, caption, html) and emit the right per_pattern_meta shape.
 }
 
 // Kept in sync with GENERIC_DESCRIPTION / GENERIC_AGENT_BRIEFING in
@@ -97,6 +108,66 @@ export async function buildCart(
   const manifest = await buildManifest(embeddings, count, NOMIC_DIM)
   const permissions = buildPermissions(options.permissions)
 
+  // Day 2 — per_pattern_meta sidecar. Matches the shape backend builder.py
+  // writes for server-built carts so a mounted cart's per-pattern metadata
+  // looks identical regardless of build path. Fields:
+  //   v          — schema version (1)
+  //   content_type — "document" (default text), "graphic", or "table"
+  //   source     — original filename
+  //   page       — 1-indexed page, or null for whole-doc extractions
+  //   chunk / chunks — position within section (0-indexed; total sections)
+  //   tags       — reserved for future per-pattern tag propagation; empty [] today
+  //   created_at — unix time (seconds, float) for consistency w/ backend
+  //   tombstone  — always false at build time; edited via Edit Carts later
+  //   ...content-type specific extras: bbox, caption, image_b64 (graphic);
+  //     bbox + html (table). Preserved for future thumbnail + zoom UI.
+  const buildTs = Date.now() / 1000
+  // Per-source chunk counters — advance across the section list so each
+  // pattern's `chunk` reflects its position within its parent file. Text
+  // patterns typically get 0..N sequences; graphic/table patterns advance
+  // the same source's counter so cross-content indexing stays coherent.
+  const sourceCursor = new Map<string, { idx: number; total: number }>()
+  for (const s of sections) {
+    const entry = sourceCursor.get(s.source) ?? { idx: 0, total: 0 }
+    entry.total++
+    sourceCursor.set(s.source, entry)
+  }
+  const sourceIdx = new Map<string, number>()
+  const per_pattern_meta = sections.map((s) => {
+    const idx = sourceIdx.get(s.source) ?? 0
+    const total = sourceCursor.get(s.source)?.total ?? 1
+    sourceIdx.set(s.source, idx + 1)
+    const ct = s.contentType ?? 'document'
+    // Base record — matches backend api/cartbuilder/builder.py per_pattern_meta.
+    const record: Record<string, unknown> = {
+      v: 1,
+      content_type: ct,
+      source: s.source,
+      page: s.page ?? null,
+      chunk: idx,
+      chunks: total,
+      tags: ct === 'graphic' ? ['graphic'] : ct === 'table' ? ['table'] : [],
+      created_at: buildTs,
+      tombstone: false,
+      // Legacy fields preserved for backend-parity — backend builder writes
+      // these even when empty so downstream readers can rely on them existing.
+      owner: '',
+      description: '',
+    }
+    if (ct === 'graphic') {
+      record.caption = s.caption ?? ''
+      record.image_b64 = s.imageB64 ?? ''
+      record.bbox = Array.isArray(s.bbox) ? s.bbox : []
+    } else if (ct === 'table') {
+      record.html = s.html ?? ''
+      record.bbox = Array.isArray(s.bbox) ? s.bbox : []
+    }
+    return record
+  })
+  // Total counts for the Pattern-0 header — surfaced in Pattern0TocPanel.
+  const graphicCount = per_pattern_meta.reduce((n, r) => n + (r.content_type === 'graphic' ? 1 : 0), 0)
+  const tableCount = per_pattern_meta.reduce((n, r) => n + (r.content_type === 'table' ? 1 : 0), 0)
+
   // Build the pattern0_data payload with the same shape as
   // api/cartbuilder/builder.py: cart-level metadata + per-file list. The
   // Pattern-0 TOC panel reader (api/main.py:_parse_pattern0_from_npz)
@@ -125,8 +196,19 @@ export async function buildCart(
     agent_briefing: (meta.agent_briefing ?? '').trim() || GENERIC_AGENT_BRIEFING,
     owner: meta.owner ?? '',
     tags: meta.tags ?? [],
+    // Day 2 — Image Builder integration surfaces these in the Pattern-0 TOC
+    // panel header ("N graphics + M tables"). Zero when no Image-Builder-routed
+    // files landed in this build; the panel hides the badge on 0s.
+    graphic_count: graphicCount,
+    table_count: tableCount,
   }
   const pattern0Json = JSON.stringify(pattern0_data)
+  // per_pattern_meta.npy — Day 2 sidecar. Single-element unicode NPY holding
+  // a JSON payload with a per-pattern record for every pattern in `passages`.
+  // Consumed by Day 3+ UI (small-PNG thumbnails on graphic patterns, "table"
+  // badge on table patterns). See backend builder.py for the byte-parity
+  // reference; server-built carts write the same shape.
+  const perPatternMetaJson = JSON.stringify(per_pattern_meta)
 
   const zip = new JSZip()
   zip.file('embeddings.npy', dumpFloat32(embeddings, [count, NOMIC_DIM]))
@@ -137,6 +219,11 @@ export async function buildCart(
   // pattern0.npy — single-element unicode array of the JSON payload. Matches
   // the Cart Builder GUI schema so api/cart/pattern-0 reads it uniformly.
   zip.file('pattern0.npy', dumpUnicode([pattern0Json], [1]))
+  // per_pattern_meta.npy — Day 2. Same JSON-in-unicode-array shape as
+  // pattern0.npy for consistency. Backend variant uses np.savez_compressed
+  // which stores it as an object array; both formats round-trip through
+  // np.load(...) without allow_pickle=True (unicode NPY) or with it (object).
+  zip.file('per_pattern_meta.npy', dumpUnicode([perPatternMetaJson], [1]))
 
   const cartBlob = await zip.generateAsync({
     type: 'blob',

@@ -70,3 +70,20 @@ export {
   textParser,
   xlsxParser,
 }
+
+// Day 2 additions — PDF classifier (browser twin of api/cartbuilder/parsers
+// classify_pdf) + Image Builder delegation path. Not part of the registry;
+// the pipeline routes to these explicitly via MIME check + PDF classify.
+export {
+  classifyPdf,
+  PDF_CLASSIFY_MAX_PAGES,
+  PDF_CLASSIFY_TEXT_THRESHOLD,
+} from './pdf'
+export {
+  graphicsToSections,
+  isImageFile,
+  parseViaImageBuilder,
+  tableHtmlToText,
+  tablesToSections,
+  type ImageParseOutput,
+} from './image'

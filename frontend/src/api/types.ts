@@ -130,6 +130,11 @@ export interface Pattern0Response {
   // hippocampus-source-hash derivation. UI shows the "No metadata available
   // — showing derived stats" banner.
   is_derived: boolean
+  // Day 2 — Image Builder integration counts. Zero for text-only carts.
+  // Pattern0TocPanel surfaces "N graphics + M tables" alongside the file
+  // list when either exceeds zero.
+  graphic_count?: number
+  table_count?: number
 }
 
 export interface DeletedPattern {

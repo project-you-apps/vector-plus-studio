@@ -194,6 +194,12 @@ export default function Pattern0TocPanel() {
         agent_briefing: (p0?.agent_briefing && p0.agent_briefing.trim()) || null,
         toc_items,
         is_derived: !hasBakedMeta,
+        // Day 2 — Image Builder integration counts. Pulled from the baked
+        // pattern0.npy where available; zero otherwise. LocalCart doesn't
+        // read per_pattern_meta at mount time (that's Day 3+ UI), so we
+        // trust the pattern0 sidecar's cart-level counts.
+        graphic_count: p0?.graphic_count ?? 0,
+        table_count: p0?.table_count ?? 0,
       })
       setError(null)
       setLoading(false)
@@ -380,38 +386,63 @@ export default function Pattern0TocPanel() {
               No passages found for this file.
             </li>
           ) : (
-            window.passages.map((p) => (
-              <li key={p.idx} className="list-none">
-                <button
-                  type="button"
-                  onClick={() => openDrilledPassage(p)}
-                  className={`w-full text-left px-4 py-2 flex items-start gap-3 text-xs
-                              hover:bg-slate-700/20 transition-colors cursor-pointer ${
-                                p.tombstoned ? 'opacity-50' : ''
-                              }`}
-                  title={`Open passage #${p.idx}`}
-                >
-                  <span className="font-mono text-[10px] text-slate-500 w-10 shrink-0 mt-0.5">
-                    #{p.idx}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <div
-                      className={`text-xs truncate ${
-                        p.tombstoned ? 'text-slate-500 line-through' : 'text-slate-200'
-                      }`}
-                      title={p.title}
-                    >
-                      {p.title || '[empty]'}
-                    </div>
-                    {p.preview && (
-                      <div className="text-[10px] text-slate-500 truncate mt-0.5">
-                        {p.preview}
-                      </div>
+            window.passages.map((p) => {
+              // Day 2 thumbnail — if this passage is a graphic pattern with
+              // baked-in image bytes, show a tiny preview to the left of the
+              // idx column. Andy 2026-07-05 PM: makes the drill-down scan
+              // meaningful for image-heavy carts (invoices, pitch decks).
+              const cart = activeLocalCart ? localCarts.get(activeLocalCart) : null
+              const rec = cart?.perPatternMeta?.[p.idx]
+              const graphicDataUrl =
+                rec?.content_type === 'graphic' && rec.image_b64
+                  ? `data:image/png;base64,${rec.image_b64}`
+                  : null
+              return (
+                <li key={p.idx} className="list-none">
+                  <button
+                    type="button"
+                    onClick={() => openDrilledPassage(p)}
+                    className={`w-full text-left px-4 py-2 flex items-start gap-3 text-xs
+                                hover:bg-slate-700/20 transition-colors cursor-pointer ${
+                                  p.tombstoned ? 'opacity-50' : ''
+                                }`}
+                    title={`Open passage #${p.idx}`}
+                  >
+                    {graphicDataUrl ? (
+                      <img
+                        src={graphicDataUrl}
+                        alt={rec?.caption || 'Graphic'}
+                        className="h-10 w-10 object-contain bg-slate-900/60 rounded border border-slate-700/40 shrink-0"
+                      />
+                    ) : (
+                      <span className="font-mono text-[10px] text-slate-500 w-10 shrink-0 mt-0.5">
+                        #{p.idx}
+                      </span>
                     )}
-                  </div>
-                </button>
-              </li>
-            ))
+                    <div className="flex-1 min-w-0">
+                      <div
+                        className={`text-xs truncate ${
+                          p.tombstoned ? 'text-slate-500 line-through' : 'text-slate-200'
+                        }`}
+                        title={p.title}
+                      >
+                        {graphicDataUrl && (
+                          <span className="font-mono text-[10px] text-slate-500 mr-1.5">
+                            #{p.idx}
+                          </span>
+                        )}
+                        {p.title || '[empty]'}
+                      </div>
+                      {p.preview && (
+                        <div className="text-[10px] text-slate-500 truncate mt-0.5">
+                          {p.preview}
+                        </div>
+                      )}
+                    </div>
+                  </button>
+                </li>
+              )
+            })
           )}
         </ul>
 
@@ -494,6 +525,27 @@ export default function Pattern0TocPanel() {
             </button>
           )}
         </div>
+
+        {/* Day 2 — Image Builder content counts. Shown as a compact one-line
+            summary just under the header when either graphics or tables
+            landed in this cart. Hidden entirely for text-only carts (0 + 0)
+            so the panel stays clean for the common case. */}
+        {((data.graphic_count ?? 0) > 0 || (data.table_count ?? 0) > 0) && (
+          <div className="px-4 py-1.5 border-b border-slate-800 text-[11px] text-slate-400 flex flex-wrap gap-x-3 gap-y-0.5">
+            {(data.graphic_count ?? 0) > 0 && (
+              <span title="Graphics extracted by Image Builder — each is its own pattern in this cart">
+                <span className="text-slate-300 font-mono">{data.graphic_count}</span>
+                <span className="text-slate-500 ml-1">{data.graphic_count === 1 ? 'graphic' : 'graphics'}</span>
+              </span>
+            )}
+            {(data.table_count ?? 0) > 0 && (
+              <span title="Tables extracted by Image Builder — each is its own pattern in this cart">
+                <span className="text-slate-300 font-mono">{data.table_count}</span>
+                <span className="text-slate-500 ml-1">{data.table_count === 1 ? 'table' : 'tables'}</span>
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Metadata row — Created By / Created on / Owner. Hidden when all
             three are empty (derived carts). */}

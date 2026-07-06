@@ -16,12 +16,23 @@ const STOP_WORDS = new Set([
   'need', 'look', 'make', 'let', 'see', 'know',
 ])
 
-/** Extract meaningful keywords from a query string. */
+/** Extract meaningful keywords from a query string.
+ *
+ * Stop-word stripping helps precision on multi-word queries (so "how can I
+ * save the document" filters on "save"/"document" instead of noise). But
+ * when the ENTIRE query strips down to zero keywords, we fall back to the
+ * user's raw words — they typed them on purpose. Andy 2026-07-05: without
+ * this fallback the keyword filter silently no-oped on stop-word-only
+ * queries like "can", letting all top-K cosine hits through as if the
+ * filter were engaged.
+ */
 function extractKeywords(query: string): string[] {
-  return query
+  const words = query
     .split(/\s+/)
     .map((w) => w.toLowerCase().replace(/[^a-z0-9]/g, ''))
-    .filter((w) => w.length >= 2 && !STOP_WORDS.has(w))
+    .filter((w) => w.length >= 2)
+  const nonStop = words.filter((w) => !STOP_WORDS.has(w))
+  return nonStop.length > 0 ? nonStop : words
 }
 
 /** Check if text contains at least one keyword (case-insensitive substring). */

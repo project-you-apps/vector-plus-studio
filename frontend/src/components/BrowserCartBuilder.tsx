@@ -16,11 +16,15 @@ import {
 } from 'lucide-react'
 import {
   buildCartFromFiles,
+  classifyPdf,
   downloadBuiltCart,
+  isImageFile,
   probeWebGpuCapability,
+  syncRouteForFile,
   webGpuAdapterAvailable,
   type BuiltCart,
   type EmbedderBackend,
+  type FileRoute,
   type PipelineProgress,
 } from '../cart-builder-v2'
 import { useAppStore } from '../store/appStore'
@@ -30,6 +34,7 @@ import {
   getBuildStatus as apiGetBuildStatus,
   uploadFiles as apiUploadFiles,
 } from '../api/cartbuilder'
+import ImageBuilderMissingDialog from './ImageBuilderMissingDialog'
 
 // 'detecting'      — initial mount, fast adapter check in flight
 // 'probing'        — adapter exists, running tiny real-workload embed to
@@ -67,6 +72,10 @@ interface DesktopBuildProgress {
 const ACCEPT_TYPES = [
   // Documents (existing parsers)
   '.pdf', '.docx', '.xlsx', '.csv', '.txt', '.md', '.markdown', '.rtf',
+  // Day 2 — images (route to Image Builder /ocr). Kept out of the binary
+  // rejection set below so the drop zone accepts them + the badge system
+  // paints them as amber IMAGE.
+  '.jpg', '.jpeg', '.png', '.heic', '.heif', '.tif', '.tiff', '.webp', '.bmp',
   // Web / markup
   '.html', '.htm', '.xml',
   // Structured data + config
@@ -140,6 +149,12 @@ const BINARY_EXTENSIONS = new Set([
 ])
 
 function isBinaryFile(file: File): boolean {
+  // Day 2 — images are handled by Image Builder rather than the browser
+  // parser + embedder pair, so they're no longer "binary rejects." Punch a
+  // hole in the extension check for anything isImageFile() recognizes so
+  // the rest of BINARY_EXTENSIONS (audio, video, archives, exec) stays
+  // enforced as before.
+  if (isImageFile(file)) return false
   const name = file.name.toLowerCase()
   // Find the last . to get the extension
   const dot = name.lastIndexOf('.')
@@ -151,6 +166,11 @@ function isBinaryFile(file: File): boolean {
 interface QueuedFile {
   file: File
   id: string
+  // Day 2 — route decision drives the badge in the file queue AND the
+  // Build-click check for Image Builder availability. Initial value is
+  // syncRouteForFile()'s output; for PDFs the async classifyPdf() upgrades
+  // 'pending' → 'text' | 'scanned' when the pdfjs call resolves.
+  route: FileRoute
 }
 
 export default function BrowserCartBuilder() {
@@ -226,6 +246,16 @@ export default function BrowserCartBuilder() {
     chunksTotal: number | null
   } | null>(null)
   const [repairPromptOpen, setRepairPromptOpen] = useState(false)
+
+  // Day 2 — Image Builder detection state and fallback dialog. We consult
+  // imageBuilderState at Build-click time to decide whether to route through
+  // Image Builder (paired) or surface the missing-Image-Builder dialog
+  // (not-found + queue has image / scanned-PDF files). The dialog stores the
+  // affected filenames so the user can see WHAT they'd be skipping before
+  // confirming.
+  const imageBuilderState = useAppStore((s) => s.imageBuilderState)
+  const [imageBuilderMissingOpen, setImageBuilderMissingOpen] = useState(false)
+  const [imageBuilderMissingFiles, setImageBuilderMissingFiles] = useState<string[]>([])
 
   // Two-stage WebGPU capability probe on mount so the backend badge tells the
   // truth instead of advertising green for "adapter exists but inference will
@@ -307,16 +337,38 @@ export default function BrowserCartBuilder() {
       setSkippedNotice(null)
     }
     if (accepted.length === 0) return
-    setQueued((prev) => [
-      ...prev,
-      ...accepted.map((f) => ({
-        file: f,
-        id:
-          typeof crypto !== 'undefined' && 'randomUUID' in crypto
-            ? crypto.randomUUID()
-            : `${Date.now()}_${Math.random().toString(36).slice(2)}`,
-      })),
-    ])
+    // Build QueuedFile records with an initial route (sync MIME check).
+    // PDFs land as 'pending' — we fire the async classifyPdf below and
+    // upgrade the badge when it resolves.
+    const newQueueEntries = accepted.map((f) => ({
+      file: f,
+      id:
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+      route: syncRouteForFile(f),
+    }))
+    setQueued((prev) => [...prev, ...newQueueEntries])
+    // Kick off PDF classification for any newly-added PDFs. We update the
+    // queue entry in place once each classification resolves — matching by
+    // id since the queue could have been reordered / trimmed by then.
+    // Failures fall back to 'text' (the safer default: at worst, the PDF
+    // parser returns a few chunks of extracted text).
+    for (const entry of newQueueEntries) {
+      if (entry.route !== 'pending') continue
+      void (async () => {
+        let resolvedRoute: FileRoute
+        try {
+          const kind = await classifyPdf(entry.file)
+          resolvedRoute = kind === 'text' ? 'text' : 'scanned'
+        } catch {
+          resolvedRoute = 'text'
+        }
+        setQueued((prev) =>
+          prev.map((q) => (q.id === entry.id ? { ...q, route: resolvedRoute } : q)),
+        )
+      })()
+    }
   }
 
   const removeFile = (id: string) => {
@@ -373,8 +425,22 @@ export default function BrowserCartBuilder() {
     }
   }
 
-  const handleBuild = async () => {
-    if (queued.length === 0 || building || hasMountedCart) return
+  // Day 2 — Image Builder gating. Returns the list of queued filenames that
+  // need Image Builder (image OR scanned-PDF route). Called at Build-click
+  // time to decide whether to surface the fallback dialog. Pending PDF
+  // classifications count as "possibly needs it" — safer to prompt the user
+  // than to guess wrong and stall mid-build.
+  const filesNeedingImageBuilder = (): string[] => {
+    return queued
+      .filter((q) => q.route === 'image' || q.route === 'scanned' || q.route === 'pending')
+      .map((q) => q.file.name)
+  }
+
+  // Wraps the actual build kickoff. Called directly on Build click when
+  // Image Builder is available or no queued file needs it; called from the
+  // Skip button in ImageBuilderMissingDialog with the queue pre-filtered.
+  const runBuild = async (filesToBuild: QueuedFile[]) => {
+    if (filesToBuild.length === 0 || building || hasMountedCart) return
     setBuilding(true)
     setError(null)
     setResult(null)
@@ -398,10 +464,13 @@ export default function BrowserCartBuilder() {
     }
     try {
       if (isDesktopPaired) {
-        await runDesktopBuild(sanitizedName, meta)
+        // Delegated path uploads via the queue's file list — we pass the
+        // pre-filtered set explicitly so a Skip decision from the fallback
+        // dialog also propagates to the delegated backend upload loop.
+        await runDesktopBuild(sanitizedName, meta, filesToBuild)
       } else {
         const buildResult = await buildCartFromFiles(
-          queued.map((q) => q.file),
+          filesToBuild.map((q) => q.file),
           {
             cartName: sanitizedName,
             onProgress: setProgress,
@@ -429,6 +498,55 @@ export default function BrowserCartBuilder() {
     }
   }
 
+  // Day 2 — Build click entry point. Checks the Image Builder availability
+  // gate: if any queued file needs Image Builder and Image Builder isn't
+  // paired-and-running, surface the fallback dialog. The dialog's Skip
+  // button strips the affected files and calls runBuild directly.
+  // Delegated path (isDesktopPaired) is exempt from the gate — the exe
+  // reads the shared token from ~/.vector-plus/token and does its own
+  // Image Builder call over loopback (see api/cartbuilder/builder.py Day 2
+  // delegation). The browser can't observe whether the exe's own probe
+  // succeeded, so we let the exe decide + report any failure back via the
+  // standard build-status error path.
+  const handleBuild = () => {
+    if (queued.length === 0 || building || hasMountedCart) return
+    if (isDesktopPaired) {
+      void runBuild(queued)
+      return
+    }
+    const needing = filesNeedingImageBuilder()
+    const gateNeeded = needing.length > 0 && imageBuilderState !== 'detected-paired'
+    if (gateNeeded) {
+      setImageBuilderMissingFiles(needing)
+      setImageBuilderMissingOpen(true)
+      return
+    }
+    void runBuild(queued)
+  }
+
+  // Fallback dialog handlers. Skip strips the amber files, closes the
+  // dialog, and starts the build with what's left. Cancel closes the
+  // dialog and leaves the queue untouched — the user starts Image Builder
+  // and retries.
+  const handleSkipImageBuilderFiles = () => {
+    const survivors = queued.filter(
+      (q) => q.route !== 'image' && q.route !== 'scanned' && q.route !== 'pending',
+    )
+    setImageBuilderMissingOpen(false)
+    setImageBuilderMissingFiles([])
+    if (survivors.length === 0) {
+      // Nothing left to build after skipping — don't kick off an empty build,
+      // just close the dialog and let the user retry.
+      setError('All queued files needed Image Builder; nothing left to build.')
+      return
+    }
+    void runBuild(survivors)
+  }
+  const handleCancelImageBuilderMissing = () => {
+    setImageBuilderMissingOpen(false)
+    setImageBuilderMissingFiles([])
+  }
+
   // Delegated build path. The exe mounts the same /api/cartbuilder/*
   // FastAPI router the VPS ships (see api/cartbuilder/__init__.py); the API
   // client (api/cartbuilder.ts) resolveTarget() routes to loopback + Bearer
@@ -444,6 +562,7 @@ export default function BrowserCartBuilder() {
       tags: string[]
       creator: string
     },
+    filesToBuild: QueuedFile[],
   ) => {
     // Phase 1: reset server-side workspace so leftover files from a prior
     // session in the same exe process don't leak into this build.
@@ -455,9 +574,9 @@ export default function BrowserCartBuilder() {
     // upload so uploading N files sequentially also lets the user see any
     // per-file parse error before the whole build kicks off. Upload phase
     // spans 5-30% of the overall bar.
-    const total = queued.length
+    const total = filesToBuild.length
     for (let i = 0; i < total; i++) {
-      const q = queued[i]
+      const q = filesToBuild[i]
       const uploadPct = 5 + Math.round(((i + 1) / total) * 25)
       setDesktopProgress({
         phase: 'uploading',
@@ -773,29 +892,44 @@ export default function BrowserCartBuilder() {
               </button>
             )}
           </div>
-          {queued.map((q) => (
-            <div
-              key={q.id}
-              className="px-3 py-2 flex items-center gap-2 text-xs"
-            >
-              <FileText size={12} className="text-slate-500" />
-              <span className="text-slate-300 font-medium truncate flex-1">
-                {q.file.name}
-              </span>
-              <span className="text-slate-500 font-mono shrink-0">
-                {(q.file.size / 1024).toFixed(1)} KB
-              </span>
-              {!building && (
-                <button
-                  onClick={() => removeFile(q.id)}
-                  className="text-slate-600 hover:text-rose-400 transition-colors"
-                  title="Remove"
-                >
-                  <X size={12} />
-                </button>
-              )}
-            </div>
-          ))}
+          {queued.map((q) => {
+            // Red left border when the file NEEDS Image Builder but the
+            // exe isn't detected — makes the risk visible before Build even
+            // fires. Amber rows (paired-but-still-image) aren't decorated
+            // beyond their badge to keep the queue readable.
+            const needsBuilder = q.route === 'image' || q.route === 'scanned' || q.route === 'pending'
+            const missingBuilder = needsBuilder && imageBuilderState !== 'detected-paired'
+            return (
+              <div
+                key={q.id}
+                className={`px-3 py-2 flex items-center gap-2 text-xs ${
+                  missingBuilder ? 'border-l-2 border-l-rose-500/60 pl-[10px]' : ''
+                }`}
+              >
+                <FileText size={12} className="text-slate-500" />
+                <span className="text-slate-300 font-medium truncate flex-1">
+                  {q.file.name}
+                </span>
+                {/* Route badge — TEXT PDF / SCANNED PDF / IMAGE / DOC / MD /
+                    PDF (…). Slate for local/fast-path types; amber for the
+                    Image Builder route (spec Q4). Uses filename extension
+                    where MIME isn't specific enough for the label. */}
+                <FileRouteBadge file={q.file} route={q.route} />
+                <span className="text-slate-500 font-mono shrink-0">
+                  {(q.file.size / 1024).toFixed(1)} KB
+                </span>
+                {!building && (
+                  <button
+                    onClick={() => removeFile(q.id)}
+                    className="text-slate-600 hover:text-rose-400 transition-colors"
+                    title="Remove"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
 
@@ -1009,6 +1143,17 @@ export default function BrowserCartBuilder() {
           </div>
         </div>
       )}
+
+      {/* Day 2 — Image Builder missing fallback dialog. Surfaces at Build
+          click time when the queue contains files that need Image Builder
+          AND Image Builder isn't detected on 127.0.0.1:7879. Three
+          choices: Skip / Cancel / Help — see ImageBuilderMissingDialog. */}
+      <ImageBuilderMissingDialog
+        open={imageBuilderMissingOpen}
+        affectedFiles={imageBuilderMissingFiles}
+        onSkip={handleSkipImageBuilderFiles}
+        onCancel={handleCancelImageBuilderMissing}
+      />
     </div>
   )
 }
@@ -1111,4 +1256,77 @@ function computeOverallPct(progress: PipelineProgress | null): number | null {
     case 'error':
       return null
   }
+}
+
+// Per-file badge (Day 2). Shows a compact TEXT PDF / SCANNED PDF / IMAGE /
+// DOC / MD / TXT / CODE label so users can see at a glance which route each
+// file will take. Slate for existing-parser fast paths, amber for anything
+// going to Image Builder (spec Q4).
+function FileRouteBadge({ file, route }: { file: File; route: FileRoute }) {
+  const name = file.name.toLowerCase()
+  const ext = name.slice(name.lastIndexOf('.'))
+
+  // Amber — routes that will hit Image Builder.
+  if (route === 'image') {
+    return <RouteBadge tone="amber" label="IMAGE" title="Routes to Image Builder /ocr" />
+  }
+  if (route === 'scanned') {
+    return <RouteBadge tone="amber" label="SCANNED PDF" title="PDF text-check found <500 chars; routes to Image Builder" />
+  }
+  if (route === 'pending') {
+    // PDF classification in flight — show a neutral PDF label with a
+    // loader so users see the state is still resolving. Once classifyPdf
+    // resolves, the badge flips to TEXT PDF or SCANNED PDF.
+    return (
+      <span
+        className="text-[9px] uppercase tracking-wider text-slate-500 bg-slate-700/30 border border-slate-600/40 px-1.5 py-0.5 rounded font-mono inline-flex items-center gap-1 shrink-0"
+        title="Classifying PDF as text vs scan (via pdfjs)…"
+      >
+        <Loader2 size={8} className="animate-spin" />
+        PDF
+      </span>
+    )
+  }
+
+  // Slate — text fast path. Derive a specific label from extension where
+  // available; fall back to a generic TEXT for everything else.
+  if (ext === '.pdf') {
+    return <RouteBadge tone="slate" label="TEXT PDF" title="Text-bearing PDF; existing chunker fast path" />
+  }
+  if (ext === '.docx' || ext === '.doc') return <RouteBadge tone="slate" label="DOCX" />
+  if (ext === '.xlsx' || ext === '.xls') return <RouteBadge tone="slate" label="XLSX" />
+  if (ext === '.md' || ext === '.markdown' || ext === '.mdx' || ext === '.qmd') {
+    return <RouteBadge tone="slate" label="MD" />
+  }
+  if (ext === '.txt') return <RouteBadge tone="slate" label="TXT" />
+  if (ext === '.html' || ext === '.htm') return <RouteBadge tone="slate" label="HTML" />
+  if (ext === '.rtf') return <RouteBadge tone="slate" label="RTF" />
+  if (ext === '.json' || ext === '.jsonl' || ext === '.ndjson') return <RouteBadge tone="slate" label="JSON" />
+  if (ext === '.yaml' || ext === '.yml') return <RouteBadge tone="slate" label="YAML" />
+  if (ext === '.pptx' || ext === '.ppt') return <RouteBadge tone="slate" label="PPTX" />
+  // Generic text — code files (.py, .ts, .go, etc.) and misc.
+  return <RouteBadge tone="slate" label="TEXT" />
+}
+
+function RouteBadge({
+  tone,
+  label,
+  title,
+}: {
+  tone: 'slate' | 'amber'
+  label: string
+  title?: string
+}) {
+  const classes =
+    tone === 'amber'
+      ? 'text-amber-300 bg-amber-500/15 border-amber-500/40'
+      : 'text-slate-400 bg-slate-700/30 border-slate-600/40'
+  return (
+    <span
+      className={`text-[9px] uppercase tracking-wider ${classes} border px-1.5 py-0.5 rounded font-mono shrink-0`}
+      title={title}
+    >
+      {label}
+    </span>
+  )
 }
