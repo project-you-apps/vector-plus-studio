@@ -92,6 +92,18 @@ export default function PassageModal() {
   const mountedCart = useAppStore((s) => s.status?.mounted_cartridge)
   const activeLocalCart = useAppStore((s) => s.activeLocalCart)
   const localCarts = useAppStore((s) => s.localCarts)
+  const sandboxPerPatternMeta = useAppStore((s) => s.sandboxPerPatternMeta)
+
+  // Resolve the per-pattern-meta array to use: prefer the active LocalCart's
+  // in-memory copy, otherwise fall back to the sandbox-mounted cart's
+  // server-fetched mirror. Andy 2026-07-06 AM: parity fix so droplet-uploaded
+  // carts show images in the modal + inline-image replacement + drill-down.
+  const perPatternMeta = useMemo(() => {
+    if (activeLocalCart) {
+      return localCarts.get(activeLocalCart)?.perPatternMeta ?? null
+    }
+    return sandboxPerPatternMeta
+  }, [activeLocalCart, localCarts, sandboxPerPatternMeta])
 
   // Day 2 graphic — if the current passage is a graphic-type pattern (Image
   // Builder extracted), pull the base64 PNG out of per_pattern_meta and hand
@@ -99,13 +111,11 @@ export default function PassageModal() {
   // PM: this is the wow moment for the pitch deck demo — click a graphic
   // result, see the actual graphic.
   const graphicPatternMeta = useMemo(() => {
-    if (!passage || !activeLocalCart) return null
-    const cart = localCarts.get(activeLocalCart)
-    if (!cart?.perPatternMeta) return null
-    const rec = cart.perPatternMeta[passage.idx]
+    if (!passage || !perPatternMeta) return null
+    const rec = perPatternMeta[passage.idx]
     if (!rec || rec.content_type !== 'graphic' || !rec.image_b64) return null
     return rec
-  }, [passage, activeLocalCart, localCarts])
+  }, [passage, perPatternMeta])
   const graphicDataUrl: string | null = graphicPatternMeta
     ? `data:image/png;base64,${graphicPatternMeta.image_b64}`
     : null
@@ -134,15 +144,23 @@ export default function PassageModal() {
   // below resolves that placeholder to the real data URL. Effect: images
   // render in the same order they appeared on the page.
   const sourceGraphics = useMemo(() => {
-    if (!passage || !activeLocalCart) return []
-    const cart = localCarts.get(activeLocalCart)
-    if (!cart?.perPatternMeta || !cart.sourcePaths) return []
-    const src = cart.sourcePaths[passage.idx]
+    if (!passage || !perPatternMeta) return []
+    // Prefer sourcePaths from LocalCart if available; otherwise derive the
+    // source for this passage from the per-pattern-meta record itself
+    // (sandbox mode has no in-memory sourcePaths sidecar).
+    let src: string | undefined
+    if (activeLocalCart) {
+      const cart = localCarts.get(activeLocalCart)
+      src = cart?.sourcePaths?.[passage.idx] ?? undefined
+    }
+    if (!src) {
+      src = perPatternMeta[passage.idx]?.source ?? undefined
+    }
     if (!src) return []
-    return cart.perPatternMeta.filter(
+    return perPatternMeta.filter(
       (r) => r.content_type === 'graphic' && r.source === src && r.image_b64,
     )
-  }, [passage, activeLocalCart, localCarts])
+  }, [passage, perPatternMeta, activeLocalCart, localCarts])
 
   const hasPrev = passage?.prev_idx != null
   const hasNext = passage?.next_idx != null

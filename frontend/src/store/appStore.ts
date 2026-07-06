@@ -260,6 +260,16 @@ interface AppState {
   localCartAddPassage: (text: string, source: string) => Promise<{ success: boolean; message: string; idx?: number }>
   localCartSave: () => Promise<{ success: boolean; message: string }>
 
+  // Per-pattern metadata for the SERVER-mounted cart (sandbox upload path).
+  // Andy 2026-07-06 AM: fetched via /api/cart/per-pattern-meta after mount.
+  // Parallel-indexed to server's passages. Null when nothing is mounted
+  // server-side, or when the mounted cart lacks per_pattern_meta.npy
+  // (legacy cart). Rendered by ResultCard, PassageModal, Pattern0TocPanel
+  // drill-down via a resolvePatternMeta helper that checks EITHER the
+  // active LocalCart's perPatternMeta OR this server mirror.
+  sandboxPerPatternMeta: LocalCartPatternMeta[] | null
+  fetchSandboxPerPatternMeta: () => Promise<void>
+
   // Strict keyword filter
   strictMode: boolean
   setStrictMode: (strict: boolean) => void
@@ -548,6 +558,22 @@ export const useAppStore = create<AppState>((set, get) => ({
   localCarts: new Map(),
   activeLocalCart: null,
   localCartLoading: false,
+
+  sandboxPerPatternMeta: null,
+  fetchSandboxPerPatternMeta: async () => {
+    try {
+      const resp = await api.getCartPerPatternMeta()
+      if (!resp.mounted || !resp.records || resp.records.length === 0) {
+        set({ sandboxPerPatternMeta: null })
+        return
+      }
+      set({ sandboxPerPatternMeta: resp.records as LocalCartPatternMeta[] })
+    } catch {
+      // Endpoint may be missing on legacy droplets; fall through silently.
+      set({ sandboxPerPatternMeta: null })
+    }
+  },
+
   mountLocalCart: async (file: File) => {
     set({ localCartLoading: true })
     try {
@@ -1250,6 +1276,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       await get().fetchStatus()
       await get().fetchCartridges()
+      // Fetch per-pattern metadata sidecar so sandbox/server-mounted carts
+      // can render graphics + tables the same way LocalCart mounts do
+      // (Andy 2026-07-06 AM sandbox-mount parity). Non-blocking on failure —
+      // legacy carts have no sidecar and the endpoint returns records=[].
+      get().fetchSandboxPerPatternMeta()
       set({
         results: [], query: '', deletedPatterns: [],
         strictMode: false, exactMatch: false,
@@ -1274,6 +1305,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         results: [], query: '', deletedPatterns: [],
         walkTrail: [], searchModeLabel: '', searchElapsed: 0,
         showTocPanel: true,
+        sandboxPerPatternMeta: null,
       })
     } catch (e) {
       console.error('Unmount failed:', e)

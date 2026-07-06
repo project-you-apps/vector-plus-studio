@@ -94,8 +94,10 @@ export default function Pattern0TocPanel() {
   const mountedCartridge = useAppStore((s) => s.status?.mounted_cartridge ?? null)
   const activeLocalCart = useAppStore((s) => s.activeLocalCart)
   const localCarts = useAppStore((s) => s.localCarts)
+  const sandboxPerPatternMeta = useAppStore((s) => s.sandboxPerPatternMeta)
   const listPassagesBySource = useAppStore((s) => s.localCartListPassagesBySource)
   const openModal = useAppStore((s) => s.openModal)
+  const navigateModal = useAppStore((s) => s.navigateModal)
 
   const [data, setData] = useState<Pattern0Response | null>(null)
   const [loading, setLoading] = useState(false)
@@ -107,12 +109,52 @@ export default function Pattern0TocPanel() {
   const [briefingOpen, setBriefingOpen] = useState(false)
 
   // Drill-down state (Andy 2026-07-02) — click a file row to expand its
-  // passages inline. LocalCart-only (backend Pattern-0 doesn't expose
-  // per-source passage lookup). Read-only preview; editing lives in Edit
-  // Carts.
+  // passages inline. Read-only preview; editing lives in Edit Carts.
+  // Andy 2026-07-06 AM: sandbox-mounted carts drill too, via the new
+  // `?source=` filter on /api/patterns.
   const [drillPath, setDrillPath] = useState<string | null>(null)
   const [drillOffset, setDrillOffset] = useState(0)
   const [drillPageJump, setDrillPageJump] = useState('')
+  // Server-fetched window for sandbox drill. Mirrors the shape returned by
+  // localCartListPassagesBySource so the drill JSX code path is shared.
+  const [sandboxDrillWindow, setSandboxDrillWindow] = useState<{
+    total: number
+    activeCount: number
+    tombstonedCount: number
+    passages: Array<{ idx: number; title: string; preview: string; tombstoned: boolean }>
+  }>({ total: 0, activeCount: 0, tombstonedCount: 0, passages: [] })
+
+  useEffect(() => {
+    // Only fire the server fetch for sandbox mounts. LocalCart flow uses
+    // the sync selector and never touches this state.
+    if (activeLocalCart || !drillPath || !mountedCartridge) {
+      setSandboxDrillWindow({ total: 0, activeCount: 0, tombstonedCount: 0, passages: [] })
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      try {
+        const resp = await api.listPatterns(drillOffset, DRILL_PAGE_SIZE, undefined, drillPath)
+        if (cancelled) return
+        setSandboxDrillWindow({
+          total: resp.total,
+          activeCount: resp.total,
+          tombstonedCount: 0,
+          passages: resp.passages.map((p) => ({
+            idx: p.idx,
+            title: p.title,
+            preview: p.preview,
+            tombstoned: false,
+          })),
+        })
+      } catch {
+        if (!cancelled) {
+          setSandboxDrillWindow({ total: 0, activeCount: 0, tombstonedCount: 0, passages: [] })
+        }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [activeLocalCart, mountedCartridge, drillPath, drillOffset])
 
   // Fetch whenever the mounted cart changes. LocalCart doesn't have a
   // server-side Pattern-0 (nothing was uploaded); in that case we synthesize
@@ -289,17 +331,22 @@ export default function Pattern0TocPanel() {
   // mounted_cartridge string. Spec says "<filename> TOC".
   const cartName = data.name || mountedCartridge || activeLocalCart || 'Cart'
   const hasBriefing = !!(data.agent_briefing && data.agent_briefing.trim().length > 0)
-  // Backend Pattern-0 has no per-source passage lookup; only LocalCarts get
-  // the click-to-drill affordance for now.
-  const drillEnabled = !!activeLocalCart
+  // Andy 2026-07-06 AM: sandbox-mounted carts can drill down too. Uses the
+  // new `?source=` filter on /api/patterns for server-fetched passages.
+  const drillEnabled = !!activeLocalCart || !!mountedCartridge
 
   // ── Drill view — read-only per-file passage preview ──────────────────────
-  // Only reachable for LocalCarts (see drillEnabled). Uses the same selector
-  // that Edit Carts' Source Files drill does, so pagination + preview format
-  // stays consistent across surfaces. NO edit/tombstone/restore buttons —
-  // Search tab is read-only; Andy's spec.
+  // Uses the same selector that Edit Carts' Source Files drill does for
+  // LocalCarts, so pagination + preview format stays consistent across
+  // surfaces. For sandbox mounts, fetches via listPatterns with the source
+  // filter and mirrors the same window shape into local state.
+  // NO edit/tombstone/restore buttons — Search tab is read-only; Andy's spec.
   if (drillPath !== null && drillEnabled) {
-    const window = listPassagesBySource(drillPath, drillOffset, DRILL_PAGE_SIZE)
+    // Local-cart drill uses the sync selector; sandbox drill uses the
+    // asynchronously-loaded state (see sandboxDrillWindow useEffect above).
+    const window = activeLocalCart
+      ? listPassagesBySource(drillPath, drillOffset, DRILL_PAGE_SIZE)
+      : sandboxDrillWindow
     const total = window.total
     const totalDrillPages = Math.max(1, Math.ceil(total / DRILL_PAGE_SIZE))
     const currentDrillPage = Math.floor(drillOffset / DRILL_PAGE_SIZE) + 1
@@ -322,33 +369,37 @@ export default function Pattern0TocPanel() {
     // sourcePaths sidecar to clip to same-source neighbors. NO edit affordance
     // on the Search tab per spec — editing lives in Edit Carts.
     const openDrilledPassage = (p: { idx: number; title: string; preview: string }) => {
-      if (!activeLocalCart) return
-      const cart = localCarts.get(activeLocalCart)
-      if (!cart) return
-      const fullText = cart.passages[p.idx] ?? ''
-      const total = cart.passages.length
+      // LocalCart path: hand the modal the pre-parsed full_text from memory.
+      if (activeLocalCart) {
+        const cart = localCarts.get(activeLocalCart)
+        if (!cart) return
+        const fullText = cart.passages[p.idx] ?? ''
+        const total = cart.passages.length
+        const result: SearchResult = {
+          rank: 0, idx: p.idx, score: 0,
+          cosine_score: null, physics_score: null, hamming_score: null, keyword_boost: null,
+          title: p.title || `#${p.idx}`, preview: p.preview, full_text: fullText,
+          from_lattice: false,
+          prev_idx: p.idx > 0 ? p.idx - 1 : null,
+          next_idx: p.idx < total - 1 ? p.idx + 1 : null,
+          source_path: drillPath,
+        }
+        openModal(result)
+        return
+      }
+      // Sandbox path (Andy 2026-07-06 AM): open with a stub result, then
+      // fire navigateModal to hydrate full_text from /api/patterns/{idx}.
       const result: SearchResult = {
-        rank: 0,
-        idx: p.idx,
-        score: 0,
-        cosine_score: null,
-        physics_score: null,
-        hamming_score: null,
-        keyword_boost: null,
-        title: p.title || `#${p.idx}`,
-        preview: p.preview,
-        full_text: fullText,
+        rank: 0, idx: p.idx, score: 0,
+        cosine_score: null, physics_score: null, hamming_score: null, keyword_boost: null,
+        title: p.title || `#${p.idx}`, preview: p.preview, full_text: p.preview,
         from_lattice: false,
-        // openModal clips these to same-source when the cart carries a
-        // sourcePaths sidecar (which is the case for every drill target —
-        // drillEnabled implies activeLocalCart, and the drill only appears
-        // when sourcePaths exists). So even though we pass raw ±1 neighbors,
-        // they collapse to null at file boundaries.
         prev_idx: p.idx > 0 ? p.idx - 1 : null,
-        next_idx: p.idx < total - 1 ? p.idx + 1 : null,
+        next_idx: p.idx + 1,
         source_path: drillPath,
       }
       openModal(result)
+      navigateModal(p.idx)
     }
     return (
       <div className="h-full flex flex-col border border-slate-700/50 rounded-xl bg-slate-800/20 overflow-hidden">
@@ -391,8 +442,11 @@ export default function Pattern0TocPanel() {
               // baked-in image bytes, show a tiny preview to the left of the
               // idx column. Andy 2026-07-05 PM: makes the drill-down scan
               // meaningful for image-heavy carts (invoices, pitch decks).
+              // Andy 2026-07-06 AM: fall back to sandbox per-pattern-meta so
+              // droplet-uploaded carts also get thumbnails in the drill-down.
               const cart = activeLocalCart ? localCarts.get(activeLocalCart) : null
               const rec = cart?.perPatternMeta?.[p.idx]
+                ?? sandboxPerPatternMeta?.[p.idx]
               const graphicDataUrl =
                 rec?.content_type === 'graphic' && rec.image_b64
                   ? `data:image/png;base64,${rec.image_b64}`

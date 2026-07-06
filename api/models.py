@@ -135,6 +135,33 @@ class Pattern0Response(BaseModel):
     is_derived: bool = False
 
 
+class PerPatternMetaResponse(BaseModel):
+    """Per-pattern metadata sidecar (from per_pattern_meta.npy).
+
+    Andy 2026-07-06 AM: exists so sandbox-mounted carts on the droplet
+    reach parity with LocalCart-mounted carts for image/table rendering.
+    The frontend fetches this on mount + carries a mirror-image data
+    structure through ResultCard, PassageModal, Pattern0TocPanel drill-down,
+    and Edit Carts source-files panel.
+
+    Records parallel `passages` — records[i] is the metadata for pattern i.
+    Each record's shape mirrors the JSON baked by the writer (see
+    api/cartbuilder/builder.py + frontend/src/cart-builder-v2/writer/npz.ts):
+      - v: schema version (1)
+      - content_type: "document" | "graphic" | "table"
+      - source: original filename
+      - page: 1-indexed page or null
+      - chunk / chunks: position within section
+      - tags: list[str]
+      - created_at: unix ts
+      - tombstone: bool
+      - caption, image_b64, bbox (graphic)
+      - html, bbox (table)
+    """
+    mounted: bool = False
+    records: list[dict] = Field(default_factory=list)
+
+
 class DeletedPattern(BaseModel):
     idx: int
     title: str

@@ -247,13 +247,21 @@ export default function ResultCard({ result }: Props) {
 
   // Day 2 pattern metadata — raw record for THIS result's idx. Used for
   // both graphic-image rendering (when content_type='graphic') and
-  // edit-affordance gating on graphic/table patterns.
+  // edit-affordance gating on graphic/table patterns. Andy 2026-07-06 AM:
+  // when nothing is active as LocalCart, fall back to the SANDBOX-mounted
+  // cart's per-pattern meta fetched from the server (parity with LocalCart).
+  const sandboxPerPatternMeta = useAppStore((s) => s.sandboxPerPatternMeta)
   const patternMeta = useMemo(() => {
-    if (!activeLocalCart) return null
-    const cart = localCarts.get(activeLocalCart)
-    if (!cart?.perPatternMeta) return null
-    return cart.perPatternMeta[result.idx] ?? null
-  }, [activeLocalCart, localCarts, result.idx])
+    if (activeLocalCart) {
+      const cart = localCarts.get(activeLocalCart)
+      if (cart?.perPatternMeta) return cart.perPatternMeta[result.idx] ?? null
+      return null
+    }
+    if (sandboxPerPatternMeta) {
+      return sandboxPerPatternMeta[result.idx] ?? null
+    }
+    return null
+  }, [activeLocalCart, localCarts, sandboxPerPatternMeta, result.idx])
   const graphicPatternMeta =
     patternMeta?.content_type === 'graphic' && patternMeta.image_b64 ? patternMeta : null
   const graphicDataUrl: string | null = graphicPatternMeta

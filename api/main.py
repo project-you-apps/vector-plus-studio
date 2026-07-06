@@ -137,7 +137,7 @@ from .models import (
     SearchResult, SearchResponse, StatusResponse,
     DeletedPattern, DeletedListResponse, MessageResponse,
     PatternResponse, PatternListItem, PatternListResponse,
-    Pattern0Response, Pattern0TocItem,
+    Pattern0Response, Pattern0TocItem, PerPatternMetaResponse,
     MemboxLockState, MemboxCartInfo, MemboxWriteEntry, MemboxStatus,
     MemboxCartListResponse, MemboxImprintRequest,
     MemboxMountRequest, MemboxUnmountRequest,
@@ -474,6 +474,59 @@ def _derive_toc_from_hippocampus() -> list[Pattern0TocItem]:
         )
         for i, (h, n) in enumerate(counts.items())
     ]
+
+
+def _parse_per_pattern_meta_from_npz(cart_path: str) -> list[dict] | None:
+    """Attempt to read `per_pattern_meta` from a .cart.npz and decode it.
+
+    Returns a list of per-pattern records parallel to the passages array,
+    or None if the cart has no per_pattern_meta.npy sidecar. Andy 2026-07-06
+    AM: parses the same shape as pattern0 (unicode NPY with JSON string or
+    object array), reusing that decode strategy.
+    """
+    try:
+        with np.load(cart_path, allow_pickle=True) as data:
+            if 'per_pattern_meta' not in data.files:
+                return None
+            ppm = data['per_pattern_meta']
+            if ppm.dtype.kind in ('U', 'O'):
+                try:
+                    raw = ppm.item() if ppm.ndim == 0 else ppm[0]
+                    import json as _json
+                    payload = _json.loads(str(raw))
+                    if isinstance(payload, list):
+                        return payload
+                except (ValueError, TypeError):
+                    return None
+                return None
+            return None
+    except Exception:
+        return None
+
+
+@app.get("/api/cart/per-pattern-meta", response_model=PerPatternMetaResponse)
+async def get_cart_per_pattern_meta():
+    """Return the per_pattern_meta.npy sidecar for the currently-mounted cart.
+
+    Andy 2026-07-06 AM: enables sandbox-mounted carts to reach parity with
+    LocalCart-mounted carts for image/table rendering. The frontend fetches
+    this on cart mount + carries a mirror-image data structure through the
+    same UI surfaces LocalCart uses.
+
+    Returns records parallel to passages. Each record's shape mirrors the
+    JSON baked by the writer. May contain large base64 image_b64 fields for
+    graphic-type patterns — expect response payloads of a few MB for
+    image-heavy carts.
+    """
+    if not engine.mounted_name:
+        return PerPatternMetaResponse(mounted=False)
+    records: list[dict] | None = None
+    if engine.mounted_path and os.path.exists(engine.mounted_path):
+        if engine.mounted_path.endswith('.npz'):
+            records = _parse_per_pattern_meta_from_npz(engine.mounted_path)
+    if not records:
+        return PerPatternMetaResponse(mounted=True, records=[])
+    return PerPatternMetaResponse(mounted=True, records=records)
 
 
 @app.get("/api/cart/pattern-0", response_model=Pattern0Response)
@@ -1818,12 +1871,21 @@ def _scrub_lone_surrogates(text: str) -> str:
 
 
 @app.get("/api/patterns", response_model=PatternListResponse)
-async def list_patterns(offset: int = 0, limit: int = 25, q: str | None = None):
+async def list_patterns(
+    offset: int = 0,
+    limit: int = 25,
+    q: str | None = None,
+    source: str | None = None,
+):
     """Paginated list of active (non-tombstoned) passages with first-line
     title + body preview. Used by the Edit Carts passage browser to give
     users a click-to-populate IDX experience for the Update/Delete panels.
 
     Optional `q` is a case-insensitive substring filter on the passage text.
+    Optional `source` (Andy 2026-07-06 AM) filters to passages whose
+    source_paths sidecar entry matches — powers Pattern-0 TOC drill-down
+    on sandbox-mounted carts (parity with LocalCart drill-down).
+
     Returns total count of active+matching passages for client-side
     pagination math (page count = ceil(total / limit)).
 
@@ -1838,7 +1900,9 @@ async def list_patterns(offset: int = 0, limit: int = 25, q: str | None = None):
         offset = 0
 
     needle = (q or "").strip().lower()
+    source_needle = (source or "").strip()
     deleted = engine.deleted_ids
+    source_paths = getattr(engine, 'source_paths', None) or []
 
     matching: list[tuple[int, str]] = []
     for i, text in enumerate(engine.passages):
@@ -1846,6 +1910,10 @@ async def list_patterns(offset: int = 0, limit: int = 25, q: str | None = None):
             continue
         if needle and needle not in (text or "").lower():
             continue
+        if source_needle:
+            src = source_paths[i] if i < len(source_paths) else None
+            if src != source_needle:
+                continue
         matching.append((i, text or ""))
 
     total = len(matching)

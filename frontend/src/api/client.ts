@@ -1,6 +1,6 @@
 import type {
   CartridgeInfo, SearchResponse, StatusResponse, DeletedPattern,
-  SearchMode, PatternResponse, Pattern0Response,
+  SearchMode, PatternResponse, Pattern0Response, PerPatternMetaResponse,
   MemboxCartInfo, MemboxStatus, MemboxImprintRequest, MemboxMountRequest,
 } from './types'
 import { useAuthStore } from '../store/authStore'
@@ -38,6 +38,14 @@ export async function getStatus(): Promise<StatusResponse> {
 // error branch. See Pattern0TocPanel.tsx (2026-07-01).
 export async function getCartPattern0(): Promise<Pattern0Response> {
   return fetchJSON('/cart/pattern-0')
+}
+
+// Per-pattern metadata sidecar for the currently-mounted cart. Payload can
+// be several MB for image-heavy carts (each graphic carries base64 PNG
+// bytes). Andy 2026-07-06 AM: called on mount so sandbox-mounted carts
+// can render graphics/tables just like LocalCart mounts do.
+export async function getCartPerPatternMeta(): Promise<PerPatternMetaResponse> {
+  return fetchJSON('/cart/per-pattern-meta')
 }
 
 export async function getCartridges(): Promise<CartridgeInfo[]> {
@@ -176,9 +184,11 @@ export async function listPatterns(
   offset: number = 0,
   limit: number = 25,
   q?: string,
+  source?: string,
 ): Promise<PatternListResponse> {
   const params = new URLSearchParams({ offset: String(offset), limit: String(limit) })
   if (q && q.trim()) params.append('q', q.trim())
+  if (source && source.trim()) params.append('source', source.trim())
   return fetchJSON<PatternListResponse>(`/patterns?${params.toString()}`)
 }
 

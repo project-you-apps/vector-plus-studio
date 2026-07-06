@@ -137,6 +137,36 @@ export interface Pattern0Response {
   table_count?: number
 }
 
+// Per-pattern metadata sidecar (Andy 2026-07-06 AM). Response of
+// GET /api/cart/per-pattern-meta. Records parallel `passages` — one entry
+// per pattern with content_type + type-specific extras (image_b64 for
+// graphics, html for tables). Enables sandbox-mounted carts to reach parity
+// with LocalCart-mounted carts for image/table rendering. When mounted is
+// false or records is empty, no per_pattern_meta.npy sidecar is present
+// (legacy cart) — the UI falls through to the text-only path.
+export interface PerPatternMetaRecord {
+  v?: number
+  content_type?: 'document' | 'graphic' | 'table' | string
+  source?: string
+  page?: number | null
+  chunk?: number
+  chunks?: number
+  tags?: string[]
+  created_at?: number
+  tombstone?: boolean
+  // Graphic extras
+  caption?: string
+  image_b64?: string
+  bbox?: number[]
+  // Table extras
+  html?: string
+}
+
+export interface PerPatternMetaResponse {
+  mounted: boolean
+  records: PerPatternMetaRecord[]
+}
+
 export interface DeletedPattern {
   idx: number
   title: string
