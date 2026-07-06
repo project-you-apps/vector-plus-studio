@@ -1902,7 +1902,28 @@ async def list_patterns(
     needle = (q or "").strip().lower()
     source_needle = (source or "").strip()
     deleted = engine.deleted_ids
-    source_paths = getattr(engine, 'source_paths', None) or []
+    # Andy 2026-07-06 AM: engine doesn't expose source_paths as an attribute,
+    # but the chunker prepends `<filename>` (optionally " (part N/M)") as the
+    # first line of every chunk's text. Extract that to filter by source
+    # without loading the cart file's source_paths.npy on every request.
+    #
+    # Also try engine.source_paths first for future-proofing — if a later
+    # engine version exposes it, we'll prefer that path.
+    engine_source_paths = getattr(engine, 'source_paths', None) or []
+
+    def _source_of(i: int, text: str) -> str | None:
+        if i < len(engine_source_paths):
+            return engine_source_paths[i]
+        # Fall back to label-line parsing.
+        if not text:
+            return None
+        first_nl = text.find('\n')
+        first_line = text[:first_nl] if first_nl >= 0 else text
+        # Strip " (part N/M)" suffix if present.
+        marker = first_line.rfind(' (part ')
+        if marker >= 0:
+            return first_line[:marker].strip()
+        return first_line.strip() or None
 
     matching: list[tuple[int, str]] = []
     for i, text in enumerate(engine.passages):
@@ -1911,7 +1932,7 @@ async def list_patterns(
         if needle and needle not in (text or "").lower():
             continue
         if source_needle:
-            src = source_paths[i] if i < len(source_paths) else None
+            src = _source_of(i, text or "")
             if src != source_needle:
                 continue
         matching.append((i, text or ""))
