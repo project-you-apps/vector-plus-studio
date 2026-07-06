@@ -277,7 +277,17 @@ export default function Pattern0TocPanel() {
     api.getCartPattern0()
       .then((resp) => {
         if (cancelled) return
-        setData(resp)
+        // Andy 2026-07-06 AM: strip hash prefix from toc item names so
+        // sandbox drill-down's drillPath matches the label-line source
+        // extraction in /api/patterns?source= (which also returns
+        // stripped names).
+        setData({
+          ...resp,
+          toc_items: resp.toc_items.map((it) => ({
+            ...it,
+            name: displayName(it.name),
+          })),
+        })
       })
       .catch((e) => {
         if (cancelled) return

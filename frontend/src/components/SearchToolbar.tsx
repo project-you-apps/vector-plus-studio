@@ -142,6 +142,10 @@ export default function SearchToolbar() {
       }
       fetchCartridges()
       useAppStore.getState().fetchStatus()
+      // Andy 2026-07-06 AM: fire per-pattern-meta fetch on sandbox upload
+      // so images render. This wasn't happening because handleUpload calls
+      // api.mountCartridge directly instead of the store's mount() action.
+      useAppStore.getState().fetchSandboxPerPatternMeta()
       pushToast('success', `Mounted ${mres.name} (${mres.pattern_count} patterns) — sandbox cart, expires in ${Math.round(resp.ttl_sec / 60)} min`, 6000)
       setOpen(false)
     } catch (err) {
