@@ -529,9 +529,14 @@ export default function BrowserCartBuilder() {
   // dialog and leaves the queue untouched — the user starts Image Builder
   // and retries.
   const handleSkipImageBuilderFiles = () => {
-    const survivors = queued.filter(
-      (q) => q.route !== 'image' && q.route !== 'scanned' && q.route !== 'pending',
-    )
+    // 2026-07-06 (droplet B3 fail): use the dialog's file-name snapshot as
+    // the ground truth for what to skip, not re-derive from q.route. If
+    // classifyPdf state races or a route was reclassified between dialog
+    // open and Skip-click, the closure-based filter can over-strip text
+    // files and produce a spurious "nothing left to build". The dialog told
+    // the user "these N files will be skipped" — honor exactly that list.
+    const skipNames = new Set(imageBuilderMissingFiles)
+    const survivors = queued.filter((q) => !skipNames.has(q.file.name))
     setImageBuilderMissingOpen(false)
     setImageBuilderMissingFiles([])
     if (survivors.length === 0) {

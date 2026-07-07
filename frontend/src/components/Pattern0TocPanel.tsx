@@ -614,6 +614,12 @@ export default function Pattern0TocPanel() {
             so the panel stays clean for the common case. */}
         {((data.graphic_count ?? 0) > 0 || (data.table_count ?? 0) > 0) && (
           <div className="px-4 py-1.5 border-b border-slate-800 text-[11px] text-slate-400 flex flex-wrap gap-x-3 gap-y-0.5">
+            {(data.toc_items?.length ?? 0) > 0 && (
+              <span title="Source files in this cart (see list below)">
+                <span className="text-slate-300 font-mono">{data.toc_items.length}</span>
+                <span className="text-slate-500 ml-1">{data.toc_items.length === 1 ? 'source' : 'sources'}</span>
+              </span>
+            )}
             {(data.graphic_count ?? 0) > 0 && (
               <span title="Graphics extracted by Image Builder — each is its own pattern in this cart">
                 <span className="text-slate-300 font-mono">{data.graphic_count}</span>
