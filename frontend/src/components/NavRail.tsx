@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Search, LayoutDashboard, Hammer, Pencil, Terminal, Settings, HelpCircle, Info } from 'lucide-react'
+import { Search, LayoutDashboard, Hammer, Pencil, FileBarChart, Terminal, Settings, HelpCircle, Info } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import type { ActiveScreen } from '../store/appStore'
 import AboutModal from './AboutModal'
@@ -20,6 +20,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: 'overview',    label: 'Overview',     icon: LayoutDashboard, tooltip: 'Cart stats, mounted carts, system health' },
   { key: 'cartBuilder', label: 'Cart Builder', icon: Hammer,          tooltip: 'Drag-and-drop cart creation from documents' },
   { key: 'crud',        label: 'Edit Carts',   icon: Pencil,          tooltip: 'Add / update / delete passages on the mounted cart' },
+  { key: 'reports',     label: 'Reports',      icon: FileBarChart,    tooltip: 'Structured views over the mounted cart (Summary, Timeline, Trend, …)' },
   { key: 'sql',         label: 'SQL',          icon: Terminal,        tooltip: 'SQL-like query editor (planned)' },
   { key: 'settings',    label: 'Settings',     icon: Settings,        tooltip: 'Search modes, theme, advanced options' },
 ]

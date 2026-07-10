@@ -120,7 +120,7 @@ export interface WalkStep {
 // Top-level screen state (nav rail picks which screen renders in the main area).
 // 'search' is the default; the original VPS 1.0 search/CRUD experience. Other
 // screens are stubbed in this iteration and fleshed out incrementally.
-export type ActiveScreen = 'search' | 'overview' | 'cartBuilder' | 'crud' | 'sql' | 'settings'
+export type ActiveScreen = 'search' | 'overview' | 'cartBuilder' | 'crud' | 'reports' | 'sql' | 'settings'
 
 // Desktop Cart Builder helper — detection + pairing state. The exe (Day 1)
 // runs a local FastAPI on http://127.0.0.1:7878 wrapping the same

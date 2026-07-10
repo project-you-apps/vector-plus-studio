@@ -14,23 +14,13 @@ import OverviewScreen from './components/OverviewScreen'
 import SettingsScreen from './components/SettingsScreen'
 import CartBuilderScreen from './components/CartBuilderScreen'
 import CRUDScreen from './components/CRUDScreen'
+import ReportsScreen from './components/ReportsScreen'
+import SQLEditorScreen from './components/SQLEditorScreen'
 import FolderPickerModal from './components/FolderPickerModal'
 import SignInModal from './components/SignInModal'
 import DesktopHelperPairModal from './components/DesktopHelperPairModal'
 import CookieBanner from './components/CookieBanner'
 import Toaster from './components/Toaster'
-
-// Stub placeholders for nav-rail screens introduced in 2026-05-03 reorg.
-// Each will be promoted to its own component file as it gets fleshed out.
-function ScreenStub({ title, body }: { title: string; body: string }) {
-  return (
-    <main className="flex-1 flex flex-col items-center justify-center p-6 text-center">
-      <h2 className="text-2xl font-bold gradient-text mb-3">{title}</h2>
-      <p className="text-sm text-slate-500 max-w-md leading-relaxed">{body}</p>
-    </main>
-  )
-}
-
 
 // Search screen layout — Andy 2026-07-01, revised 2026-07-02.
 // Old-flow restore (2026-07-02): TOC and results are MUTUALLY EXCLUSIVE.
@@ -153,12 +143,9 @@ export default function App() {
 
         {activeScreen === 'crud' && <CRUDScreen />}
 
-        {activeScreen === 'sql' && (
-          <ScreenStub
-            title="SQL Editor"
-            body="SQL-like query editor for the mounted cartridge. Toggle alongside the natural-language search bar; ~10 commands (SELECT / INSERT / UPDATE / DELETE / MOUNT / SAVE / WHERE tags= / LIMIT / etc.). Results render in the same area as semantic search."
-          />
-        )}
+        {activeScreen === 'reports' && <ReportsScreen />}
+
+        {activeScreen === 'sql' && <SQLEditorScreen />}
 
         {activeScreen === 'settings' && <SettingsScreen />}
       </div>
