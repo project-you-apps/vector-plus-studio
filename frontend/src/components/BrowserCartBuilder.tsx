@@ -22,7 +22,9 @@ import {
   probeWebGpuCapability,
   syncRouteForFile,
   webGpuAdapterAvailable,
-  type BuiltCart,
+  // BuiltCart is now consumed via cartBuilderStore.lastBrowserBuild (typed
+  // through to the store's interface), so we no longer import the type
+  // directly here.
   type EmbedderBackend,
   type FileRoute,
   type PipelineProgress,
