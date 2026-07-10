@@ -4,6 +4,21 @@ import type {
   CartBuilderFile, CartBuilderBuildState, CartBuilderListedCart,
   CartBuilderSubdir, CartBuilderDoc, CartBuilderPattern0,
 } from '../api/cartbuilder'
+import type { BuiltCart } from '../cart-builder-v2'
+
+// Last-build success surfaces (2026-07-09). Both browser-pipeline and
+// delegated-desktop builds produce a "cart saved" card at the bottom of
+// the Cart Builder screen. Historically these lived in BrowserCartBuilder
+// local state, which meant switching tabs dropped the card — user lost
+// track of where their cart landed. Migrated to store so the card
+// survives navigation. Cleared only by: (a) user clicks the X button
+// (dismissLastBuild), (b) user starts a new build, (c) user completes
+// the save-to-disk flow which calls resetToCleanSlate.
+export interface LastDesktopBuild {
+  cartPath: string
+  cartSizeMb: number | null
+  chunksTotal: number | null
+}
 
 // Cart Builder screen state, separate from the main appStore so the workflow
 // (drop → workspace → build) doesn't pollute the search-side store. The two
@@ -33,6 +48,15 @@ interface CartBuilderState {
   // Build state (polled from /build/status during a build)
   build: CartBuilderBuildState
   buildPolling: boolean
+
+  // Last build result — survives tab navigation so the "cart saved to X"
+  // card stays visible if the user hops to Search and back. See
+  // LastDesktopBuild comment above the interface.
+  lastBrowserBuild: BuiltCart | null
+  lastDesktopBuild: LastDesktopBuild | null
+  setLastBrowserBuild: (v: BuiltCart | null) => void
+  setLastDesktopBuild: (v: LastDesktopBuild | null) => void
+  dismissLastBuild: () => void
 
   // Cart-name input
   cartName: string
@@ -111,6 +135,12 @@ export const useCartBuilderStore = create<CartBuilderState>((set, get) => ({
 
   build: initialBuild,
   buildPolling: false,
+
+  lastBrowserBuild: null,
+  lastDesktopBuild: null,
+  setLastBrowserBuild: (v) => set({ lastBrowserBuild: v }),
+  setLastDesktopBuild: (v) => set({ lastDesktopBuild: v }),
+  dismissLastBuild: () => set({ lastBrowserBuild: null, lastDesktopBuild: null }),
 
   cartName: 'my-cart',
   setCartName: (name) => set({ cartName: name }),

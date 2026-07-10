@@ -28,6 +28,7 @@ import {
   type PipelineProgress,
 } from '../cart-builder-v2'
 import { useAppStore } from '../store/appStore'
+import { useCartBuilderStore } from '../store/cartBuilderStore'
 import {
   buildCart as apiBuildCart,
   clearWorkspace as apiClearWorkspace,
@@ -179,7 +180,12 @@ export default function BrowserCartBuilder() {
   const [skippedNotice, setSkippedNotice] = useState<string | null>(null)
   const [progress, setProgress] = useState<PipelineProgress | null>(null)
   const [building, setBuilding] = useState(false)
-  const [result, setResult] = useState<BuiltCart | null>(null)
+  // (2026-07-09) `result` and `desktopResult` were promoted to cartBuilderStore
+  // so the "cart saved to X" card survives tab navigation. Same setter contract
+  // as before — code below still calls setResult(null) / setResult(cart) etc.
+  const result = useCartBuilderStore((s) => s.lastBrowserBuild)
+  const setResult = useCartBuilderStore((s) => s.setLastBrowserBuild)
+  const dismissLastBuild = useCartBuilderStore((s) => s.dismissLastBuild)
   const [error, setError] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const [webgpuStatus, setWebgpuStatus] = useState<WebGPUStatus>('detecting')
@@ -240,11 +246,10 @@ export default function BrowserCartBuilder() {
   // display-ready form; desktopResult holds the on-disk cart_path returned
   // when status flips to 'done'.
   const [desktopProgress, setDesktopProgress] = useState<DesktopBuildProgress | null>(null)
-  const [desktopResult, setDesktopResult] = useState<{
-    cartPath: string
-    cartSizeMb: number | null
-    chunksTotal: number | null
-  } | null>(null)
+  // (2026-07-09) desktopResult promoted to cartBuilderStore for the same
+  // reason as `result` above — see the comment there. Setter contract preserved.
+  const desktopResult = useCartBuilderStore((s) => s.lastDesktopBuild)
+  const setDesktopResult = useCartBuilderStore((s) => s.setLastDesktopBuild)
   const [repairPromptOpen, setRepairPromptOpen] = useState(false)
 
   // Day 2 — Image Builder detection state and fallback dialog. We consult
@@ -1088,10 +1093,21 @@ export default function BrowserCartBuilder() {
         </div>
       )}
 
-      {/* Result — browser pipeline. Local blob → user picks save destination. */}
+      {/* Result — browser pipeline. Local blob → user picks save destination.
+          Card lives in cartBuilderStore.lastBrowserBuild so it survives tab
+          navigation — user can hop to Search and back and still see where
+          their cart came from. Dismissed only by explicit X or new build. */}
       {result && !building && (
-        <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 space-y-2">
-          <div className="flex items-center gap-2 text-sm flex-wrap">
+        <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 space-y-2 relative">
+          <button
+            onClick={dismissLastBuild}
+            aria-label="Dismiss"
+            title="Dismiss this notice"
+            className="absolute top-1.5 right-1.5 p-0.5 rounded text-emerald-300/60 hover:text-emerald-200 hover:bg-emerald-500/20 transition-colors"
+          >
+            <X size={12} />
+          </button>
+          <div className="flex items-center gap-2 text-sm flex-wrap pr-5">
             <CheckCircle size={14} className="text-emerald-400 shrink-0" />
             <span className="text-emerald-200 font-medium">
               Built {result.cartFilename}
@@ -1119,10 +1135,19 @@ export default function BrowserCartBuilder() {
       {/* Result — delegated desktop path. The exe writes the cart to disk
           directly (default: ~/Downloads, or whatever save_dir the user last
           picked), so we don't trigger a browser download — that would produce
-          a duplicate. Just surface the on-disk path so Andy can find it. */}
+          a duplicate. Just surface the on-disk path so Andy can find it.
+          Same store-backed persistence as the browser-pipeline card above. */}
       {desktopResult && !building && (
-        <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 space-y-2">
-          <div className="flex items-center gap-2 text-sm flex-wrap">
+        <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 space-y-2 relative">
+          <button
+            onClick={dismissLastBuild}
+            aria-label="Dismiss"
+            title="Dismiss this notice"
+            className="absolute top-1.5 right-1.5 p-0.5 rounded text-emerald-300/60 hover:text-emerald-200 hover:bg-emerald-500/20 transition-colors"
+          >
+            <X size={12} />
+          </button>
+          <div className="flex items-center gap-2 text-sm flex-wrap pr-5">
             <CheckCircle size={14} className="text-emerald-400 shrink-0" />
             <span className="text-emerald-200 font-medium">Cart saved to local drive</span>
             {desktopResult.chunksTotal !== null && (

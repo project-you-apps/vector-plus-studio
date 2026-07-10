@@ -25,9 +25,15 @@ IMAGE_BUILDER_HOST = "127.0.0.1"
 IMAGE_BUILDER_PORT_DEFAULT = 7879
 IMAGE_BUILDER_ORIGIN_DEFAULT = f"http://{IMAGE_BUILDER_HOST}:{IMAGE_BUILDER_PORT_DEFAULT}"
 
-# Docling sync response — well under 3 min for anything but truly huge
-# PDFs. Matches the frontend timeout budget (spec: 180 sec).
-OCR_TIMEOUT_SEC = 180.0
+# Docling sync response. Budget sized for CPU-only laptops (no CUDA):
+# EasyOCR runs 10-30x slower on CPU, and force_full_page_ocr rasterizes
+# every page of a PDF, so a dense receipt or multi-page deck can easily
+# push past 3 min on integrated graphics. 600s covers realistic worst-
+# case laptop OCR while still failing loud if the pipeline actually hangs.
+# GPU machines finish in seconds and never approach this ceiling.
+# (2026-07-07 bump from 180s after Ryzen 5 integrated-graphics laptop
+#  timed out on Sysco invoice + multi-page PDF during demo prep.)
+OCR_TIMEOUT_SEC = 600.0
 
 # Token file — same location image-builder/auth.py writes to. Cart Builder
 # reads the file at delegation time rather than caching in memory so a
