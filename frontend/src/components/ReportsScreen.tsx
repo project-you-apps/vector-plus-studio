@@ -32,12 +32,22 @@ export default function ReportsScreen() {
   // cartridges. Selected value is the display string; if nothing is mounted
   // we fall through to null so the pane header shows "(none mounted)".
   const cartOptions = useMemo(() => {
+    // Dedupe by generated id — cartridges[] can contain the same server-side
+    // cart name more than once when the sandbox and multi-mount pools list
+    // the same underlying file. Without dedup React logs the duplicate-key
+    // warning and can misroute updates between the two entries.
     const opts: Array<{ id: string; label: string; kind: 'local' | 'server' }> = []
+    const seen = new Set<string>()
+    const push = (id: string, label: string, kind: 'local' | 'server') => {
+      if (seen.has(id)) return
+      seen.add(id)
+      opts.push({ id, label, kind })
+    }
     for (const name of localCarts.keys()) {
-      opts.push({ id: `local:${name}`, label: name, kind: 'local' })
+      push(`local:${name}`, name, 'local')
     }
     for (const c of cartridges) {
-      opts.push({ id: `server:${c.name}`, label: c.name, kind: 'server' })
+      push(`server:${c.name}`, c.name, 'server')
     }
     return opts
   }, [cartridges, localCarts])
@@ -160,7 +170,7 @@ function CartSelector({
                    text-xs text-amber-200 flex items-center gap-2"
       >
         <Database size={13} />
-        No carts available — mount one from Search or Cart Builder.
+        Load a cart in Search to use for a Report.
       </div>
     )
   }

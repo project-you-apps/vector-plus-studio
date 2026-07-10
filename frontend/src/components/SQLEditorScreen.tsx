@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import {
   Terminal, Database, ChevronDown, ChevronRight, Search, PlayCircle,
-  Copy, Eraser, Bookmark, Clock, Sparkles, Info,
+  Copy, ClipboardPaste, Eraser, Bookmark, Clock, Sparkles, Info,
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import {
@@ -46,8 +46,16 @@ export default function SQLEditorScreen() {
     for (const name of localCarts.keys()) {
       opts.push({ id: `local:${name}`, label: name, kind: 'local' })
     }
+    // Dedupe by id — the same cartridge name can appear multiple times in
+    // the cartridges[] array when the sandbox and multi-mount pools both
+    // reference the same file; React logs a duplicate-key warning otherwise.
+    const seen = new Set<string>()
+    for (const opt of opts) seen.add(opt.id)
     for (const c of cartridges) {
-      opts.push({ id: `server:${c.name}`, label: c.name, kind: 'server' })
+      const id = `server:${c.name}`
+      if (seen.has(id)) continue
+      seen.add(id)
+      opts.push({ id, label: c.name, kind: 'server' })
     }
     return opts
   }, [cartridges, localCarts])
@@ -115,13 +123,59 @@ export default function SQLEditorScreen() {
     setPending({ mode: 'nl', text: trimmed, cartLabel: selectedCartLabel })
   }
 
+  // (2026-07-10 Andy feedback): after Copy, the button flips to a Paste action.
+  // Rationale: a user who just copied a snippet is likely about to reuse it —
+  // making the same button paste-at-cursor is a nice one-hand affordance and
+  // saves a right-click. The "just copied" state clears after 5 seconds so the
+  // button doesn't lie about clipboard contents indefinitely.
+  const [justCopied, setJustCopied] = useState(false)
+  const copyRevertTimerRef = useRef<number | null>(null)
+
   const copySql = async () => {
     if (!sqlText) return
     try {
       await navigator.clipboard.writeText(sqlText)
+      setJustCopied(true)
+      // Cancel any prior pending revert so successive copies extend the window.
+      if (copyRevertTimerRef.current !== null) {
+        window.clearTimeout(copyRevertTimerRef.current)
+      }
+      copyRevertTimerRef.current = window.setTimeout(() => {
+        setJustCopied(false)
+        copyRevertTimerRef.current = null
+      }, 5000)
     } catch {
       // Clipboard API can fail under insecure contexts / permissions —
       // silent fail is fine here; user can Ctrl+C the textarea.
+    }
+  }
+
+  const pasteSql = async () => {
+    try {
+      const clip = await navigator.clipboard.readText()
+      if (!clip) return
+      const el = sqlTextareaRef.current
+      if (!el) {
+        setSqlText((prev) => prev + clip)
+      } else {
+        const start = el.selectionStart ?? sqlText.length
+        const end = el.selectionEnd ?? sqlText.length
+        const next = sqlText.slice(0, start) + clip + sqlText.slice(end)
+        setSqlText(next)
+        const nextCaret = start + clip.length
+        requestAnimationFrame(() => {
+          el.focus()
+          el.setSelectionRange(nextCaret, nextCaret)
+        })
+      }
+      // Revert to Copy mode after paste — the copied buffer got consumed.
+      setJustCopied(false)
+      if (copyRevertTimerRef.current !== null) {
+        window.clearTimeout(copyRevertTimerRef.current)
+        copyRevertTimerRef.current = null
+      }
+    } catch {
+      // Clipboard-read permission not granted — silently no-op.
     }
   }
 
@@ -194,16 +248,20 @@ export default function SQLEditorScreen() {
                        text-left hover:bg-slate-800/40 transition-colors"
             aria-expanded={sqlExpanded}
           >
+            {/* (2026-07-10 Andy feedback): heading first, then icon + chevron on
+                the RIGHT side so the terminal-prompt icon doesn't get visually
+                confused with the un-clicked chevron next to it. Reading order
+                becomes "SQL Mode → [prompt icon] → [expand chevron]". */}
+            <h2 className="text-xs uppercase tracking-wider text-slate-400 flex-1">SQL Mode</h2>
+            <span className="text-[10px] uppercase tracking-wider text-slate-500 font-mono">
+              {sqlExpanded ? 'Collapse' : 'Expand'}
+            </span>
+            <Terminal size={13} className="text-purple-300 shrink-0" />
             {sqlExpanded ? (
               <ChevronDown size={13} className="text-slate-400 shrink-0" />
             ) : (
               <ChevronRight size={13} className="text-slate-400 shrink-0" />
             )}
-            <Terminal size={13} className="text-purple-300 shrink-0" />
-            <h2 className="text-xs uppercase tracking-wider text-slate-400 flex-1">SQL Mode</h2>
-            <span className="text-[10px] uppercase tracking-wider text-slate-500 font-mono">
-              {sqlExpanded ? 'Collapse' : 'Expand'}
-            </span>
           </button>
 
           {sqlExpanded && (
@@ -235,17 +293,30 @@ export default function SQLEditorScreen() {
                   <PlayCircle size={14} />
                   Run Query
                 </button>
-                <button
-                  onClick={copySql}
-                  disabled={!sqlText}
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-300
-                             border border-slate-700 hover:border-slate-500 hover:bg-slate-800/40
-                             disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                  title="Copy SQL to clipboard"
-                >
-                  <Copy size={13} />
-                  Copy
-                </button>
+                {justCopied ? (
+                  <button
+                    onClick={pasteSql}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-emerald-200
+                               border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20
+                               transition-colors"
+                    title="Paste the copied query at the cursor position"
+                  >
+                    <ClipboardPaste size={13} />
+                    Paste
+                  </button>
+                ) : (
+                  <button
+                    onClick={copySql}
+                    disabled={!sqlText}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-300
+                               border border-slate-700 hover:border-slate-500 hover:bg-slate-800/40
+                               disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    title="Copy SQL to clipboard"
+                  >
+                    <Copy size={13} />
+                    Copy
+                  </button>
+                )}
                 <button
                   onClick={clearSql}
                   disabled={!sqlText}
@@ -383,7 +454,7 @@ function CartSelector({
                    text-xs text-amber-200 flex items-center gap-2"
       >
         <Database size={13} />
-        No carts available — mount one from Search or Cart Builder.
+        Load a cart in Search to query with SQL or NL.
       </div>
     )
   }
