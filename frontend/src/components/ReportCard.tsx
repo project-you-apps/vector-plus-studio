@@ -1,6 +1,6 @@
 import {
   FileText, Calendar, TrendingUp, Scale, Tag, DollarSign,
-  GitCompareArrows, Sparkles, Play,
+  GitCompareArrows, ShieldAlert, Sparkles, Play,
 } from 'lucide-react'
 import type { ReportDefinition } from '../reports/report-definitions'
 
@@ -15,6 +15,7 @@ const ICON_MAP: Record<string, React.ComponentType<{ size?: number; className?: 
   Tag,
   DollarSign,
   GitCompareArrows,
+  ShieldAlert,
   Sparkles,
 }
 

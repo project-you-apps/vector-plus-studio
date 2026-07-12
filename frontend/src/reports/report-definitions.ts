@@ -1,5 +1,6 @@
-// Report definitions — the 8 generic report types for VPS, sourced from
-// docs/vps-internal/Report Types Design 2026-07-10.md.
+// Report definitions — the 9 generic report types for VPS, sourced from
+// docs/vps-internal/Report Types Design 2026-07-10.md. Coverage Report
+// (Wave-1c, 2026-07-12) rounds the set out to 9 to match the pitch copy.
 //
 // These are the FRONTEND shells only — the backend Report interface + registry
 // (see design doc §0.1) is future work. Each definition here mirrors the
@@ -252,6 +253,47 @@ export const REPORT_DEFINITIONS: ReportDefinition[] = [
         default: 'semantic',
         options: ['exact', 'semantic'],
         helpText: 'exact = string-match passages; semantic = embedding cosine >= 0.92.',
+      },
+    ],
+  },
+  {
+    name: 'coverage',
+    displayName: 'Coverage Report',
+    description: 'Diagnose gaps in the cart — underrepresented themes, orphan entities, source imbalance, and time-range holes.',
+    icon: 'ShieldAlert',
+    llmDependency: false,
+    inputSchema: [
+      {
+        name: 'min_theme_items',
+        label: 'Min items per theme',
+        type: 'number',
+        required: false,
+        default: 3,
+        helpText: 'Themes represented by fewer than this many items are flagged as underrepresented.',
+      },
+      {
+        name: 'gap_threshold_days',
+        label: 'Gap threshold (days)',
+        type: 'number',
+        required: false,
+        default: 30,
+        helpText: 'Time gaps longer than this between consecutive dates are surfaced.',
+      },
+      {
+        name: 'max_orphan_entities',
+        label: 'Max orphan entities',
+        type: 'number',
+        required: false,
+        default: 20,
+        helpText: 'Cap on how many orphan entities to display.',
+      },
+      {
+        name: 'source_coverage_min',
+        label: 'Source coverage min',
+        type: 'number',
+        required: false,
+        default: 5,
+        helpText: 'Sources contributing fewer than this many items are flagged as under-utilized.',
       },
     ],
   },
