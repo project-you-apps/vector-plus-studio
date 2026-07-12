@@ -245,7 +245,7 @@ function DownloadBuildersButton() {
       href={href}
       download="vps-suite.zip"
       className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-purple-200 border border-purple-500/40 bg-purple-500/10 hover:bg-purple-500/20 hover:text-purple-100 transition-colors shrink-0"
-      title="Download the Vector+ Suite (Cart Builder + Image Builder + pre-loaded models). ~1.4 GB zip. Unzip anywhere, run start-cart-builder.bat and start-image-builder.bat to enable local building."
+      title="Download the Vector+ Suite (~1.5 GB zip). Unzip and follow the README instructions inside."
     >
       <Download size={12} />
       Download builders
