@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react'
-import { Hammer, Loader2, Cpu, Image as ImageIcon, RefreshCw } from 'lucide-react'
+import { Hammer, Loader2, Cpu, Image as ImageIcon, RefreshCw, Download } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { useCartBuilderStore } from '../store/cartBuilderStore'
 import CartBrowser from './CartBrowser'
@@ -204,7 +204,10 @@ function DesktopHelperStatusPill({
         <span className="font-semibold text-slate-300">Desktop Helper: Not detected</span>
         <span className="text-slate-500">— running in browser (WebGPU/WASM)</span>
       </div>
-      <RecheckButton onRecheck={onRecheck} />
+      <div className="flex items-center gap-1.5 shrink-0">
+        <DownloadBuildersButton />
+        <RecheckButton onRecheck={onRecheck} />
+      </div>
     </div>
   )
 }
@@ -220,6 +223,33 @@ function RecheckButton({ onRecheck }: { onRecheck: () => void }) {
       <RefreshCw size={12} />
       Recheck
     </button>
+  )
+}
+
+// Vector+ Suite download link (2026-07-11). Surfaced on the "Not detected"
+// pill state for both Cart Builder and Image Builder so new users have an
+// obvious CTA to install the local exes. Points at
+// `${BASE_URL}downloads/vps-suite.zip` — the actual zip is scp'd to the
+// droplet's dist/downloads/ folder, so nginx's SPA static-first fallback
+// serves it directly without any route-map change. Contextual placement per
+// [[project_serve_builders_from_droplet_2026-07-08]] — download button on
+// the pill beats a nav-bar link because the affordance sits at the exact
+// confusion point.
+function DownloadBuildersButton() {
+  // Vite substitutes BASE_URL at build time — dev = "/", prod = "/vps/app/".
+  // Constructing the URL this way means the same code works in both
+  // environments without an env-aware branch.
+  const href = `${import.meta.env.BASE_URL}downloads/vps-suite.zip`
+  return (
+    <a
+      href={href}
+      download="vps-suite.zip"
+      className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-purple-200 border border-purple-500/40 bg-purple-500/10 hover:bg-purple-500/20 hover:text-purple-100 transition-colors shrink-0"
+      title="Download the Vector+ Suite (Cart Builder + Image Builder + pre-loaded models). ~1.4 GB zip. Unzip anywhere, run start-cart-builder.bat and start-image-builder.bat to enable local building."
+    >
+      <Download size={12} />
+      Download builders
+    </a>
   )
 }
 
@@ -299,7 +329,10 @@ function ImageBuilderStatusPill({
         <span className="font-semibold text-slate-300">Image Builder: Not running</span>
         <span className="text-slate-500">— image / scanned-PDF drops need it</span>
       </div>
-      <RecheckButton onRecheck={onRecheck} />
+      <div className="flex items-center gap-1.5 shrink-0">
+        <DownloadBuildersButton />
+        <RecheckButton onRecheck={onRecheck} />
+      </div>
     </div>
   )
 }
