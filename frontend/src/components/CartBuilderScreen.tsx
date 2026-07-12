@@ -1,8 +1,9 @@
-import { lazy, Suspense, useEffect } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { Hammer, Loader2, Cpu, Image as ImageIcon, RefreshCw, Download } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { useCartBuilderStore } from '../store/cartBuilderStore'
 import CartBrowser from './CartBrowser'
+import DownloadWaitModal from './DownloadWaitModal'
 
 // BrowserCartBuilder lazy-loaded — pulls in transformers.js (~600KB gzip),
 // pdfjs, mammoth, xlsx, npyjs, jszip, and the cart-builder-v2 pipeline.
@@ -240,16 +241,26 @@ function DownloadBuildersButton() {
   // Constructing the URL this way means the same code works in both
   // environments without an env-aware branch.
   const href = `${import.meta.env.BASE_URL}downloads/vps-suite.zip`
+  // Local modal state — a ~1.5 GB download takes 5-20 min, so on click we
+  // pop a "meanwhile, prepare your machine" checklist to keep the user
+  // engaged and pre-stage the install steps. We do NOT preventDefault on
+  // the anchor click: the browser's download behavior fires normally and
+  // the modal sits on top. Andy 2026-07-11.
+  const [showModal, setShowModal] = useState(false)
   return (
-    <a
-      href={href}
-      download="vps-suite.zip"
-      className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-purple-200 border border-purple-500/40 bg-purple-500/10 hover:bg-purple-500/20 hover:text-purple-100 transition-colors shrink-0"
-      title="Download the Vector+ Suite (~1.5 GB zip). Unzip and follow the README instructions inside."
-    >
-      <Download size={12} />
-      Download builders
-    </a>
+    <>
+      <a
+        href={href}
+        download="vps-suite.zip"
+        onClick={() => setShowModal(true)}
+        className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-purple-200 border border-purple-500/40 bg-purple-500/10 hover:bg-purple-500/20 hover:text-purple-100 transition-colors shrink-0"
+        title="Download the Vector+ Suite (~1.5 GB zip). Unzip and follow the README instructions inside."
+      >
+        <Download size={12} />
+        Download builders
+      </a>
+      <DownloadWaitModal open={showModal} onClose={() => setShowModal(false)} />
+    </>
   )
 }
 
