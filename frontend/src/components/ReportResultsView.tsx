@@ -254,6 +254,7 @@ export default function ReportResultsView({
         <div className="mx-auto max-w-5xl text-slate-200 leading-relaxed">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
+            urlTransform={(uri) => uri}
             components={{
               h1: ({ children }) => <h1 className="text-2xl font-bold text-slate-100 mt-4 mb-3">{children}</h1>,
               h2: ({ children }) => <h2 className="text-xl font-semibold text-slate-100 mt-4 mb-2">{children}</h2>,
