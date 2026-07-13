@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { X, Sparkles, Info, PlayCircle, Loader2, AlertTriangle, RefreshCw, Lock } from 'lucide-react'
 import type { FieldSchema, ReportDefinition } from '../reports/report-definitions'
 import {
@@ -461,17 +461,27 @@ function LoadingPanel({ report }: { report: ReportDefinition }) {
 
 // Error state. Special cases (softer color palettes, targeted CTAs):
 //   • 501 / not_yet_available    → purple "future release" panel (Wave-2)
-//   • cart_not_found (legacy)    → amber "legacy cart format" panel with
-//                                  a [Pick another cart] button; this is
-//                                  the elegant failure the cart selector
-//                                  filter can't fully prevent when the
-//                                  user chooses an incompatible cart on
-//                                  purpose (defense-in-depth).
+//   • cart_not_found             → amber "cart no longer available" panel
+//                                  with [Pick another cart]. Distinct from
+//                                  legacy-format — this means the resolver
+//                                  found nothing at any of its search
+//                                  paths (canonical dirs + sandbox).
+//   • cart_legacy_format         → amber "legacy format" panel with
+//                                  [Pick another cart]. Fires when the
+//                                  stem resolves as .pkl but not .cart.npz.
+//   • sandbox_cart_expired (410) → amber "sandbox cart expired" panel
+//                                  with [Pick another cart]. TTL race:
+//                                  resolver found the file, cleanup loop
+//                                  evicted it before the report finished.
 //   • local_cart_unsupported     → amber notice (already handled up
 //                                  front by the idle-state check, but
 //                                  kept for defense-in-depth).
 //   • everything else            → the original red-tinted error panel
 //                                  + Try again + Edit inputs.
+//
+// The three cart-availability codes share styling (amber palette + Lock
+// icon + [Pick another cart] CTA) but distinguish the copy so users get
+// accurate guidance — same visual language, different narrative.
 function ErrorPanel({
   report,
   status,
@@ -493,7 +503,10 @@ function ErrorPanel({
 }) {
   const isNotYetAvailable = status === 501 || errorTag === 'not_yet_available'
   const isLocalCart = errorTag === 'local_cart_unsupported'
-  const isLegacyCart = errorTag === 'cart_not_found'
+  const isCartNotFound = errorTag === 'cart_not_found'
+  const isLegacyCart = errorTag === 'cart_legacy_format'
+  const isSandboxExpired = errorTag === 'sandbox_cart_expired'
+  const isCartAvailabilityIssue = isCartNotFound || isLegacyCart || isSandboxExpired
 
   if (isNotYetAvailable) {
     return (
@@ -523,25 +536,49 @@ function ErrorPanel({
     )
   }
 
-  if (isLegacyCart) {
-    // The backend already returned a message but we override with a copy
-    // tailored to the format issue — the raw backend message ("Cart 'x'
-    // not found on the server. Only .cart.npz files under the cartridges/
-    // dir are supported.") reads as a scary bug. This copy names the
-    // problem in the user's language and points at a fix.
-    const cartLabel = cartName || 'This cart'
+  if (isCartAvailabilityIssue) {
+    // Three shared-styling variants — same amber panel + Lock icon +
+    // [Pick another cart] CTA, but different heading + body copy so the
+    // user reads the specific reason. Previously ALL three cases surfaced
+    // as "Legacy cart format" (the amber panel's only branch) even when
+    // the actual cause was "sandbox cart not walked by the enumeration"
+    // or "sandbox cart expired mid-request", which read as a lying UI.
+    const cartLabel = cartName || `'${message.match(/'([^']+)'/)?.[1] ?? 'this cart'}'`
+    let heading = 'Cart not available'
+    let bodyCopy: ReactNode = (
+      <>
+        {cartLabel} isn&rsquo;t available on the server anymore. It may
+        have been removed or expired. Pick another cart above to continue.
+      </>
+    )
+    if (isLegacyCart) {
+      heading = 'Legacy cart format'
+      bodyCopy = (
+        <>
+          {cartLabel} uses a legacy format that Reports can&rsquo;t read yet.
+          Rebuild it via Cart Builder &rarr; Save as{' '}
+          <span className="font-mono text-amber-200">.cart.npz</span>, then
+          try again.
+        </>
+      )
+    } else if (isSandboxExpired) {
+      heading = 'Sandbox cart expired'
+      bodyCopy = (
+        <>
+          This sandbox cart expired before the report finished. Sandbox
+          uploads have a limited lifetime — re-upload it to try again.
+        </>
+      )
+    }
     return (
       <div className="flex flex-col gap-4">
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 text-sm">
           <p className="text-amber-200 font-medium mb-2 flex items-center gap-2">
             <Lock size={14} />
-            Legacy cart format
+            {heading}
           </p>
           <p className="text-xs text-slate-300 leading-relaxed">
-            &lsquo;{cartLabel}&rsquo; isn&rsquo;t in a report-compatible format.
-            Reports need the newer <span className="font-mono text-amber-200">.cart.npz</span> format.
-            Try picking a different cart above, or convert this one via
-            Cart Builder &rarr; Save as <span className="font-mono text-amber-200">.cart.npz</span>.
+            {bodyCopy}
           </p>
         </div>
         <div className="flex flex-col gap-2">

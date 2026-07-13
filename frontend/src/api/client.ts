@@ -287,6 +287,11 @@ export interface ReportCartEntry {
   display_name: string
   report_compatible: boolean
   format: 'npz' | 'pkl' | string
+  // 'canonical' — lives under cartridges/ or sample_data/ (curated demo cart).
+  // 'sandbox'   — lives under cartridges/_session_uploads/ (short-TTL user
+  //               upload via POST /api/cartridges/upload). Selector renders a
+  //               distinct badge so users know the cart is temporary.
+  location?: 'canonical' | 'sandbox' | string
 }
 
 export async function fetchReportCarts(): Promise<ReportCartEntry[]> {

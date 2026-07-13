@@ -37,8 +37,10 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 import traceback
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -63,6 +65,11 @@ from .reports import (
     run_report,
 )
 from .cartridge_io import DATA_DIR, find_companion_file, get_cartridge_dirs
+# Sandbox uploads land here as ``<12-hex-uuid>_<safe_name>.cart.npz``. The
+# Reports-scope resolver walks this directory in addition to the canonical
+# cartridge dirs so sandbox-uploaded carts can drive report generation
+# without a further cart-mount step. See ``find_report_cart`` below.
+from .uploads import SANDBOX_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -135,9 +142,138 @@ class GenerateReportResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # cart_ref resolution
 # ---------------------------------------------------------------------------
+#
+# 2026-07-13 (Wave-1 UX bug follow-up): the resolver now walks three
+# directories rather than two (canonical DATA_DIR + SAMPLE_DIR + the
+# sandbox-uploads subdir). Sandbox uploads land in
+# ``cartridges/_session_uploads/<uuid>_<name>.cart.npz`` and previously
+# 404'd here even though ``/api/reports/carts`` was starting to list them
+# (via the frontend's cartridges list, which is populated by a different
+# endpoint that DOES enumerate the sandbox). Splitting the resolver from
+# ``find_companion_file`` keeps the mount/save flows untouched while
+# giving Reports its own view of the world.
 
-def _resolve_cart_ref(cart_ref: str) -> Optional[str]:
-    """Resolve ``cart_ref`` to an absolute path to a ``.cart.npz`` file.
+# Sandbox filenames carry a 12-hex-char UUID prefix (see uploads.py
+# ``upload_cartridge()`` -> ``uuid.uuid4().hex[:12]``). This regex lets us
+# strip the prefix for display and for suffix-match lookup when the
+# frontend sends the bare human-readable stem.
+_SANDBOX_PREFIX_RE = re.compile(r"^([0-9a-f]{12})_(.+)$")
+
+
+def _strip_sandbox_prefix(filename_stem: str) -> Optional[str]:
+    """Return the human-readable portion of a sandbox filename stem.
+
+    Sandbox uploads are named ``<12-hex-uuid>_<safe_name>.cart.npz``.
+    This returns just ``<safe_name>`` when the stem matches that pattern,
+    otherwise ``None`` (i.e. the stem is not sandbox-shaped).
+    """
+    m = _SANDBOX_PREFIX_RE.match(filename_stem)
+    return m.group(2) if m else None
+
+
+def find_report_cart(stem: str) -> tuple[Optional[str], Optional[str]]:
+    """Return ``(path, location)`` for a ``.cart.npz`` matching ``stem``.
+
+    Walks, in order:
+
+      1. ``cartridges/`` + ``sample_data/`` top-level (canonical). This
+         mirrors ``find_companion_file`` behavior — Reports gets the
+         same set of "real" carts as mount/save.
+      2. ``cartridges/_session_uploads/`` (sandbox). Files here have a
+         ``<12-hex-uuid>_`` prefix; both the raw stem and the stripped
+         form resolve.
+
+    Returns ``(abs_path, "canonical" | "sandbox")`` on hit,
+    ``(None, None)`` on miss. Canonical wins over sandbox when the same
+    stem exists in both — the demo droplet ships a curated set that
+    should always outrank a user upload of the same name.
+
+    Sandbox resolution accepts both forms the frontend might send:
+    the bare human stem (``Demo-Report-Cart-II``) matches sandbox files
+    whose name ends in ``_<stem>.cart.npz``, and the already-uuid-prefixed
+    stem (``e0fe920f325d_Demo-Report-Cart-II`` — what the dropdown shows)
+    matches by direct filename. When multiple sandbox files match the
+    bare form, the most recently modified one wins — that's what a user
+    who re-uploaded a cart with the same name intends.
+    """
+    if not stem:
+        return (None, None)
+
+    # 1. Canonical dirs — reuse the existing helper so anything discoverable
+    # by mount / list is discoverable here.
+    canonical = find_companion_file(stem, ".cart.npz")
+    if canonical:
+        return (canonical, "canonical")
+
+    # 2. Sandbox dir. Missing dir is fine (fresh droplet before first upload).
+    sandbox_dir = str(SANDBOX_DIR)
+    try:
+        entries = os.listdir(sandbox_dir)
+    except (FileNotFoundError, OSError):
+        return (None, None)
+
+    # 2a. Direct match — frontend sent the full <uuid>_<name> stem.
+    direct = os.path.join(sandbox_dir, f"{stem}.cart.npz")
+    if os.path.exists(direct):
+        return (direct, "sandbox")
+
+    # 2b. Suffix match — frontend sent the bare human stem. Look for any
+    # sandbox file whose stripped-prefix name equals it.
+    candidates: list[str] = []
+    for name in entries:
+        if not name.endswith(".cart.npz"):
+            continue
+        stripped = _strip_sandbox_prefix(name[: -len(".cart.npz")])
+        if stripped == stem:
+            candidates.append(name)
+
+    if candidates:
+        # Most recent mtime wins so a re-upload of the same name resolves
+        # to the new file, not a stale one. TTL cleanup would eventually
+        # evict the old one anyway.
+        candidates.sort(
+            key=lambda n: os.path.getmtime(os.path.join(sandbox_dir, n)),
+            reverse=True,
+        )
+        return (os.path.join(sandbox_dir, candidates[0]), "sandbox")
+
+    return (None, None)
+
+
+def _find_legacy_pkl(stem: str) -> Optional[str]:
+    """Return path to a legacy ``.pkl`` cart with this stem, or ``None``.
+
+    Used only for error-message specificity — if a stem doesn't resolve
+    as ``.cart.npz`` but does exist as ``.pkl``, the endpoint returns
+    ``cart_legacy_format`` rather than the generic ``cart_not_found``.
+    Reports engine only reads NPZ; a legacy cart is a real cart the user
+    just needs to convert.
+    """
+    for d in get_cartridge_dirs():
+        p = os.path.join(d, f"{stem}.pkl")
+        if os.path.exists(p):
+            return p
+    return None
+
+
+@dataclass
+class ResolvedCart:
+    """Discriminated result of ``_resolve_cart_ref``.
+
+    Exactly one of ``path`` and ``failure`` will be set. ``location`` is
+    only meaningful when ``path`` is set — it tells the endpoint whether
+    a mid-request FileNotFoundError should be reported as
+    ``sandbox_cart_expired`` (short-TTL race) or a generic
+    ``cart_not_found`` (probably an admin-side deletion, rarer).
+    """
+    path: Optional[str] = None
+    location: Optional[str] = None
+    # 'local_cart_unsupported' | 'cart_legacy_format' | 'cart_not_found'
+    failure: Optional[str] = None
+
+
+def _resolve_cart_ref(cart_ref: str) -> ResolvedCart:
+    """Resolve ``cart_ref`` to a ``.cart.npz`` path with failure taxonomy.
 
     Accepts several friendly shapes so the frontend doesn't have to
     normalize:
@@ -145,13 +281,12 @@ def _resolve_cart_ref(cart_ref: str) -> Optional[str]:
     - Absolute path to an existing ``.cart.npz``.
     - Bare cart name (as it appears in ``/api/cartridges``).
     - Cart name with the ``.cart.npz`` suffix already attached.
+    - Sandbox filename with the ``<12-hex-uuid>_`` prefix present.
+    - Bare human stem for a sandbox upload (matches by suffix).
 
-    Returns ``None`` when nothing resolves. The route converts that to a
-    404. We only accept ``.cart.npz`` — the Reports engine's
-    :class:`CartHandle` opens NPZ files, and legacy ``.pkl`` carts would
-    fail deeper in with a less-useful error. That's a conscious cut for
-    Wave-1; a Wave-2 upgrade could add a lightweight ``.pkl`` → NPZ
-    coercion path if any pitch cart needs it.
+    Returns a :class:`ResolvedCart`. On success ``path`` + ``location``
+    are set. On failure ``failure`` is set to one of three tags the
+    endpoint maps directly to error codes for the amber panel.
 
     Rejects local-only cart selectors from the frontend that carry the
     ``local:`` prefix — LocalCarts are browser-side arrays, not files on
@@ -159,14 +294,14 @@ def _resolve_cart_ref(cart_ref: str) -> Optional[str]:
     a friendlier explanation than "cart not found."
     """
     if not cart_ref:
-        return None
+        return ResolvedCart(failure="cart_not_found")
 
     ref = cart_ref.strip()
 
     # LocalCart guard — frontend uses "local:<name>" for browser-side carts
     # that never touched the server. Reports need a file on disk.
     if ref.startswith("local:"):
-        return None
+        return ResolvedCart(failure="local_cart_unsupported")
 
     # Strip an optional "server:" prefix from the frontend cart selector,
     # which annotates entries as "local:foo" or "server:bar" — reports
@@ -175,27 +310,29 @@ def _resolve_cart_ref(cart_ref: str) -> Optional[str]:
         ref = ref[len("server:"):]
 
     # 1. Absolute path to an existing NPZ — trust and return.
-    import os as _os
-    if _os.path.isabs(ref) and _os.path.exists(ref) and ref.endswith(".cart.npz"):
-        return ref
+    if os.path.isabs(ref) and os.path.exists(ref) and ref.endswith(".cart.npz"):
+        return ResolvedCart(path=ref, location="canonical")
 
-    # 2. Bare filename ending in .cart.npz — search cartridge dirs.
+    # 2. Normalize to a bare stem for dir-walking lookup.
     if ref.endswith(".cart.npz"):
         stem = ref[: -len(".cart.npz")]
     else:
         stem = ref
 
-    # find_companion_file walks the cartridge dirs (DATA_DIR + SAMPLE_DIR)
-    # so this handles both the pitch carts and sample_data carts.
-    resolved = find_companion_file(stem, ".cart.npz")
-    if resolved:
-        return resolved
+    # 3. Reports-scope resolver — canonical dirs first, then sandbox.
+    path, location = find_report_cart(stem)
+    if path:
+        return ResolvedCart(path=path, location=location)
 
-    # 3. Last-ditch: a raw path relative to cwd.
-    if _os.path.exists(ref) and ref.endswith(".cart.npz"):
-        return _os.path.abspath(ref)
+    # 4. Legacy-pkl hint — better error copy than generic "not found".
+    if _find_legacy_pkl(stem):
+        return ResolvedCart(failure="cart_legacy_format")
 
-    return None
+    # 5. Last-ditch: a raw path relative to cwd.
+    if os.path.exists(ref) and ref.endswith(".cart.npz"):
+        return ResolvedCart(path=os.path.abspath(ref), location="canonical")
+
+    return ResolvedCart(failure="cart_not_found")
 
 
 # ---------------------------------------------------------------------------
@@ -241,66 +378,114 @@ async def get_report_list() -> dict[str, Any]:
 async def list_report_carts() -> dict[str, Any]:
     """Enumerate server carts with per-cart report compatibility.
 
-    A cart is ``report_compatible`` iff ``find_companion_file(stem,
-    ".cart.npz")`` resolves. The lookup mirrors ``_resolve_cart_ref`` so
-    what shows up as green here matches what /generate will accept.
+    Sources three directories:
 
-    Response shape::
+    - Canonical ``cartridges/`` + ``sample_data/`` (top-level) — the
+      curated pitch/demo carts.
+    - Sandbox ``cartridges/_session_uploads/`` — short-TTL user uploads
+      via ``POST /api/cartridges/upload``. These carry a
+      ``<12-hex-uuid>_`` filename prefix; the ``id`` we return keeps the
+      prefix (that's the full stem the resolver matches on) but
+      ``display_name`` strips it plus tags "(sandbox)" so the selector
+      renders a human-friendly label.
+
+    Response shape (per entry)::
 
         {
-          "carts": [
-            {
-              "id": "gutenberg-poetry",
-              "display_name": "gutenberg-poetry",
-              "report_compatible": true,
-              "format": "npz"
-            },
-            {
-              "id": "wiki-nomic-100k",
-              "display_name": "wiki-nomic-100k (legacy)",
-              "report_compatible": false,
-              "format": "pkl"
-            }
-          ]
+          "id": "gutenberg-poetry",                     # canonical
+          "display_name": "gutenberg-poetry",
+          "report_compatible": true,
+          "format": "npz",
+          "location": "canonical"
+        }
+        {
+          "id": "e0fe920f325d_Demo-Report-Cart-II",     # sandbox
+          "display_name": "Demo-Report-Cart-II (sandbox)",
+          "report_compatible": true,
+          "format": "npz",
+          "location": "sandbox"
         }
 
-    Ordering: compatible first (alphabetical), then incompatible
-    (alphabetical). Deduped by stem — a stem that has both formats on
-    disk shows up once, as report_compatible (the .cart.npz wins).
+    Ordering:
+      1. Canonical ``.cart.npz`` (alphabetical by id).
+      2. Sandbox ``.cart.npz`` (alphabetical by display_name).
+      3. Legacy ``.pkl`` (alphabetical by id).
+
+    Deduped by (id, location) — a stem that exists in both canonical
+    and sandbox surfaces twice under different ids (canonical id is the
+    bare stem; sandbox id is uuid-prefixed) so users can pick either.
+    A stem present as both ``.cart.npz`` and ``.pkl`` in the canonical
+    dirs is listed once, as compatible.
     """
+    # -- Canonical dirs -----------------------------------------------------
     # {stem: format} — first-seen wins for a given stem, but we upgrade a
     # "pkl" seen earlier if a matching ".cart.npz" is discovered later so
     # the same underlying cart isn't listed twice.
-    stem_to_format: dict[str, str] = {}
+    canonical_stem_to_format: dict[str, str] = {}
     for d in get_cartridge_dirs():
         try:
-            entries = os.listdir(d)
+            entries_in_dir = os.listdir(d)
         except (FileNotFoundError, OSError):
             continue
-        for f in entries:
+        for f in entries_in_dir:
             if f.endswith(".cart.npz"):
                 stem = f[: -len(".cart.npz")]
-                stem_to_format[stem] = "npz"  # npz always wins
+                canonical_stem_to_format[stem] = "npz"  # npz always wins
             elif f.endswith(".pkl"):
                 stem = f[: -len(".pkl")]
                 # Only mark as pkl if we haven't already seen an npz for this
                 # stem — otherwise leave the npz mark in place.
-                stem_to_format.setdefault(stem, "pkl")
+                canonical_stem_to_format.setdefault(stem, "pkl")
 
-    entries: list[dict[str, Any]] = []
-    for stem, fmt in stem_to_format.items():
+    canonical_npz: list[dict[str, Any]] = []
+    legacy_pkl: list[dict[str, Any]] = []
+    for stem, fmt in canonical_stem_to_format.items():
         compat = fmt == "npz" and find_companion_file(stem, ".cart.npz") is not None
         display = stem if compat else f"{stem} (legacy)"
-        entries.append({
+        entry = {
             "id": stem,
             "display_name": display,
             "report_compatible": compat,
             "format": fmt,
+            "location": "canonical",
+        }
+        if compat:
+            canonical_npz.append(entry)
+        else:
+            legacy_pkl.append(entry)
+
+    # -- Sandbox dir --------------------------------------------------------
+    # Sandbox entries always report_compatible=true and format=npz — the
+    # upload endpoint rejects anything that isn't a valid NPZ. If the file
+    # goes away between enumeration and /generate open, the endpoint
+    # emits ``sandbox_cart_expired`` (HTTP 410).
+    sandbox_entries: list[dict[str, Any]] = []
+    sandbox_dir = str(SANDBOX_DIR)
+    try:
+        sandbox_files = os.listdir(sandbox_dir)
+    except (FileNotFoundError, OSError):
+        sandbox_files = []
+    for f in sandbox_files:
+        if not f.endswith(".cart.npz"):
+            continue
+        stem = f[: -len(".cart.npz")]
+        # Strip the uuid prefix for display. If somehow a sandbox file
+        # has no prefix (bug / manual placement), keep the raw stem.
+        human_name = _strip_sandbox_prefix(stem) or stem
+        sandbox_entries.append({
+            "id": stem,
+            "display_name": f"{human_name} (sandbox)",
+            "report_compatible": True,
+            "format": "npz",
+            "location": "sandbox",
         })
 
-    # Sort: compatible first, then alphabetical within each group.
-    entries.sort(key=lambda e: (not e["report_compatible"], e["id"].lower()))
-    return {"carts": entries}
+    # -- Order per contract -------------------------------------------------
+    canonical_npz.sort(key=lambda e: e["id"].lower())
+    sandbox_entries.sort(key=lambda e: e["display_name"].lower())
+    legacy_pkl.sort(key=lambda e: e["id"].lower())
+
+    return {"carts": canonical_npz + sandbox_entries + legacy_pkl}
 
 
 @router.post("/generate", response_model=GenerateReportResponse)
@@ -342,27 +527,40 @@ async def generate_report(req: GenerateReportRequest) -> GenerateReportResponse:
         )
 
     # -- 3. Resolve cart_ref → filesystem path --
-    cart_path = _resolve_cart_ref(req.cart_ref)
-    if cart_path is None:
-        # Distinguish "local-cart" from generic not-found so the UI can
-        # render a targeted message rather than a bare 404 dialog.
-        is_local = req.cart_ref.startswith("local:")
-        detail_msg = (
-            "Reports require a server-side cart. The selected cart is a "
-            "browser-only LocalCart — pick a server cart in the cart "
-            "selector to generate a report."
-            if is_local
-            else f"Cart {req.cart_ref!r} not found on the server. "
-                 f"Only .cart.npz files under the cartridges/ dir are supported."
-        )
+    resolution = _resolve_cart_ref(req.cart_ref)
+    if resolution.path is None:
+        # Distinguish the three failure modes so the amber panel can render
+        # accurate guidance instead of always saying "legacy format".
+        failure = resolution.failure or "cart_not_found"
+        if failure == "local_cart_unsupported":
+            detail_msg = (
+                "Reports require a server-side cart. The selected cart is a "
+                "browser-only LocalCart — pick a server cart in the cart "
+                "selector to generate a report."
+            )
+        elif failure == "cart_legacy_format":
+            detail_msg = (
+                f"'{req.cart_ref}' uses a legacy format that Reports can't "
+                f"read yet. Rebuild it via Cart Builder → Save as .cart.npz, "
+                f"then try again."
+            )
+        else:
+            detail_msg = (
+                f"Cart '{req.cart_ref}' isn't available on the server "
+                f"anymore. It may have been removed or expired. Pick "
+                f"another cart above to continue."
+            )
         raise HTTPException(
             status_code=404,
             detail={
-                "error": "cart_not_found" if not is_local else "local_cart_unsupported",
+                "error": failure,
                 "message": detail_msg,
                 "cart_ref": req.cart_ref,
             },
         )
+
+    cart_path = resolution.path
+    cart_location = resolution.location  # 'canonical' | 'sandbox'
 
     # -- 4. Dispatch --
     # Options: Wave-1 reports are LLM-free, so max_llm_calls stays at 0.
@@ -402,7 +600,29 @@ async def generate_report(req: GenerateReportRequest) -> GenerateReportResponse:
         )
     except FileNotFoundError as exc:
         # Cart path passed our resolver but the file disappeared between
-        # resolve and open. Treat as 404 for the UI's benefit.
+        # resolve and open. Sandbox carts hit this via the TTL cleanup
+        # loop (uploads.py sweeps files older than UPLOAD_TTL_SEC every
+        # UPLOAD_CLEANUP_INTERVAL_SEC); canonical carts hit it only when
+        # an admin/deploy deletes the file mid-request, which is rare.
+        # We report the two cases with different codes + copy so the amber
+        # panel can tell users which one they're seeing.
+        if cart_location == "sandbox":
+            logger.warning(
+                "[reports] Sandbox cart evicted mid-request for %r: %s",
+                cart_path, exc,
+            )
+            raise HTTPException(
+                status_code=410,
+                detail={
+                    "error": "sandbox_cart_expired",
+                    "message": (
+                        "This sandbox cart was evicted before the report "
+                        "could complete. Sandbox carts have a limited "
+                        "lifetime — re-upload if you'd like to try again."
+                    ),
+                    "cart_ref": req.cart_ref,
+                },
+            )
         logger.warning(
             "[reports] Cart disappeared mid-request for %r: %s",
             cart_path, exc,
@@ -446,6 +666,8 @@ async def generate_report(req: GenerateReportRequest) -> GenerateReportResponse:
     meta = dict(output.metadata) if output.metadata else {}
     meta.setdefault("route_elapsed_ms", elapsed_ms)
     meta.setdefault("cart_ref", req.cart_ref)
+    if cart_location:
+        meta.setdefault("cart_location", cart_location)
     if req.cart_ref_b:
         meta.setdefault("cart_ref_b", req.cart_ref_b)
 

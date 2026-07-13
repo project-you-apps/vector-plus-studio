@@ -137,21 +137,26 @@ class TestReportsGenerateRoute(unittest.TestCase):
         # Patch the cart resolver so bare "reports-route-smoke" resolves
         # to our tempfile. Simpler than dropping the file into the real
         # cartridges/ dir and risking cross-test contamination.
+        #
+        # 2026-07-13: resolver signature changed from ``Optional[str]`` to
+        # ``ResolvedCart`` dataclass so the endpoint can distinguish
+        # cart_not_found / cart_legacy_format / sandbox_cart_expired.
+        # Patch returns the new shape.
         from api import reports_routes as rr
         cls._orig_resolver = rr._resolve_cart_ref
 
-        def _test_resolver(cart_ref: str) -> Optional[str]:
+        def _test_resolver(cart_ref: str) -> "rr.ResolvedCart":
             if not cart_ref:
-                return None
+                return rr.ResolvedCart(failure="cart_not_found")
             ref = cart_ref.strip()
             if ref.startswith("local:"):
-                return None
+                return rr.ResolvedCart(failure="local_cart_unsupported")
             if ref.startswith("server:"):
                 ref = ref[len("server:"):]
             if ref in ("reports-route-smoke", "reports-route-smoke.cart.npz",
                        os.path.basename(cls.cart_path), cls.cart_path):
-                return cls.cart_path
-            return None
+                return rr.ResolvedCart(path=cls.cart_path, location="canonical")
+            return rr.ResolvedCart(failure="cart_not_found")
 
         rr._resolve_cart_ref = _test_resolver  # type: ignore[assignment]
 
@@ -346,9 +351,14 @@ class TestReportCartsEnumeration(unittest.TestCase):
         # Both ``get_cartridge_dirs`` (imported into reports_routes) and
         # ``find_companion_file`` (used to double-check the npz resolves)
         # need to be swapped so the answer is deterministic in tests.
+        # SANDBOX_DIR gets its own separate empty tempdir so this class's
+        # canonical-only fixture doesn't accidentally surface a sandbox
+        # entry — the sandbox lookup runs unconditionally now.
         from api import reports_routes as rr
         cls._orig_get_dirs = rr.get_cartridge_dirs
         cls._orig_find_companion = rr.find_companion_file
+        cls._orig_sandbox = rr.SANDBOX_DIR
+        cls.sandbox_tmpdir = tempfile.mkdtemp(prefix="reports_carts_test_sandbox_")
 
         def _test_dirs() -> list[str]:
             return [cls.tmpdir]
@@ -359,6 +369,7 @@ class TestReportCartsEnumeration(unittest.TestCase):
 
         rr.get_cartridge_dirs = _test_dirs  # type: ignore[assignment]
         rr.find_companion_file = _test_find_companion  # type: ignore[assignment]
+        rr.SANDBOX_DIR = cls.sandbox_tmpdir  # type: ignore[assignment]
 
         from fastapi.testclient import TestClient
         from api.main import app
@@ -369,6 +380,7 @@ class TestReportCartsEnumeration(unittest.TestCase):
         from api import reports_routes as rr
         rr.get_cartridge_dirs = cls._orig_get_dirs  # type: ignore[assignment]
         rr.find_companion_file = cls._orig_find_companion  # type: ignore[assignment]
+        rr.SANDBOX_DIR = cls._orig_sandbox  # type: ignore[assignment]
         # Best-effort cleanup — leave the tempdir if any file resists.
         for p in (cls.compat_path, cls.legacy_path, cls.dual_npz_path, cls.dual_pkl_path):
             try:
@@ -377,6 +389,10 @@ class TestReportCartsEnumeration(unittest.TestCase):
                 pass
         try:
             os.rmdir(cls.tmpdir)
+        except OSError:
+            pass
+        try:
+            os.rmdir(cls.sandbox_tmpdir)
         except OSError:
             pass
 
@@ -392,31 +408,248 @@ class TestReportCartsEnumeration(unittest.TestCase):
         self.assertEqual(sorted(set(ids)), sorted(ids), "duplicate cart ids in payload")
         self.assertEqual(set(ids), {"aaa-compat", "middle-dual", "zzz-legacy"})
 
-        # Every entry has the four expected keys.
+        # Every entry has the five expected keys (location was added
+        # 2026-07-13 with the sandbox walk).
         for c in carts:
             self.assertIn("id", c)
             self.assertIn("display_name", c)
             self.assertIn("report_compatible", c)
             self.assertIn("format", c)
+            self.assertIn("location", c)
             self.assertIn(c["format"], ("npz", "pkl"))
+            self.assertIn(c["location"], ("canonical", "sandbox"))
 
         by_id = {c["id"]: c for c in carts}
         self.assertTrue(by_id["aaa-compat"]["report_compatible"])
         self.assertEqual(by_id["aaa-compat"]["format"], "npz")
+        self.assertEqual(by_id["aaa-compat"]["location"], "canonical")
 
         # Dual-format stem dedupes to compatible.
         self.assertTrue(by_id["middle-dual"]["report_compatible"])
         self.assertEqual(by_id["middle-dual"]["format"], "npz")
+        self.assertEqual(by_id["middle-dual"]["location"], "canonical")
 
         # Legacy .pkl only stem is incompatible; display_name marks it.
         self.assertFalse(by_id["zzz-legacy"]["report_compatible"])
         self.assertEqual(by_id["zzz-legacy"]["format"], "pkl")
         self.assertIn("legacy", by_id["zzz-legacy"]["display_name"].lower())
+        self.assertEqual(by_id["zzz-legacy"]["location"], "canonical")
 
-        # Ordering: compatible first (alphabetical), then incompatible
-        # (alphabetical). With this fixture: aaa-compat, middle-dual,
-        # zzz-legacy.
+        # Ordering: canonical .cart.npz first (alphabetical), sandbox next
+        # (this fixture has no sandbox entries), legacy .pkl last. With
+        # this fixture: aaa-compat, middle-dual, zzz-legacy.
         self.assertEqual(ids, ["aaa-compat", "middle-dual", "zzz-legacy"])
+
+
+class TestSandboxCartResolution(unittest.TestCase):
+    """End-to-end coverage for sandbox-uploaded cart resolution.
+
+    The Reports-scope resolver walks ``cartridges/_session_uploads/`` in
+    addition to the canonical cartridge dirs so that carts uploaded via
+    ``POST /api/cartridges/upload`` (which land under a
+    ``<12-hex-uuid>_<name>.cart.npz`` filename) are discoverable both by
+    ``/api/reports/carts`` and ``/api/reports/generate`` without a further
+    mount step.
+
+    Fixture:
+      - One canonical ``.cart.npz`` (to keep the ``TestReportCartsEnumeration``
+        contract intact for canonical carts).
+      - One sandbox ``.cart.npz`` at ``abc123def456_Test.cart.npz``.
+      - Enumeration + generate both point at these temp dirs via
+        module-attribute monkeypatching.
+    """
+
+    STEM = "abc123def456_Test"  # what the frontend dropdown displays as id
+    HUMAN = "Test"              # the stripped human-readable form
+
+    CART_PASSAGES = [
+        "Delivery invoice from Acme Foods dated 2026-06-01.",
+        "Weekly beverage order — total $315.00 on 2026-06-08.",
+        "Bar stock replenishment posted 2026-06-15.",
+    ]
+    CART_SOURCES = [
+        "acme-jun01.pdf",
+        "beverages-jun08.pdf",
+        "bar-stock-jun15.pdf",
+    ]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        # Two tempdirs: one plays the role of canonical cartridges/, the
+        # other the sandbox subdir. Real deployment has the sandbox as a
+        # child of cartridges/ but for testing they can be siblings.
+        cls.canonical_dir = tempfile.mkdtemp(prefix="reports_sandbox_test_canon_")
+        cls.sandbox_dir = tempfile.mkdtemp(prefix="reports_sandbox_test_sandbox_")
+
+        # Materialize the sandbox cart with the full sandbox filename.
+        cls.sandbox_cart_path = os.path.join(
+            cls.sandbox_dir, f"{cls.STEM}.cart.npz",
+        )
+        _write_synthetic_cart(
+            cls.sandbox_cart_path,
+            cls.CART_PASSAGES,
+            cls.CART_SOURCES,
+            cart_name=cls.HUMAN,
+        )
+
+        from api import reports_routes as rr
+        cls._orig_get_dirs = rr.get_cartridge_dirs
+        cls._orig_find_companion = rr.find_companion_file
+        cls._orig_sandbox = rr.SANDBOX_DIR
+
+        def _test_dirs() -> list[str]:
+            return [cls.canonical_dir]
+
+        def _test_find_companion(name: str, suffix: str) -> Optional[str]:
+            path = os.path.join(cls.canonical_dir, f"{name}{suffix}")
+            return path if os.path.exists(path) else None
+
+        rr.get_cartridge_dirs = _test_dirs  # type: ignore[assignment]
+        rr.find_companion_file = _test_find_companion  # type: ignore[assignment]
+        rr.SANDBOX_DIR = cls.sandbox_dir  # type: ignore[assignment]
+
+        from fastapi.testclient import TestClient
+        from api.main import app
+        cls.client = TestClient(app)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        from api import reports_routes as rr
+        rr.get_cartridge_dirs = cls._orig_get_dirs  # type: ignore[assignment]
+        rr.find_companion_file = cls._orig_find_companion  # type: ignore[assignment]
+        rr.SANDBOX_DIR = cls._orig_sandbox  # type: ignore[assignment]
+        for p in (cls.sandbox_cart_path,):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+        for d in (cls.sandbox_dir, cls.canonical_dir):
+            try:
+                os.rmdir(d)
+            except OSError:
+                pass
+
+    def _post_generate(self, payload: dict) -> tuple[int, dict]:
+        r = self.client.post("/api/reports/generate", json=payload)
+        try:
+            body = r.json()
+        except Exception:
+            body = {"_raw": r.text}
+        return r.status_code, body
+
+    # -- enumeration -------------------------------------------------------
+
+    def test_sandbox_cart_appears_in_carts_endpoint(self):
+        r = self.client.get("/api/reports/carts")
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        carts = body.get("carts", [])
+        by_id = {c["id"]: c for c in carts}
+        self.assertIn(self.STEM, by_id)
+        entry = by_id[self.STEM]
+        self.assertTrue(entry["report_compatible"])
+        self.assertEqual(entry["format"], "npz")
+        self.assertEqual(entry["location"], "sandbox")
+        # Display name strips the uuid prefix + appends "(sandbox)".
+        self.assertEqual(entry["display_name"], f"{self.HUMAN} (sandbox)")
+
+    # -- resolution --------------------------------------------------------
+
+    def test_generate_by_bare_stem_resolves(self):
+        # Frontend may send just the human name "Test" — the resolver
+        # should suffix-match it to abc123def456_Test.cart.npz.
+        status, body = self._post_generate({
+            "report_slug": "summary",
+            "cart_ref": self.HUMAN,
+            "inputs": {"top_themes": 3},
+        })
+        self.assertEqual(status, 200, body)
+        self.assertGreater(len(body["markdown"]), 0)
+        # cart_location should surface in metadata for debugging.
+        self.assertEqual(body["metadata"].get("cart_location"), "sandbox")
+
+    def test_generate_by_uuid_prefixed_stem_resolves(self):
+        # Frontend also uses the full stem "abc123def456_Test" as the
+        # cart id (that's what the /carts endpoint returns as id).
+        status, body = self._post_generate({
+            "report_slug": "summary",
+            "cart_ref": self.STEM,
+            "inputs": {"top_themes": 3},
+        })
+        self.assertEqual(status, 200, body)
+        self.assertGreater(len(body["markdown"]), 0)
+        self.assertEqual(body["metadata"].get("cart_location"), "sandbox")
+
+    def test_ttl_race_returns_410_sandbox_cart_expired(self):
+        # Simulate the sandbox cleanup loop evicting the file between
+        # enumeration and generate: delete the sandbox file, then post.
+        # Since the resolver's own listdir won't see it, the failure
+        # actually surfaces as cart_not_found here — the 410
+        # sandbox_cart_expired branch fires only for the narrower
+        # window where resolve succeeds and open fails. Cover that by
+        # temporarily patching the resolver to hand back the deleted
+        # path with location=sandbox, then post.
+        from api import reports_routes as rr
+        orig = rr._resolve_cart_ref
+        deleted_path = os.path.join(self.sandbox_dir, "ttl_race_ghost.cart.npz")
+
+        def _ghost_resolver(cart_ref: str) -> "rr.ResolvedCart":
+            if cart_ref == "ttl-race-ghost":
+                return rr.ResolvedCart(path=deleted_path, location="sandbox")
+            return orig(cart_ref)
+
+        rr._resolve_cart_ref = _ghost_resolver  # type: ignore[assignment]
+        try:
+            status, body = self._post_generate({
+                "report_slug": "summary",
+                "cart_ref": "ttl-race-ghost",
+                "inputs": {},
+            })
+            self.assertEqual(status, 410, body)
+            self.assertIn("sandbox_cart_expired", json.dumps(body))
+        finally:
+            rr._resolve_cart_ref = orig  # type: ignore[assignment]
+
+
+def _write_synthetic_cart(
+    path: str,
+    passages: list[str],
+    sources: list[str],
+    cart_name: str = "test-cart",
+    dim: int = 16,
+) -> None:
+    """Write a synthetic ``.cart.npz`` at ``path``.
+
+    Same shape as ``_make_synthetic_cart`` above but writes to a
+    caller-chosen path (needed so we can drop the fixture into a
+    specific sandbox filename with the uuid prefix pattern).
+    """
+    n = len(passages)
+    assert len(sources) == n
+    rng = np.random.default_rng(42)
+    embeddings = rng.standard_normal(size=(n, dim), dtype=np.float32) if n else np.zeros((0, dim), dtype=np.float32)
+    if n:
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        embeddings = embeddings / norms
+    passages_arr = np.array(passages, dtype=object)
+    sources_arr = np.array(sources, dtype=object)
+    hippo = (
+        np.stack([_hippo_row(False) for _ in passages])
+        if n else np.zeros((0, 64), dtype=np.uint8)
+    )
+    pattern0 = np.array(json.dumps({
+        "cart_name": cart_name,
+        "description": "synthetic sandbox cart for resolver smoke test",
+    }), dtype=object)
+    np.savez(
+        path,
+        embeddings=embeddings,
+        passages=passages_arr,
+        source_paths=sources_arr,
+        hippocampus=hippo,
+        pattern0=pattern0,
+    )
 
 
 if __name__ == "__main__":

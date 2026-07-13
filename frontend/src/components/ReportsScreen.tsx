@@ -124,6 +124,30 @@ export default function ReportsScreen() {
         // the user isn't blocked on a slow enumerate.
         reportCompatible: meta?.report_compatible ?? true,
         format: (meta?.format as 'npz' | 'pkl' | undefined) ?? 'npz',
+        // Report-scope location: canonical vs sandbox. Only meaningful for
+        // report-compatible entries; drives the SANDBOX badge in the
+        // dropdown so users can tell a temporary upload apart from the
+        // curated demo carts. Unknown or missing = 'canonical' so nothing
+        // renders the sandbox badge accidentally.
+        location: (meta?.location as 'canonical' | 'sandbox' | undefined) ?? 'canonical',
+      })
+    }
+    // Also surface sandbox carts that the /api/reports/carts endpoint
+    // enumerated but which don't correspond to a mounted cartridge in
+    // the outer /api/cartridges list. Without this pass, uploaded carts
+    // wouldn't appear in the dropdown until a mount cycle refreshed the
+    // outer list (which sandbox uploads don't do — mount is a separate
+    // step). Sandbox entries carry their own uuid-prefixed id so they
+    // don't collide with the loop above.
+    for (const meta of cartCompat.values()) {
+      if (meta.location !== 'sandbox') continue
+      push({
+        id: `server:${meta.id}`,
+        label: meta.display_name,
+        kind: 'server',
+        reportCompatible: meta.report_compatible,
+        format: (meta.format as 'npz' | 'pkl' | undefined) ?? 'npz',
+        location: 'sandbox',
       })
     }
     return opts
@@ -361,13 +385,54 @@ function ReportsEmptyCartState() {
 
 // One entry in the cart-picker dropdown. Enriched with report-compat
 // metadata pulled from /api/reports/carts so the selector can render
-// legacy entries in a subtle greyed state.
+// legacy entries in a subtle greyed state, and sandbox uploads with a
+// distinct SANDBOX badge signalling their short-TTL nature.
 interface CartOption {
   id: string
   label: string
   kind: 'local' | 'server'
   reportCompatible: boolean
   format: 'npz' | 'pkl'
+  location?: 'canonical' | 'sandbox'
+}
+
+// Small uppercase pill that identifies which surface a cart lives on.
+// Three states:
+//   • local        (cyan)   — browser-only LocalCart, never touched server.
+//   • server       (purple) — canonical droplet cart under cartridges/ or sample_data/.
+//   • sandbox      (amber)  — short-TTL upload under _session_uploads/.
+// Sandbox uses amber to match the visual language of the "temporary"
+// warnings (amber panels for legacy/expired carts, amber ejection prompts).
+function CartKindBadge({
+  kind,
+  location,
+}: {
+  kind: 'local' | 'server'
+  location?: 'canonical' | 'sandbox'
+}) {
+  const isSandbox = kind === 'server' && location === 'sandbox'
+  if (isSandbox) {
+    return (
+      <span
+        className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded font-mono
+                   bg-amber-500/15 border border-amber-500/40 text-amber-300"
+        title="Sandbox upload — expires after a short TTL. Re-upload if you need the cart later."
+      >
+        sandbox
+      </span>
+    )
+  }
+  return (
+    <span
+      className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded font-mono ${
+        kind === 'local'
+          ? 'bg-cyan-500/15 border border-cyan-500/40 text-cyan-300'
+          : 'bg-purple-500/15 border border-purple-500/40 text-purple-300'
+      }`}
+    >
+      {kind}
+    </span>
+  )
 }
 
 // Cart selector dropdown. Same close-on-outside-click pattern as
@@ -421,15 +486,7 @@ function CartSelector({
           />
         )}
         {selected && (
-          <span
-            className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded font-mono ${
-              selected.kind === 'local'
-                ? 'bg-cyan-500/15 border border-cyan-500/40 text-cyan-300'
-                : 'bg-purple-500/15 border border-purple-500/40 text-purple-300'
-            }`}
-          >
-            {selected.kind}
-          </span>
+          <CartKindBadge kind={selected.kind} location={selected.location} />
         )}
         <ChevronDown size={14} className="text-slate-500 shrink-0" />
       </button>
@@ -473,15 +530,7 @@ function CartSelector({
                   <span className={`flex-1 truncate ${incompatible ? 'italic' : ''}`}>
                     {opt.label}
                   </span>
-                  <span
-                    className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded font-mono ${
-                      opt.kind === 'local'
-                        ? 'bg-cyan-500/15 border border-cyan-500/40 text-cyan-300'
-                        : 'bg-purple-500/15 border border-purple-500/40 text-purple-300'
-                    }`}
-                  >
-                    {opt.kind}
-                  </span>
+                  <CartKindBadge kind={opt.kind} location={opt.location} />
                 </button>
               )
             })}
