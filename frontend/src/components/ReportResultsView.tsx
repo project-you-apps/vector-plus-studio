@@ -1,11 +1,19 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   X, RefreshCw, Copy, Check, ExternalLink, Clock3, AlertTriangle,
+  Download, ChevronDown, FileText, Code, FileType, File, Table, Sheet,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { GenerateReportResponse } from '../api/client'
 import type { ReportDefinition } from '../reports/report-definitions'
+import {
+  buildFilename,
+  downloadTextFile,
+  markdownToHtml,
+  markdownToPlainText,
+  wrapHtmlDocument,
+} from '../lib/exportReport'
 
 // Full-width results view that REPLACES the reports grid when a report has
 // been generated (Andy 2026-07-13 design — Option 3). Lives inside the main
@@ -13,10 +21,12 @@ import type { ReportDefinition } from '../reports/report-definitions'
 // width sensibly on ultra-wide monitors.
 //
 // Toolbar buttons: Close (dismiss), Regenerate (re-open the input pane
-// pre-filled with the last inputs), Copy markdown, Open in new tab. The
-// "Open in new tab" button is a coming-soon placeholder for now — the URL
-// routing story is a follow-up. Right side of the toolbar shows the cart
-// name + report display name + generation-time badge.
+// pre-filled with the last inputs), Copy markdown, Download (dropdown —
+// v1 ships MD/TXT/HTML working with PDF/DOCX/CSV/XLSX as greyed
+// placeholders), Open in new tab. The "Open in new tab" button is a
+// coming-soon placeholder — the URL routing story is a follow-up. Right
+// side of the toolbar shows the cart name + report display name +
+// generation-time badge.
 //
 // Body renders the markdown response full-width via react-markdown +
 // remark-gfm (same override map as the old SuccessPanel inside
@@ -38,6 +48,8 @@ export default function ReportResultsView({
 }) {
   const [justCopied, setJustCopied] = useState(false)
   const copyTimerRef = useRef<number | null>(null)
+  const [downloadOpen, setDownloadOpen] = useState(false)
+  const downloadWrapRef = useRef<HTMLDivElement | null>(null)
 
   const copyMarkdown = async () => {
     try {
@@ -53,6 +65,60 @@ export default function ReportResultsView({
       // markdown is still selectable with the mouse.
     }
   }
+
+  // Cart label is the display string; the actual cart_ref used for the
+  // download filename is on the response metadata (the server echoes it
+  // back). Fall back to the visible label if it's absent for any reason.
+  const cartRefForFilename = String(
+    (response.metadata && (response.metadata.cart_ref as string | undefined)) ||
+    cartLabel ||
+    'cart'
+  )
+
+  const doDownload = (fmt: 'md' | 'txt' | 'html') => {
+    if (fmt === 'md') {
+      downloadTextFile(
+        response.markdown,
+        buildFilename(cartRefForFilename, response.report_slug, 'md'),
+        'text/markdown',
+      )
+    } else if (fmt === 'txt') {
+      downloadTextFile(
+        markdownToPlainText(response.markdown),
+        buildFilename(cartRefForFilename, response.report_slug, 'txt'),
+        'text/plain',
+      )
+    } else if (fmt === 'html') {
+      const body = markdownToHtml(response.markdown)
+      const doc = wrapHtmlDocument(body, report.displayName, cartRefForFilename)
+      downloadTextFile(
+        doc,
+        buildFilename(cartRefForFilename, response.report_slug, 'html'),
+        'text/html',
+      )
+    }
+    setDownloadOpen(false)
+  }
+
+  // Close the download menu on outside click / Escape.
+  useEffect(() => {
+    if (!downloadOpen) return
+    const onDocClick = (e: MouseEvent) => {
+      if (!downloadWrapRef.current) return
+      if (!downloadWrapRef.current.contains(e.target as Node)) {
+        setDownloadOpen(false)
+      }
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDownloadOpen(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [downloadOpen])
 
   // Prefer the report author's own elapsed_ms; fall back to the route
   // fallback in metadata.route_elapsed_ms. Both are integers in ms.
@@ -96,6 +162,19 @@ export default function ReportResultsView({
             title="Copy the raw markdown to your clipboard"
             active={justCopied}
           />
+          <div ref={downloadWrapRef} className="relative">
+            <ToolbarButton
+              icon={<Download size={13} />}
+              label="Download"
+              trailingIcon={<ChevronDown size={11} />}
+              onClick={() => setDownloadOpen(o => !o)}
+              title="Download this report in a chosen format"
+              menuOpen={downloadOpen}
+            />
+            {downloadOpen && (
+              <DownloadMenu onSelect={doDownload} />
+            )}
+          </div>
           <ToolbarButton
             icon={<ExternalLink size={13} />}
             label="Open in new tab"
@@ -212,7 +291,9 @@ export default function ReportResultsView({
 
 // Common toolbar button. Kept in-file — nothing else in the tree needs
 // this shape. Highlight variant is used for Regenerate to nudge the user
-// toward it as the "primary next thing you can do" after Close.
+// toward it as the "primary next thing you can do" after Close. The
+// trailingIcon slot is used by the Download button to render a caret
+// hinting at the dropdown affordance.
 function ToolbarButton({
   icon,
   label,
@@ -220,7 +301,9 @@ function ToolbarButton({
   title,
   highlight,
   active,
+  menuOpen,
   disabled,
+  trailingIcon,
 }: {
   icon: React.ReactNode
   label: string
@@ -228,17 +311,21 @@ function ToolbarButton({
   title?: string
   highlight?: boolean
   active?: boolean
+  menuOpen?: boolean
   disabled?: boolean
+  trailingIcon?: React.ReactNode
 }) {
   const base =
     'flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] font-medium border transition-colors'
   const style = disabled
     ? 'bg-slate-900/40 border-slate-800 text-slate-600 cursor-not-allowed'
-    : active
-      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-200'
-      : highlight
-        ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-200 hover:bg-emerald-500/20'
-        : 'bg-slate-800/60 border-slate-700 text-slate-300 hover:bg-slate-800'
+    : menuOpen
+      ? 'bg-purple-500/15 border-purple-500/40 text-purple-200'
+      : active
+        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-200'
+        : highlight
+          ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-200 hover:bg-emerald-500/20'
+          : 'bg-slate-800/60 border-slate-700 text-slate-300 hover:bg-slate-800'
   return (
     <button
       onClick={disabled ? undefined : onClick}
@@ -246,9 +333,108 @@ function ToolbarButton({
       title={title}
       disabled={disabled}
       aria-disabled={disabled}
+      aria-haspopup={trailingIcon ? 'menu' : undefined}
+      aria-expanded={trailingIcon ? menuOpen : undefined}
     >
       {icon}
       {label}
+      {trailingIcon}
+    </button>
+  )
+}
+
+// Download dropdown menu. Anchored below the Download button (or above if
+// there's no room). Working formats trigger a client-side download and
+// close the menu; disabled placeholders show a tooltip pointing at the
+// target version. Matches the toolbar's dark-theme + purple accent.
+function DownloadMenu({
+  onSelect,
+}: {
+  onSelect: (fmt: 'md' | 'txt' | 'html') => void
+}) {
+  return (
+    <div
+      role="menu"
+      aria-label="Download format"
+      className="absolute z-20 mt-1 left-0 min-w-[200px] rounded-md border
+                 border-slate-700 bg-slate-900/95 shadow-lg shadow-black/40
+                 backdrop-blur-sm py-1 text-[12px] animate-in fade-in
+                 duration-100"
+    >
+      <DownloadMenuItem
+        icon={<FileText size={13} />}
+        label="Markdown (.md)"
+        onClick={() => onSelect('md')}
+      />
+      <DownloadMenuItem
+        icon={<FileText size={13} />}
+        label="Plain text (.txt)"
+        onClick={() => onSelect('txt')}
+      />
+      <DownloadMenuItem
+        icon={<Code size={13} />}
+        label="HTML (.html)"
+        onClick={() => onSelect('html')}
+      />
+      <div className="my-1 border-t border-slate-700/60" />
+      <DownloadMenuItem
+        icon={<FileType size={13} />}
+        label="PDF (.pdf)"
+        disabled
+        title="Coming in v1.5 — for now: download HTML and use browser Print → Save as PDF"
+      />
+      <DownloadMenuItem
+        icon={<File size={13} />}
+        label="Word (.docx)"
+        disabled
+        title="Coming in v2"
+      />
+      <DownloadMenuItem
+        icon={<Table size={13} />}
+        label="CSV (.csv)"
+        disabled
+        title="Coming in v2 (needs structured tables from report engine)"
+      />
+      <DownloadMenuItem
+        icon={<Sheet size={13} />}
+        label="Excel (.xlsx)"
+        disabled
+        title="Coming in v2"
+      />
+    </div>
+  )
+}
+
+function DownloadMenuItem({
+  icon,
+  label,
+  onClick,
+  disabled,
+  title,
+}: {
+  icon: React.ReactNode
+  label: string
+  onClick?: () => void
+  disabled?: boolean
+  title?: string
+}) {
+  const base =
+    'w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors'
+  const style = disabled
+    ? 'opacity-50 cursor-not-allowed text-slate-400'
+    : 'text-slate-200 hover:bg-purple-500/15 hover:text-purple-100'
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      aria-disabled={disabled}
+      title={title}
+      className={`${base} ${style}`}
+    >
+      {icon}
+      <span>{label}</span>
     </button>
   )
 }
