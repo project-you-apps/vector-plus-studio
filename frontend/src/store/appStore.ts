@@ -215,8 +215,17 @@ interface AppState {
 
   // Reports — current report + cross-tab persistence + click-through
   // handoff (2026-07-13 Phase A source-file links).
+  //
+  // INVARIANT (2026-07-13 Phase A follow-up): `currentReport` is set
+  // ONLY by a successful Generate (via `setCurrentReport`, which now
+  // requires non-null so no caller can silently null it out) and
+  // cleared ONLY by the × Close button in the results toolbar (via
+  // `clearCurrentReport`). Tab switches, cart-mount changes, source-
+  // link clicks, and any other action MUST NOT touch this field. If
+  // you find yourself wanting to clear it from elsewhere, don't —
+  // add explicit UX for the case instead.
   currentReport: CurrentReport | null
-  setCurrentReport: (report: CurrentReport | null) => void
+  setCurrentReport: (report: CurrentReport) => void
   clearCurrentReport: () => void
   pendingSourceFocus: PendingSourceFocus | null
   focusSearchOnSource: (slug: string, displayName: string) => void
@@ -419,6 +428,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   // active screen so a click on an in-report link "just works" — the
   // custom react-markdown handler in ReportResultsView.tsx fires this
   // action; SearchBar's mount-time effect consumes the pending focus.
+  //
+  // Invariant enforcement: `setCurrentReport` requires a non-null
+  // CurrentReport (see the AppState declaration). Clearing to null is
+  // ONLY reachable via `clearCurrentReport`, which is wired to the ×
+  // Close button in the results toolbar. Do not add any other caller
+  // of `clearCurrentReport` — nothing else should touch this field.
   currentReport: null,
   setCurrentReport: (report) => set({ currentReport: report }),
   clearCurrentReport: () => set({ currentReport: null }),

@@ -186,6 +186,19 @@ export default function ReportsScreen() {
   // scheduled sections. When null, the grid is back. Store-backed so it
   // survives tab switches (2026-07-13 Phase A). We resolve the report
   // definition by slug on read so the store payload stays serializable.
+  //
+  // 2026-07-13 Phase A follow-up (persistence bug fix): the render gate
+  // depends ONLY on `currentReport`. If the slug lookup ever fails to
+  // resolve (dev HMR reload of report-definitions.ts, a mid-refactor
+  // rename, an unknown-slug payload snuck into the store), we still
+  // render the results view using a synthesized fallback definition
+  // built from the stored `reportSlug` + `reportDisplayName`. The
+  // reason: the invariant is "the report stays visible until the user
+  // clicks × Close" and gating on the derived slug lookup would break
+  // that if the lookup ever returned null. The Regenerate button
+  // early-returns when the slug isn't resolvable (the input pane
+  // needs the real schema); Close + Copy + Download all work off the
+  // stored response regardless.
   const currentReport = useAppStore((s) => s.currentReport)
   const setCurrentReport = useAppStore((s) => s.setCurrentReport)
   const clearCurrentReport = useAppStore((s) => s.clearCurrentReport)
@@ -196,7 +209,24 @@ export default function ReportsScreen() {
         : null,
     [currentReport],
   )
-  const hasResultView = !!currentReport && !!resultViewReport
+  // Synthesized fallback when the slug lookup fails. Only the
+  // `displayName` field is user-visible in `ReportResultsView` (title
+  // in the toolbar + footer crumb + download filename), so the minimal
+  // shape covers the render need. `inputSchema: []` keeps Regenerate
+  // safe: if the user clicks it, the pane opens with zero required
+  // fields and no defaults — clearly wrong, so Regenerate is guarded
+  // in handleRegenerate to no-op when the real definition is missing.
+  const displayedReport: ReportDefinition | null = currentReport
+    ? (resultViewReport ?? {
+        name: currentReport.reportSlug,
+        displayName: currentReport.reportDisplayName,
+        description: '',
+        icon: 'FileText',
+        llmDependency: false,
+        inputSchema: [],
+      })
+    : null
+  const hasResultView = !!currentReport && !!displayedReport
 
   const effectiveCartId = selectedCartId ?? defaultCartId
   const selectedCart = effectiveCartId
@@ -288,9 +318,9 @@ export default function ReportsScreen() {
           )}
         </div>
 
-        {hasResultView && resultViewReport && currentReport ? (
+        {hasResultView && displayedReport && currentReport ? (
           <ReportResultsView
-            report={resultViewReport}
+            report={displayedReport}
             response={currentReport.response}
             cartLabel={currentReport.cartLabel}
             onClose={handleCloseResults}
