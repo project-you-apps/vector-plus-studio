@@ -33,6 +33,22 @@ import { fetchReportCarts, type GenerateReportResponse, type ReportCartEntry } f
 //     Close explicitly clears; tab-switches leave the report visible.
 //     ReportDefinition is looked up by slug on read so we don't serialize
 //     the full definition object into the store.
+//
+// 2026-07-13 (interim UX — hide legacy carts from Reports selector):
+//   • Reports-only view: legacy (report_compatible=false) carts are
+//     filtered out of the dropdown entirely rather than rendered greyed
+//     with a Lock icon + tooltip. Legacy carts stay visible on every
+//     OTHER tab (Search, Cart Builder, Edit Carts, …). If nothing
+//     compatible is available, the selector swaps to a friendly empty-
+//     state; the reports grid stays visible so users can still see the
+//     shape of what's available.
+//   • Rationale: Andy's demo carts are legacy .pkl; hitting the amber
+//     "legacy cart format" panel over and over was noise. Hiding them
+//     is an interim fix until the demo carts get rebuilt as .cart.npz.
+//   • cartCompat map + optimistic default preserved. Amber cart_not_found
+//     panel in ReportInputPane stays as defense-in-depth for the case
+//     where the mounted cart is legacy but no compatible cart was picked
+//     from the dropdown (defaultCartId still prefers the mounted cart).
 
 export default function ReportsScreen() {
   // Cart identity — mirror the mounted-cart resolution used by SearchToolbar /
@@ -118,10 +134,22 @@ export default function ReportsScreen() {
     if (mountedCartridge) return `server:${mountedCartridge}`
     // Prefer a report-compatible cart over an incompatible one for the
     // default selection — reduces the odds a fresh visitor picks a
-    // legacy cart out of the gate.
+    // legacy cart out of the gate. (Redundant now that the dropdown
+    // filters out incompatible carts, but harmless — kept in case the
+    // filter ever gets relaxed.)
     const firstCompat = cartOptions.find((o) => o.reportCompatible)
     return firstCompat?.id ?? cartOptions[0]?.id ?? null
   }, [activeLocalCart, mountedCartridge, cartOptions])
+
+  // Reports-only filter: hide legacy (report_compatible=false) carts
+  // from the selector entirely. Interim UX until legacy carts get
+  // rebuilt as .cart.npz. Every other tab (Search, Cart Builder, etc.)
+  // still lists them. When this list is empty we swap the selector
+  // for a friendly empty-state below.
+  const compatibleCartOptions = useMemo(
+    () => cartOptions.filter((o) => o.reportCompatible),
+    [cartOptions],
+  )
 
   const [selectedCartId, setSelectedCartId] = useState<string | null>(defaultCartId)
   const [activeReport, setActiveReport] = useState<ReportDefinition | null>(null)
@@ -219,13 +247,21 @@ export default function ReportsScreen() {
 
           {/* Cart selector — mirrors OverviewScreen's Mounted stat but as a
               dropdown so the user can run a report against any of their
-              recently-used carts without leaving the tab. */}
-          <CartSelector
-            options={cartOptions}
-            selectedId={effectiveCartId}
-            onSelect={setSelectedCartId}
-            buttonRef={cartSelectorButtonRef}
-          />
+              recently-used carts without leaving the tab. Reports-only
+              filter hides legacy .pkl carts (and LocalCarts, which run
+              browser-side); if nothing compatible is available we swap
+              for the empty-state below instead of showing an empty
+              dropdown. */}
+          {compatibleCartOptions.length === 0 ? (
+            <ReportsEmptyCartState />
+          ) : (
+            <CartSelector
+              options={compatibleCartOptions}
+              selectedId={effectiveCartId}
+              onSelect={setSelectedCartId}
+              buttonRef={cartSelectorButtonRef}
+            />
+          )}
         </div>
 
         {hasResultView && resultViewReport && currentReport ? (
@@ -298,6 +334,28 @@ export default function ReportsScreen() {
         />
       )}
     </main>
+  )
+}
+
+// Empty-state shown in place of the cart selector when the droplet has
+// zero report-compatible carts. Sized to sit in the same header slot as
+// the CartSelector button so the header layout doesn't jump. Reports
+// grid stays visible below (see ReportsScreen's main render) so users
+// can still see what report types would be available.
+function ReportsEmptyCartState() {
+  return (
+    <div
+      className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2
+                 text-xs text-amber-200 flex items-start gap-2 max-w-md"
+      role="status"
+    >
+      <Lock size={13} className="shrink-0 mt-0.5 text-amber-400/80" />
+      <span>
+        No report-compatible carts available yet. Report engine needs the
+        .cart.npz format. Rebuild legacy carts via Cart Builder → Save as
+        .cart.npz, or ask your admin to convert existing carts.
+      </span>
+    </div>
   )
 }
 
