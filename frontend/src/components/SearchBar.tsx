@@ -8,6 +8,8 @@ export default function SearchBar() {
     strictMode, setStrictMode, exactMatch, setExactMatch,
   } = useAppStore()
   const activeLocalCart = useAppStore((s) => s.activeLocalCart)
+  const pendingSourceFocus = useAppStore((s) => s.pendingSourceFocus)
+  const consumePendingSourceFocus = useAppStore((s) => s.consumePendingSourceFocus)
   const [input, setInput] = useState('')
 
   // Clear the local input draft whenever the active cart changes (either
@@ -16,6 +18,29 @@ export default function SearchBar() {
   useEffect(() => {
     setInput('')
   }, [status?.mounted_cartridge, activeLocalCart])
+
+  // 2026-07-13 (Phase A source-file links): when the user clicks a
+  // vps://source/{slug} link inside a rendered report, the store flips
+  // activeScreen to 'search' AND stashes a pendingSourceFocus payload.
+  // Here we consume it: prefill the input box with the source display
+  // name and fire a search. Fallback behavior — no per-source filter
+  // exists yet on Search; we're doing a search-by-name so at least the
+  // relevant passages surface. Documented as Phase A+ polish opportunity
+  // in the AGENT-LOGBOOK.
+  useEffect(() => {
+    if (!pendingSourceFocus) return
+    const hasCart = !!status?.mounted_cartridge || !!activeLocalCart
+    if (!hasCart) {
+      // Leave the focus payload set so the search fires once the user
+      // mounts a cart. If they never do, the payload just sits — a
+      // subsequent click replaces it (only the most recent focus wins).
+      return
+    }
+    const focus = consumePendingSourceFocus()
+    if (!focus) return
+    setInput(focus.displayName)
+    doSearch(focus.displayName)
+  }, [pendingSourceFocus, status?.mounted_cartridge, activeLocalCart, consumePendingSourceFocus, doSearch])
 
   const hasActiveCart = !!status?.mounted_cartridge || !!activeLocalCart
   const disabled = !hasActiveCart || searching

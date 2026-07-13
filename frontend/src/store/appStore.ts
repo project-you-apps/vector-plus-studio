@@ -4,6 +4,7 @@ import type {
   MemboxCartInfo, MemboxStatus,
 } from '../api/types'
 import * as api from '../api/client'
+import type { GenerateReportResponse } from '../api/client'
 import { probeImageBuilder } from '../api/imageBuilder'
 import { detectWebGPU, runWebGpuAssociate, loadBrainForCart, isBrainLoadedFor } from '../lib/webgpuAssociate'
 import { parseCartFile, cosineSearchLocal } from '../lib/localCart'
@@ -122,6 +123,38 @@ export interface WalkStep {
 // screens are stubbed in this iteration and fleshed out incrementally.
 export type ActiveScreen = 'search' | 'overview' | 'cartBuilder' | 'crud' | 'reports' | 'sql' | 'settings'
 
+// Current report display state — lifted from ReportsScreen.tsx 2026-07-13
+// so a report survives tab switches (Reports → Search → Reports resumes
+// where the user left off). Cleared on Close click; overwritten on next
+// Generate success. `submittedInputs` is the exact payload used, so
+// Regenerate can pre-fill the input pane. `generatedAt` mirrors the
+// server-echoed value on `response.generated_at` for symmetry with the
+// old local timestamp (kept as an explicit field so future features
+// like "show me the report I ran at 3pm" can filter without diving into
+// the response body).
+export interface CurrentReport {
+  cartRef: string
+  cartLabel: string | null
+  reportSlug: string
+  reportDisplayName: string
+  submittedInputs: Record<string, unknown>
+  response: GenerateReportResponse
+  generatedAt: string  // ISO
+}
+
+// One-shot handoff between a click on a vps://source/{slug} link inside
+// rendered report markdown and the Search tab picking up the intent.
+// `slug` is the URL slug (deterministic — same rule the backend uses in
+// api/reports/source_link.py). `displayName` is the exact display text
+// of the clicked link so the Search input can surface the source name
+// the user actually sees. Consumed + cleared by SearchBar on mount /
+// when it fires; a follow-up click while the field is still set replaces
+// the payload so only the most recent focus survives.
+export interface PendingSourceFocus {
+  slug: string
+  displayName: string
+}
+
 // Desktop Cart Builder helper — detection + pairing state. The exe (Day 1)
 // runs a local FastAPI on http://127.0.0.1:7878 wrapping the same
 // /api/cartbuilder/* router the VPS backend exposes. When paired, Cart
@@ -179,6 +212,15 @@ interface AppState {
   // Active screen (nav rail)
   activeScreen: ActiveScreen
   setActiveScreen: (screen: ActiveScreen) => void
+
+  // Reports — current report + cross-tab persistence + click-through
+  // handoff (2026-07-13 Phase A source-file links).
+  currentReport: CurrentReport | null
+  setCurrentReport: (report: CurrentReport | null) => void
+  clearCurrentReport: () => void
+  pendingSourceFocus: PendingSourceFocus | null
+  focusSearchOnSource: (slug: string, displayName: string) => void
+  consumePendingSourceFocus: () => PendingSourceFocus | null
 
   // Status
   status: StatusResponse | null
@@ -370,6 +412,32 @@ interface AppState {
 export const useAppStore = create<AppState>((set, get) => ({
   activeScreen: 'search' as ActiveScreen,
   setActiveScreen: (screen) => set({ activeScreen: screen }),
+
+  // ---- Reports current-report state (persists across tab switches) ----
+  // Lifted out of ReportsScreen.tsx 2026-07-13 so the report survives
+  // Reports → other tab → Reports. `focusSearchOnSource` also flips the
+  // active screen so a click on an in-report link "just works" — the
+  // custom react-markdown handler in ReportResultsView.tsx fires this
+  // action; SearchBar's mount-time effect consumes the pending focus.
+  currentReport: null,
+  setCurrentReport: (report) => set({ currentReport: report }),
+  clearCurrentReport: () => set({ currentReport: null }),
+  pendingSourceFocus: null,
+  focusSearchOnSource: (slug, displayName) => {
+    // Set the focus payload FIRST — SearchBar's mount effect reads via
+    // getState() so ordering is safe — then switch tabs so the effect
+    // fires. If the user is already on Search, SearchBar's subscription
+    // catches the state change without the tab switch.
+    set({
+      pendingSourceFocus: { slug, displayName },
+      activeScreen: 'search',
+    })
+  },
+  consumePendingSourceFocus: () => {
+    const focus = get().pendingSourceFocus
+    if (focus) set({ pendingSourceFocus: null })
+    return focus
+  },
 
   status: null,
   statusLoading: false,

@@ -38,6 +38,7 @@ from typing import Any, Callable, Optional
 from .base import Report, ReportInput, ReportOptions, ReportOutput
 from .cart_reader import CartHandle
 from .registry import register_report
+from .source_link import source_link
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +344,9 @@ def _render_markdown(
             lines.append(f"### {bucket}")
         if include_context:
             lines.append(f"> {m.context_excerpt}")
-        source_label = m.source or "(unknown source)"
+        # 2026-07-13 (Phase A): source names emit as vps://source/{slug}
+        # markdown links so the frontend can drill down to Search.
+        source_label = source_link(m.source, empty_label="(unknown source)")
         lines.append(f"Source: {source_label} (pattern #{m.pattern_idx})")
         lines.append("")
 

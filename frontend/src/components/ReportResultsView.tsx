@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Children, isValidElement, useEffect, useRef, useState } from 'react'
 import {
   X, RefreshCw, Copy, Check, ExternalLink, Clock3, AlertTriangle,
   Download, ChevronDown, FileText, Code, FileType, File, Table, Sheet,
@@ -7,6 +7,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { GenerateReportResponse } from '../api/client'
 import type { ReportDefinition } from '../reports/report-definitions'
+import { useAppStore } from '../store/appStore'
 import {
   buildFilename,
   downloadTextFile,
@@ -14,6 +15,32 @@ import {
   markdownToPlainText,
   wrapHtmlDocument,
 } from '../lib/exportReport'
+
+// Prefix used by all in-report source-file links. Kept as a constant so
+// the custom react-markdown handler + any future exporter that wants to
+// visit source refs agree on the syntax.
+const VPS_SOURCE_PREFIX = 'vps://source/'
+
+// Recursively flatten React children into a plain-text string. Used to
+// recover the display text of a rendered markdown link when the
+// react-markdown `a` handler needs to hand a source name off to the
+// Search tab (see `focusSearchOnSource`). Handles nested `<strong>` /
+// `<em>` inside link text — rare in report output but not impossible.
+function childrenToText(children: React.ReactNode): string {
+  let out = ''
+  Children.forEach(children, (child) => {
+    if (typeof child === 'string') {
+      out += child
+    } else if (typeof child === 'number') {
+      out += String(child)
+    } else if (isValidElement(child)) {
+      out += childrenToText(
+        (child.props as { children?: React.ReactNode }).children,
+      )
+    }
+  })
+  return out
+}
 
 // Full-width results view that REPLACES the reports grid when a report has
 // been generated (Andy 2026-07-13 design — Option 3). Lives inside the main
@@ -261,16 +288,42 @@ export default function ReportResultsView({
               hr: () => <hr className="my-4 border-slate-700/50" />,
               strong: ({ children }) => <strong className="font-semibold text-slate-100">{children}</strong>,
               em: ({ children }) => <em className="italic text-slate-200">{children}</em>,
-              a: ({ href, children }) => (
-                <a
-                  href={href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-cyan-400 hover:text-cyan-300 underline decoration-cyan-400/40"
-                >
-                  {children}
-                </a>
-              ),
+              a: ({ href, children }) => {
+                // Phase A source-file links: intercept vps://source/{slug}
+                // and hand off to the Search tab via the store. Never
+                // navigate — the href is a marker scheme, not a real URL.
+                // Non-vps:// links keep the old external-link behavior.
+                if (href && href.startsWith(VPS_SOURCE_PREFIX)) {
+                  const slug = href.slice(VPS_SOURCE_PREFIX.length)
+                  return (
+                    <a
+                      href={href}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        const displayName = childrenToText(children).trim()
+                        useAppStore.getState().focusSearchOnSource(
+                          slug,
+                          displayName,
+                        )
+                      }}
+                      title={`Focus Search on ${childrenToText(children).trim() || slug}`}
+                      className="text-purple-300 hover:text-purple-200 underline decoration-purple-400/50 decoration-dotted cursor-pointer"
+                    >
+                      {children}
+                    </a>
+                  )
+                }
+                return (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-cyan-400 hover:text-cyan-300 underline decoration-cyan-400/40"
+                  >
+                    {children}
+                  </a>
+                )
+              },
             }}
           >
             {response.markdown}

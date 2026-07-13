@@ -44,6 +44,7 @@ from typing import Optional
 from .base import Report, ReportInput, ReportOptions, ReportOutput
 from .cart_reader import CartHandle
 from .registry import register_report
+from .source_link import source_link
 
 
 # Offset of membot's ``flags`` byte within the 64-byte hippocampus row.
@@ -637,9 +638,14 @@ def _distinctive_bullets(cart: CartHandle, indices: list[int]) -> list[str]:
         return ["- (none)"]
     bullets = []
     for idx in indices:
-        src = cart.get_source(idx) or f"pattern #{idx}"
+        raw_src = cart.get_source(idx)
+        # 2026-07-13 (Phase A): source names emit as vps://source/{slug}
+        # links so the frontend can drill down. When the cart has no
+        # source for a pattern, fall back to the bare "pattern #N" text
+        # (no link — there's no source to focus on).
+        src_display = source_link(raw_src) if raw_src else f"pattern #{idx}"
         summary = _short_summary(cart.get_passage(idx))
-        bullets.append(f"- {src}: {summary}")
+        bullets.append(f"- {src_display}: {summary}")
     return bullets
 
 

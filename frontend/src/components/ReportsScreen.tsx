@@ -25,6 +25,14 @@ import { fetchReportCarts, type GenerateReportResponse, type ReportCartEntry } f
 //   • Regenerate flow — after a report renders, the Regenerate button
 //     in the results toolbar re-opens the input pane pre-filled with the
 //     last submitted inputs.
+//
+// 2026-07-13 (Phase A source-file links):
+//   • Report state (`currentReport`) is now stored in appStore, not
+//     local component state. Reports → Search (via a clicked source-file
+//     link) → Reports resumes exactly where the user left off. Only
+//     Close explicitly clears; tab-switches leave the report visible.
+//     ReportDefinition is looked up by slug on read so we don't serialize
+//     the full definition object into the store.
 
 export default function ReportsScreen() {
   // Cart identity — mirror the mounted-cart resolution used by SearchToolbar /
@@ -121,9 +129,22 @@ export default function ReportsScreen() {
   // whenever the user opens a fresh card so a click on a new report
   // doesn't inherit stale values from an unrelated one.
   const [prefillInputs, setPrefillInputs] = useState<Record<string, unknown> | null>(null)
+
   // Full-width results — non-null hides the grid + hides the recent /
-  // scheduled sections. When null, the grid is back.
-  const [resultView, setResultView] = useState<ResultViewState | null>(null)
+  // scheduled sections. When null, the grid is back. Store-backed so it
+  // survives tab switches (2026-07-13 Phase A). We resolve the report
+  // definition by slug on read so the store payload stays serializable.
+  const currentReport = useAppStore((s) => s.currentReport)
+  const setCurrentReport = useAppStore((s) => s.setCurrentReport)
+  const clearCurrentReport = useAppStore((s) => s.clearCurrentReport)
+  const resultViewReport = useMemo(
+    () =>
+      currentReport
+        ? REPORT_DEFINITIONS.find((r) => r.name === currentReport.reportSlug) ?? null
+        : null,
+    [currentReport],
+  )
+  const hasResultView = !!currentReport && !!resultViewReport
 
   const effectiveCartId = selectedCartId ?? defaultCartId
   const selectedCart = effectiveCartId
@@ -139,27 +160,35 @@ export default function ReportsScreen() {
   const handleGenerateSuccess = useCallback(
     (response: GenerateReportResponse, submittedInputs: Record<string, unknown>) => {
       if (!activeReport) return
-      setResultView({
-        report: activeReport,
-        response,
+      // Cart ref used for filenames + downloads is the identifier we
+      // actually POSTed with; the label is a human display string.
+      const cartRefFromMeta = response.metadata && typeof response.metadata.cart_ref === 'string'
+        ? (response.metadata.cart_ref as string)
+        : (effectiveCartId ?? selectedCartLabel ?? '')
+      setCurrentReport({
+        cartRef: cartRefFromMeta,
         cartLabel: selectedCartLabel,
-        inputs: submittedInputs,
+        reportSlug: activeReport.name,
+        reportDisplayName: activeReport.displayName,
+        submittedInputs,
+        response,
+        generatedAt: response.generated_at,
       })
       setActiveReport(null)
       setPrefillInputs(null)
     },
-    [activeReport, selectedCartLabel],
+    [activeReport, selectedCartLabel, effectiveCartId, setCurrentReport],
   )
 
-  const handleCloseResults = () => setResultView(null)
+  const handleCloseResults = () => clearCurrentReport()
 
   const handleRegenerate = () => {
-    if (!resultView) return
-    setPrefillInputs(resultView.inputs)
-    setActiveReport(resultView.report)
-    // Intentionally leave resultView in place — the user can still see
-    // the current results while adjusting inputs. When they click
-    // Generate, the success handler overwrites the resultView.
+    if (!currentReport || !resultViewReport) return
+    setPrefillInputs(currentReport.submittedInputs)
+    setActiveReport(resultViewReport)
+    // Intentionally leave currentReport in place — the user can still
+    // see the current results while adjusting inputs. When they click
+    // Generate, the success handler overwrites currentReport.
   }
 
   const focusCartSelector = () => {
@@ -199,11 +228,11 @@ export default function ReportsScreen() {
           />
         </div>
 
-        {resultView ? (
+        {hasResultView && resultViewReport && currentReport ? (
           <ReportResultsView
-            report={resultView.report}
-            response={resultView.response}
-            cartLabel={resultView.cartLabel}
+            report={resultViewReport}
+            response={currentReport.response}
+            cartLabel={currentReport.cartLabel}
             onClose={handleCloseResults}
             onRegenerate={handleRegenerate}
           />
@@ -281,16 +310,6 @@ interface CartOption {
   kind: 'local' | 'server'
   reportCompatible: boolean
   format: 'npz' | 'pkl'
-}
-
-// State carried while a report result is displayed full-width. `inputs`
-// is the exact payload we posted, used to pre-fill the input pane on
-// Regenerate.
-interface ResultViewState {
-  report: ReportDefinition
-  response: GenerateReportResponse
-  cartLabel: string | null
-  inputs: Record<string, unknown>
 }
 
 // Cart selector dropdown. Same close-on-outside-click pattern as

@@ -44,6 +44,7 @@ import numpy as np
 from .base import Report, ReportInput, ReportOptions, ReportOutput
 from .cart_reader import CartHandle
 from .registry import register_report
+from .source_link import source_link
 
 
 # ---------------------------------------------------------------------------
@@ -362,7 +363,7 @@ def _render_added(added: list[_PatternRef]) -> str:
     lines = [f"## Added ({len(added)})"]
     for ref in sorted(added, key=lambda r: (r.source, r.idx)):
         lines.append(
-            f"- {ref.source or '(no source)'}: {_short_summary(ref.text)} "
+            f"- {source_link(ref.source)}: {_short_summary(ref.text)} "
             f"(pattern #{ref.idx})"
         )
     return "\n".join(lines)
@@ -375,7 +376,7 @@ def _render_removed(removed: list[_PatternRef]) -> str:
     lines = [f"## Removed ({len(removed)})"]
     for ref in sorted(removed, key=lambda r: (r.source, r.idx)):
         lines.append(
-            f"- {ref.source or '(no source)'}: {_short_summary(ref.text)} "
+            f"- {source_link(ref.source)}: {_short_summary(ref.text)} "
             f"(was pattern #{ref.idx})"
         )
     return "\n".join(lines)
@@ -387,7 +388,7 @@ def _render_modified(modified: list[tuple[_PatternRef, _PatternRef]]) -> str:
         return ""
     lines = [f"## Modified ({len(modified)})"]
     for old_ref, new_ref in sorted(modified, key=lambda pair: (pair[1].source, pair[1].idx)):
-        lines.append(f"- {new_ref.source or '(no source)'}: {_short_summary(new_ref.text)}")
+        lines.append(f"- {source_link(new_ref.source)}: {_short_summary(new_ref.text)}")
         lines.append(f"  - **Before**: {_short_summary(old_ref.text, _MODIFIED_EXCERPT_CHARS)}")
         lines.append(f"  - **After**: {_short_summary(new_ref.text, _MODIFIED_EXCERPT_CHARS)}")
     return "\n".join(lines)

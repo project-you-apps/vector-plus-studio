@@ -55,6 +55,7 @@ from typing import Any, Optional
 from .base import Report, ReportInput, ReportOptions, ReportOutput
 from .cart_reader import CartHandle
 from .registry import register_report
+from .source_link import source_link
 
 
 # ---------------------------------------------------------------------------
@@ -569,11 +570,15 @@ class CoverageReport(Report):
             for theme, items in capped_underrep:
                 sample_idx = items[0]
                 sample = live_items[sample_idx]
+                # 2026-07-13 (Phase A): source-file reference is now a
+                # markdown link the frontend intercepts. Prior code
+                # wrapped the source name in decorative [ ] brackets;
+                # source_link() emits its own [display](vps://…) syntax.
                 lines.append(
                     f"- **{theme}** — {len(items)} item"
                     f"{'s' if len(items) != 1 else ''} "
                     f"(sample: pattern #{sample['idx']} "
-                    f"[{sample['source'] or '(no source)'}]: "
+                    f"{source_link(sample['source'])}: "
                     f"{_snippet(sample['text'])})"
                 )
             if len(underrep_themes) > _UNDERREP_DISPLAY_CAP:
@@ -595,9 +600,12 @@ class CoverageReport(Report):
         else:
             for ent, item_idx in orphans:
                 item = live_items[item_idx]
+                # Phase A: source is now a real markdown link (see
+                # source_link.py). Decorative [ ] wrapper dropped —
+                # source_link() emits its own [display](vps://…) syntax.
                 lines.append(
                     f"- **{ent}** — pattern #{item['idx']} "
-                    f"[{item['source'] or '(no source)'}]"
+                    f"{source_link(item['source'])}"
                 )
             if total_orphans > len(orphans):
                 lines.append("")
@@ -620,7 +628,7 @@ class CoverageReport(Report):
                 status = (
                     "under-utilized" if count < source_coverage_min else "OK"
                 )
-                lines.append(f"| {src} | {count} | {status} |")
+                lines.append(f"| {source_link(src)} | {count} | {status} |")
             if under_utilized_sources:
                 n_under = len(under_utilized_sources)
                 lines.append("")
@@ -676,9 +684,11 @@ class CoverageReport(Report):
             )
             lines.append("")
             for item in context_poor[:_CONTEXT_POOR_SAMPLE_CAP]:
+                # Phase A: source-file reference is now a markdown link.
+                # See source_link.py for the slug convention.
                 lines.append(
                     f"- pattern #{item['idx']} "
-                    f"[{item['source'] or '(no source)'}]: "
+                    f"{source_link(item['source'])}: "
                     f"{_snippet(item['text'])}"
                 )
             if len(context_poor) > _CONTEXT_POOR_SAMPLE_CAP:

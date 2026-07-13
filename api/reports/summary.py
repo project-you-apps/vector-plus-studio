@@ -39,6 +39,7 @@ from typing import Any, Iterable, Optional
 from .base import Report, ReportInput, ReportOptions, ReportOutput
 from .cart_reader import CartHandle
 from .registry import register_report
+from .source_link import source_link
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +378,7 @@ class SummaryReport(Report):
                     max(dates_for_src).isoformat() if dates_for_src else "—"
                 )
                 lines.append(
-                    f"| {src} | {per_source_count[src]} | {first_seen} | {last_seen} |"
+                    f"| {source_link(src)} | {per_source_count[src]} | {first_seen} | {last_seen} |"
                 )
             lines.append("")
 

@@ -202,8 +202,14 @@ class TestCoverageSkipsTombstones(unittest.TestCase):
 
         # The tombstoned passage's unique tokens must NOT appear anywhere
         # in the rendered report — that would prove the skip failed.
+        # (Note: "deleted.pdf" — as of Phase A source-file links, source
+        # names ship as vps://source/{slug} links in the markdown; the
+        # display text "deleted.pdf" is what we're screening for either
+        # way.)
         self.assertNotIn("Nintendo", out.markdown)
         self.assertNotIn("deleted.pdf", out.markdown)
+        # Belt-and-suspenders: the link form also shouldn't sneak in.
+        self.assertNotIn("vps://source/deleted-pdf", out.markdown)
         # Warnings should surface the skip count.
         self.assertTrue(
             any("tombstoned" in w.lower() for w in out.warnings),
@@ -309,7 +315,10 @@ class TestCoverageEndToEnd(unittest.TestCase):
         self.assertIn("2026-12-15", gaps_section)
 
         # Source coverage table exists and Acme (1 item) is flagged.
+        # (Phase A — source-file name is emitted as a markdown link;
+        # the raw display text is still present.)
         self.assertIn("acme.pdf", md)
+        self.assertIn("vps://source/acme-pdf", md)
         self.assertIn("under-utilized", md.lower())
 
         # Context-poor section should surface the "random uncategorized"
