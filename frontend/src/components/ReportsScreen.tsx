@@ -1,23 +1,30 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  FileBarChart, Database, ChevronDown, Clock, CalendarClock,
+  FileBarChart, Database, ChevronDown, Clock, CalendarClock, Lock,
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { REPORT_DEFINITIONS, type ReportDefinition } from '../reports/report-definitions'
 import ReportCard from './ReportCard'
 import ReportInputPane from './ReportInputPane'
+import ReportResultsView from './ReportResultsView'
+import { fetchReportCarts, type GenerateReportResponse, type ReportCartEntry } from '../api/client'
 
 // Reports screen — the UX shell for the 8 report types (see
 // docs/vps-internal/Report Types Design 2026-07-10.md).
 //
-// Scope of this pass (Andy 2026-07-10):
-//   • Cart selector at top (defaults to the currently mounted cart)
-//   • 8 report cards in a responsive grid
-//   • Recent-reports and Scheduled-briefings sections as empty states
-//   • Slide-in input pane when a card's Run button is clicked
-//
-// NOT WIRED YET: the backend report modules that actually run reports are
-// future work. Clicking Generate in the input pane shows a placeholder.
+// 2026-07-13 (Andy Stage-B follow-up):
+//   • Full-width results display (Option 3). Report replaces the reports
+//     grid until closed / regenerated. Fixes the "not wide enough" pain
+//     from the 440px slide-in pane when Summary against gutenberg-poetry
+//     dumped a ~2000-line markdown blob with tables.
+//   • Cart selector filters/annotates report-compatibility. Backend
+//     enumerates via GET /api/reports/carts; legacy .pkl carts show as
+//     greyed-out with a Lock icon + tooltip. Still selectable (the input
+//     pane's amber "legacy cart format" panel is the second line of
+//     defense).
+//   • Regenerate flow — after a report renders, the Regenerate button
+//     in the results toolbar re-opens the input pane pre-filled with the
+//     last submitted inputs.
 
 export default function ReportsScreen() {
   // Cart identity — mirror the mounted-cart resolution used by SearchToolbar /
@@ -27,46 +34,144 @@ export default function ReportsScreen() {
   const cartridges = useAppStore((s) => s.cartridges)
   const localCarts = useAppStore((s) => s.localCarts)
 
+  // Server-side per-cart report compatibility map, populated on mount.
+  // Missing entry means "backend didn't tell us about this cart" — for
+  // LocalCarts (browser-only) that's the correct answer; we mark them
+  // as incompatible because Reports run server-side.
+  const [cartCompat, setCartCompat] = useState<Map<string, ReportCartEntry>>(new Map())
+
+  const cartSelectorButtonRef = useRef<HTMLButtonElement | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetchReportCarts()
+      .then((entries) => {
+        if (cancelled) return
+        const map = new Map<string, ReportCartEntry>()
+        for (const e of entries) map.set(e.id, e)
+        setCartCompat(map)
+      })
+      .catch(() => {
+        // If the enumeration fails the selector falls back to showing
+        // every cart as "unknown" — the input pane's cart_not_found
+        // amber panel is still the safety net.
+      })
+    return () => { cancelled = true }
+  }, [cartridges])
+
   // Build the cart-picker options. LocalCart names come first (they're the
   // browser-mounted "hot" carts the user just opened), then the server
   // cartridges. Selected value is the display string; if nothing is mounted
   // we fall through to null so the pane header shows "(none mounted)".
+  //
+  // Compatibility annotation:
+  //   • LocalCart entries are always report_compatible=false (server-side
+  //     engine can't reach them).
+  //   • Server entries look up their stem in cartCompat; unknown ones
+  //     (backend didn't enumerate the stem) fall back to a permissive
+  //     "true" so nothing hides accidentally — the amber failure panel
+  //     covers the mis-guess case.
   const cartOptions = useMemo(() => {
-    // Dedupe by generated id — cartridges[] can contain the same server-side
-    // cart name more than once when the sandbox and multi-mount pools list
-    // the same underlying file. Without dedup React logs the duplicate-key
-    // warning and can misroute updates between the two entries.
-    const opts: Array<{ id: string; label: string; kind: 'local' | 'server' }> = []
+    const opts: CartOption[] = []
     const seen = new Set<string>()
-    const push = (id: string, label: string, kind: 'local' | 'server') => {
-      if (seen.has(id)) return
-      seen.add(id)
-      opts.push({ id, label, kind })
+    const push = (o: CartOption) => {
+      if (seen.has(o.id)) return
+      seen.add(o.id)
+      opts.push(o)
     }
     for (const name of localCarts.keys()) {
-      push(`local:${name}`, name, 'local')
+      push({
+        id: `local:${name}`,
+        label: name,
+        kind: 'local',
+        reportCompatible: false,
+        format: 'npz',
+      })
     }
     for (const c of cartridges) {
-      push(`server:${c.name}`, c.name, 'server')
+      const meta = cartCompat.get(c.name)
+      push({
+        id: `server:${c.name}`,
+        // Backend-provided display_name annotates "(legacy)"; fall back
+        // to the bare cart name when we don't have an entry yet.
+        label: meta?.display_name ?? c.name,
+        kind: 'server',
+        // Optimistic default: if we don't know, assume compatible so
+        // the user isn't blocked on a slow enumerate.
+        reportCompatible: meta?.report_compatible ?? true,
+        format: (meta?.format as 'npz' | 'pkl' | undefined) ?? 'npz',
+      })
     }
     return opts
-  }, [cartridges, localCarts])
+  }, [cartridges, localCarts, cartCompat])
 
   const defaultCartId = useMemo(() => {
     if (activeLocalCart) return `local:${activeLocalCart}`
     if (mountedCartridge) return `server:${mountedCartridge}`
-    return cartOptions[0]?.id ?? null
+    // Prefer a report-compatible cart over an incompatible one for the
+    // default selection — reduces the odds a fresh visitor picks a
+    // legacy cart out of the gate.
+    const firstCompat = cartOptions.find((o) => o.reportCompatible)
+    return firstCompat?.id ?? cartOptions[0]?.id ?? null
   }, [activeLocalCart, mountedCartridge, cartOptions])
 
   const [selectedCartId, setSelectedCartId] = useState<string | null>(defaultCartId)
   const [activeReport, setActiveReport] = useState<ReportDefinition | null>(null)
+  // Pre-fill payload passed to the input pane on Regenerate. Cleared
+  // whenever the user opens a fresh card so a click on a new report
+  // doesn't inherit stale values from an unrelated one.
+  const [prefillInputs, setPrefillInputs] = useState<Record<string, unknown> | null>(null)
+  // Full-width results — non-null hides the grid + hides the recent /
+  // scheduled sections. When null, the grid is back.
+  const [resultView, setResultView] = useState<ResultViewState | null>(null)
 
-  // Re-sync selection when the mounted-cart changes and the current selection
-  // is still the auto-defaulted one. Preserves an explicit user pick.
   const effectiveCartId = selectedCartId ?? defaultCartId
-  const selectedCartLabel = effectiveCartId
-    ? cartOptions.find((o) => o.id === effectiveCartId)?.label ?? null
+  const selectedCart = effectiveCartId
+    ? cartOptions.find((o) => o.id === effectiveCartId) ?? null
     : null
+  const selectedCartLabel = selectedCart?.label ?? null
+
+  const handleOpenCard = (report: ReportDefinition) => {
+    setPrefillInputs(null)
+    setActiveReport(report)
+  }
+
+  const handleGenerateSuccess = useCallback(
+    (response: GenerateReportResponse, submittedInputs: Record<string, unknown>) => {
+      if (!activeReport) return
+      setResultView({
+        report: activeReport,
+        response,
+        cartLabel: selectedCartLabel,
+        inputs: submittedInputs,
+      })
+      setActiveReport(null)
+      setPrefillInputs(null)
+    },
+    [activeReport, selectedCartLabel],
+  )
+
+  const handleCloseResults = () => setResultView(null)
+
+  const handleRegenerate = () => {
+    if (!resultView) return
+    setPrefillInputs(resultView.inputs)
+    setActiveReport(resultView.report)
+    // Intentionally leave resultView in place — the user can still see
+    // the current results while adjusting inputs. When they click
+    // Generate, the success handler overwrites the resultView.
+  }
+
+  const focusCartSelector = () => {
+    // Called from the pane's [Pick another cart] button — dismiss the
+    // pane and put focus on the cart selector button so keyboard users
+    // land where they need to.
+    setActiveReport(null)
+    setPrefillInputs(null)
+    requestAnimationFrame(() => {
+      cartSelectorButtonRef.current?.focus()
+    })
+  }
 
   return (
     <main className="flex-1 flex flex-col p-6 overflow-y-auto relative">
@@ -90,65 +195,102 @@ export default function ReportsScreen() {
             options={cartOptions}
             selectedId={effectiveCartId}
             onSelect={setSelectedCartId}
+            buttonRef={cartSelectorButtonRef}
           />
         </div>
 
-        {/* Card grid — 3-up on wide, 2-up on medium, 1-up on narrow */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {REPORT_DEFINITIONS.map((report) => (
-            <ReportCard
-              key={report.name}
-              report={report}
-              onRun={() => setActiveReport(report)}
-            />
-          ))}
-        </div>
+        {resultView ? (
+          <ReportResultsView
+            report={resultView.report}
+            response={resultView.response}
+            cartLabel={resultView.cartLabel}
+            onClose={handleCloseResults}
+            onRegenerate={handleRegenerate}
+          />
+        ) : (
+          <>
+            {/* Card grid — 3-up on wide, 2-up on medium, 1-up on narrow */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {REPORT_DEFINITIONS.map((report) => (
+                <ReportCard
+                  key={report.name}
+                  report={report}
+                  onRun={() => handleOpenCard(report)}
+                />
+              ))}
+            </div>
 
-        {/* Recent reports — empty state for now. Once report modules land,
-            each run adds a row here with timestamp + parameters + open button. */}
-        <section className="rounded-lg border border-slate-700 bg-slate-800/30">
-          <div className="px-4 py-2 border-b border-slate-700 flex items-center gap-2">
-            <Clock size={13} className="text-slate-500" />
-            <h2 className="text-xs uppercase tracking-wider text-slate-500">Recent reports</h2>
-          </div>
-          <div className="p-6 text-center text-xs text-slate-500 italic">
-            Your report history will appear here after you run one.
-          </div>
-        </section>
+            {/* Recent reports — empty state for now. Once report modules land,
+                each run adds a row here with timestamp + parameters + open button. */}
+            <section className="rounded-lg border border-slate-700 bg-slate-800/30">
+              <div className="px-4 py-2 border-b border-slate-700 flex items-center gap-2">
+                <Clock size={13} className="text-slate-500" />
+                <h2 className="text-xs uppercase tracking-wider text-slate-500">Recent reports</h2>
+              </div>
+              <div className="p-6 text-center text-xs text-slate-500 italic">
+                Your report history will appear here after you run one.
+              </div>
+            </section>
 
-        {/* Scheduled briefings — empty state for now. Scheduling worker
-            lands in wave 3 (design doc §C.4) alongside delivery adapters. */}
-        <section className="rounded-lg border border-slate-700 bg-slate-800/30">
-          <div className="px-4 py-2 border-b border-slate-700 flex items-center gap-2">
-            <CalendarClock size={13} className="text-slate-500" />
-            <h2 className="text-xs uppercase tracking-wider text-slate-500">Scheduled briefings</h2>
-          </div>
-          <div className="p-6 text-center text-xs text-slate-500 italic">
-            Post-launch: schedule recurring reports for auto-delivery.
-          </div>
-        </section>
+            {/* Scheduled briefings — empty state for now. Scheduling worker
+                lands in wave 3 (design doc §C.4) alongside delivery adapters. */}
+            <section className="rounded-lg border border-slate-700 bg-slate-800/30">
+              <div className="px-4 py-2 border-b border-slate-700 flex items-center gap-2">
+                <CalendarClock size={13} className="text-slate-500" />
+                <h2 className="text-xs uppercase tracking-wider text-slate-500">Scheduled briefings</h2>
+              </div>
+              <div className="p-6 text-center text-xs text-slate-500 italic">
+                Post-launch: schedule recurring reports for auto-delivery.
+              </div>
+            </section>
 
-        <p className="text-center text-[11px] text-slate-600 italic pt-2">
-          Report modules land wave-by-wave. Wave 1: Summary, Comparison, Entity Rollup, Change Log.
-          Wave 2: Timeline, Trend, Financial. Wave 3: Executive TL;DR + scheduling.
-        </p>
+            <p className="text-center text-[11px] text-slate-600 italic pt-2">
+              Report modules land wave-by-wave. Wave 1: Summary, Comparison, Entity Rollup, Change Log.
+              Wave 2: Timeline, Trend, Financial. Wave 3: Executive TL;DR + scheduling.
+            </p>
+          </>
+        )}
       </div>
 
-      {/* Slide-in input pane. Renders as an overlay on top of the grid so the
-          user can jump back with the X button without losing scroll position.
-          cartRef carries the full "server:foo" / "local:bar" identifier; the
-          pane strips the prefix + short-circuits local carts with a friendly
-          notice (reports run server-side, LocalCarts never touched the disk). */}
+      {/* Slide-in input pane. Renders as an overlay on top of the grid or
+          the full-width results view so the user can jump back with the X
+          button without losing scroll position. cartRef carries the full
+          "server:foo" / "local:bar" identifier; the pane strips the prefix
+          + short-circuits local carts with a friendly notice. */}
       {activeReport && (
         <ReportInputPane
           report={activeReport}
           cartName={selectedCartLabel}
           cartRef={effectiveCartId}
+          initialInputs={prefillInputs}
           onClose={() => setActiveReport(null)}
+          onSuccess={handleGenerateSuccess}
+          onPickAnotherCart={focusCartSelector}
         />
       )}
     </main>
   )
+}
+
+// One entry in the cart-picker dropdown. Enriched with report-compat
+// metadata pulled from /api/reports/carts so the selector can render
+// legacy entries in a subtle greyed state.
+interface CartOption {
+  id: string
+  label: string
+  kind: 'local' | 'server'
+  reportCompatible: boolean
+  format: 'npz' | 'pkl'
+}
+
+// State carried while a report result is displayed full-width. `inputs`
+// is the exact payload we posted, used to pre-fill the input pane on
+// Regenerate.
+interface ResultViewState {
+  report: ReportDefinition
+  response: GenerateReportResponse
+  cartLabel: string | null
+  inputs: Record<string, unknown>
 }
 
 // Cart selector dropdown. Same close-on-outside-click pattern as
@@ -159,10 +301,12 @@ function CartSelector({
   options,
   selectedId,
   onSelect,
+  buttonRef,
 }: {
-  options: Array<{ id: string; label: string; kind: 'local' | 'server' }>
+  options: CartOption[]
   selectedId: string | null
   onSelect: (id: string) => void
+  buttonRef?: React.RefObject<HTMLButtonElement | null>
 }) {
   const [open, setOpen] = useState(false)
   const selected = options.find((o) => o.id === selectedId) ?? null
@@ -182,6 +326,7 @@ function CartSelector({
   return (
     <div className="relative">
       <button
+        ref={buttonRef}
         onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-700
                    bg-slate-800/40 hover:bg-slate-800 text-sm text-slate-200
@@ -192,6 +337,12 @@ function CartSelector({
         <span className="flex-1 text-left truncate">
           {selected?.label ?? 'Pick a cart…'}
         </span>
+        {selected && !selected.reportCompatible && (
+          <Lock
+            size={12}
+            className="text-amber-400/80 shrink-0"
+          />
+        )}
         {selected && (
           <span
             className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded font-mono ${
@@ -211,12 +362,16 @@ function CartSelector({
           {/* click-outside catcher */}
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
           <div
-            className="absolute right-0 top-full mt-1 z-20 min-w-[280px]
+            className="absolute right-0 top-full mt-1 z-20 min-w-[300px]
                        rounded-lg border border-slate-700 bg-slate-900 shadow-xl
                        max-h-[320px] overflow-y-auto"
           >
             {options.map((opt) => {
               const active = opt.id === selectedId
+              const incompatible = !opt.reportCompatible
+              const tooltip = incompatible
+                ? 'This cart uses a legacy format. Reports need the newer .cart.npz format. Convert via Cart Builder → Save as .cart.npz.'
+                : undefined
               return (
                 <button
                   key={opt.id}
@@ -224,14 +379,23 @@ function CartSelector({
                     onSelect(opt.id)
                     setOpen(false)
                   }}
+                  title={tooltip}
                   className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition-colors ${
                     active
                       ? 'bg-emerald-500/10 text-emerald-200'
-                      : 'text-slate-300 hover:bg-slate-800'
+                      : incompatible
+                        ? 'text-slate-500 hover:bg-slate-800/60'
+                        : 'text-slate-300 hover:bg-slate-800'
                   }`}
                 >
-                  <Database size={13} className={active ? 'text-emerald-300' : 'text-slate-500'} />
-                  <span className="flex-1 truncate">{opt.label}</span>
+                  {incompatible ? (
+                    <Lock size={13} className="text-amber-400/70 shrink-0" />
+                  ) : (
+                    <Database size={13} className={active ? 'text-emerald-300' : 'text-slate-500'} />
+                  )}
+                  <span className={`flex-1 truncate ${incompatible ? 'italic' : ''}`}>
+                    {opt.label}
+                  </span>
                   <span
                     className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded font-mono ${
                       opt.kind === 'local'

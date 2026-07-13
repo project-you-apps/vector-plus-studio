@@ -1,7 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
-import { X, Sparkles, Info, PlayCircle, Loader2, Copy, Check, AlertTriangle, RefreshCw, Clock3 } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { X, Sparkles, Info, PlayCircle, Loader2, AlertTriangle, RefreshCw, Lock } from 'lucide-react'
 import type { FieldSchema, ReportDefinition } from '../reports/report-definitions'
 import {
   generateReport,
@@ -150,13 +148,14 @@ function FieldRow({
   )
 }
 
-// Result payload shape used by the pane after Generate. Split into three
-// states so the render logic doesn't guess: 'loading' shows a spinner,
-// 'success' renders markdown, 'error' shows the red panel + Try again.
+// Result payload shape used by the pane while Generate is in flight or
+// after it fails. Success is HOISTED to the parent via onSuccess() —
+// results render full-width in ReportResultsView, not inside the pane —
+// so 'success' is no longer a pane-local state. See ReportsScreen for the
+// hand-off wiring (Andy 2026-07-13 Option 3 design).
 type ResultState =
   | { kind: 'idle' }
   | { kind: 'loading' }
-  | { kind: 'success'; response: GenerateReportResponse }
   | { kind: 'error'; status: number; error: string; message: string }
 
 // Strip cart_ref prefixes ("local:" / "server:") the ReportsScreen selector
@@ -199,14 +198,51 @@ export default function ReportInputPane({
   report,
   cartName,
   cartRef,
+  initialInputs,
   onClose,
+  onSuccess,
+  onPickAnotherCart,
 }: {
   report: ReportDefinition
   cartName: string | null
   cartRef: string | null
+  // Pre-filled form values from a previous Generate — used by the
+  // Regenerate flow in ReportResultsView so the user can tweak one
+  // field and re-run without re-typing everything.
+  initialInputs?: Record<string, unknown> | null
   onClose: () => void
+  // Called when Generate succeeds. Parent takes ownership of the
+  // response and switches the main content column to the full-width
+  // ReportResultsView. The pane closes itself as part of the same
+  // transition (the parent's onSuccess clears activeReport).
+  onSuccess?: (
+    response: GenerateReportResponse,
+    submittedInputs: Record<string, unknown>,
+  ) => void
+  // Called from the amber "legacy cart" error panel's [Pick another cart]
+  // button. Dismisses the pane and asks the parent to focus the cart
+  // selector so the user can pick a report-compatible cart.
+  onPickAnotherCart?: () => void
 }) {
-  const [values, setValues] = useState<InputValues>(() => initialValues(report.inputSchema))
+  const [values, setValues] = useState<InputValues>(() => {
+    const base = initialValues(report.inputSchema)
+    if (!initialInputs) return base
+    // Merge initialInputs on top of the schema defaults so unknown
+    // fields don't leak into the form and known ones win over defaults.
+    const merged: InputValues = { ...base }
+    for (const field of report.inputSchema) {
+      const v = initialInputs[field.name]
+      if (v === undefined) continue
+      if (field.type === 'date-range') {
+        // Regenerate carries the same {from, to} shape we sent.
+        const dr = v as { from?: string; to?: string } | null
+        merged[field.name] = { from: dr?.from ?? '', to: dr?.to ?? '' }
+      } else {
+        merged[field.name] = v as FieldValue
+      }
+    }
+    return merged
+  })
   const [result, setResult] = useState<ResultState>({ kind: 'idle' })
 
   const missingRequired = useMemo(
@@ -237,7 +273,12 @@ export default function ReportInputPane({
         cart_ref: payload.cart_ref,
         inputs: payload.inputs,
       })
-      setResult({ kind: 'success', response: res })
+      // Hand the response off to the parent — it renders the full-width
+      // results view. Reset our own state so if the user re-opens this
+      // pane via Regenerate we start clean rather than flashing an old
+      // loading spinner briefly.
+      setResult({ kind: 'idle' })
+      onSuccess?.(res, payload.inputs)
     } catch (err) {
       if (err instanceof GenerateReportError) {
         setResult({
@@ -361,22 +402,16 @@ export default function ReportInputPane({
 
         {result.kind === 'loading' && <LoadingPanel report={report} />}
 
-        {result.kind === 'success' && (
-          <SuccessPanel
-            report={report}
-            response={result.response}
-            onEditInputs={handleEditInputs}
-          />
-        )}
-
         {result.kind === 'error' && (
           <ErrorPanel
             report={report}
             status={result.status}
             errorTag={result.error}
+            cartName={cartName}
             message={result.message}
             onTryAgain={handleTryAgain}
             onEditInputs={handleEditInputs}
+            onPickAnotherCart={onPickAnotherCart}
           />
         )}
       </div>
@@ -424,174 +459,41 @@ function LoadingPanel({ report }: { report: ReportDefinition }) {
   )
 }
 
-// Markdown result + Copy button top-right + Edit inputs affordance.
-// Uses ReactMarkdown + remark-gfm so tables + fenced code blocks render.
-// Component overrides are trimmed down from PassageModal's copy — this
-// surface doesn't need graphic:N inline-image resolution, so we keep the
-// mapping small enough to review at a glance.
-function SuccessPanel({
-  report,
-  response,
-  onEditInputs,
-}: {
-  report: ReportDefinition
-  response: GenerateReportResponse
-  onEditInputs: () => void
-}) {
-  const [justCopied, setJustCopied] = useState(false)
-  const copyTimerRef = useRef<number | null>(null)
-
-  const copyMarkdown = async () => {
-    try {
-      await navigator.clipboard.writeText(response.markdown)
-      setJustCopied(true)
-      if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current)
-      copyTimerRef.current = window.setTimeout(() => {
-        setJustCopied(false)
-        copyTimerRef.current = null
-      }, 2500)
-    } catch {
-      // Insecure context / permissions denied — silent no-op; user can
-      // select the rendered text with their mouse as a fallback.
-    }
-  }
-
-  // Timing badge — surface the report's own elapsed_ms if the report set
-  // it, otherwise the route-level fallback. Both are integers in ms.
-  const meta = response.metadata || {}
-  const elapsed =
-    typeof meta.elapsed_ms === 'number'
-      ? meta.elapsed_ms
-      : typeof meta.route_elapsed_ms === 'number'
-        ? meta.route_elapsed_ms
-        : null
-
-  return (
-    <div className="flex flex-col gap-3">
-      {/* Header row — display name + timing + Copy */}
-      <div className="flex items-center gap-2">
-        <div className="flex-1 min-w-0 text-[11px] text-slate-500 flex items-center gap-2">
-          {elapsed !== null && (
-            <span className="inline-flex items-center gap-1 font-mono">
-              <Clock3 size={11} />
-              {elapsed} ms
-            </span>
-          )}
-        </div>
-        <button
-          onClick={copyMarkdown}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium
-                      border transition-colors ${
-                        justCopied
-                          ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-200'
-                          : 'bg-slate-800/60 border-slate-700 text-slate-300 hover:bg-slate-800'
-                      }`}
-          title="Copy raw markdown to clipboard"
-        >
-          {justCopied ? <Check size={12} /> : <Copy size={12} />}
-          {justCopied ? 'Copied' : 'Copy'}
-        </button>
-      </div>
-
-      {/* Warnings, if the report surfaced any. Empty list = happy path. */}
-      {response.warnings.length > 0 && (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-200 space-y-1">
-          <div className="font-medium">Warnings</div>
-          <ul className="list-disc pl-4 space-y-0.5">
-            {response.warnings.map((w, i) => (<li key={i}>{w}</li>))}
-          </ul>
-        </div>
-      )}
-
-      {/* Rendered markdown. Prose-ish container so tables + headers get
-          reasonable spacing; individual component overrides do most of
-          the styling to stay consistent with PassageModal. */}
-      <div className="rounded-lg border border-slate-700 bg-slate-950/40 px-4 py-3 text-sm text-slate-200 leading-relaxed">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{
-            h1: ({ children }) => <h1 className="text-lg font-bold text-slate-100 mt-3 mb-2">{children}</h1>,
-            h2: ({ children }) => <h2 className="text-base font-semibold text-slate-100 mt-3 mb-1.5">{children}</h2>,
-            h3: ({ children }) => <h3 className="text-sm font-semibold text-slate-200 mt-2 mb-1">{children}</h3>,
-            p: ({ children }) => <p className="my-2 text-[13px] text-slate-300">{children}</p>,
-            ul: ({ children }) => <ul className="list-disc pl-5 my-2 space-y-1 text-[13px]">{children}</ul>,
-            ol: ({ children }) => <ol className="list-decimal pl-5 my-2 space-y-1 text-[13px]">{children}</ol>,
-            li: ({ children }) => <li className="text-slate-300">{children}</li>,
-            code: ({ children }) => (
-              <code className="px-1 py-0.5 rounded bg-slate-800 text-amber-200 font-mono text-[11px]">{children}</code>
-            ),
-            pre: ({ children }) => (
-              <pre className="my-2 p-2 rounded-md bg-slate-900/80 border border-slate-800 overflow-x-auto text-[11px] font-mono text-slate-200">{children}</pre>
-            ),
-            blockquote: ({ children }) => (
-              <blockquote className="border-l-2 border-emerald-500/40 pl-3 my-2 italic text-slate-400 text-[13px]">{children}</blockquote>
-            ),
-            table: ({ children }) => (
-              <div className="my-3 overflow-x-auto">
-                <table className="border-collapse text-[12px]">{children}</table>
-              </div>
-            ),
-            th: ({ children }) => (
-              <th className="border border-slate-700 px-2 py-1 bg-slate-800/60 text-slate-200 text-left font-medium">{children}</th>
-            ),
-            td: ({ children }) => (
-              <td className="border border-slate-700 px-2 py-1 text-slate-300">{children}</td>
-            ),
-            hr: () => <hr className="my-3 border-slate-700/50" />,
-            strong: ({ children }) => <strong className="font-semibold text-slate-100">{children}</strong>,
-            em: ({ children }) => <em className="italic text-slate-200">{children}</em>,
-            a: ({ href, children }) => (
-              <a
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-cyan-400 hover:text-cyan-300 underline decoration-cyan-400/40"
-              >
-                {children}
-              </a>
-            ),
-          }}
-        >
-          {response.markdown}
-        </ReactMarkdown>
-      </div>
-
-      <button
-        onClick={onEditInputs}
-        className="w-full px-3 py-2 rounded-lg text-sm text-slate-300 border border-slate-700
-                   hover:border-slate-500 hover:bg-slate-800/40 transition-colors"
-      >
-        Edit inputs
-      </button>
-
-      {/* Report label footer — helps operators debug "which report
-          generated this?" when reviewing exported markdown. */}
-      <p className="text-[10px] text-slate-600 text-center">
-        {report.displayName} · {response.report_slug} · {new Date(response.generated_at).toLocaleString()}
-      </p>
-    </div>
-  )
-}
-
-// Error state. 501 gets a friendly "future release" panel (Wave-2 reports).
-// Everything else gets a red-tinted error panel + Try again + Edit inputs.
+// Error state. Special cases (softer color palettes, targeted CTAs):
+//   • 501 / not_yet_available    → purple "future release" panel (Wave-2)
+//   • cart_not_found (legacy)    → amber "legacy cart format" panel with
+//                                  a [Pick another cart] button; this is
+//                                  the elegant failure the cart selector
+//                                  filter can't fully prevent when the
+//                                  user chooses an incompatible cart on
+//                                  purpose (defense-in-depth).
+//   • local_cart_unsupported     → amber notice (already handled up
+//                                  front by the idle-state check, but
+//                                  kept for defense-in-depth).
+//   • everything else            → the original red-tinted error panel
+//                                  + Try again + Edit inputs.
 function ErrorPanel({
   report,
   status,
   errorTag,
+  cartName,
   message,
   onTryAgain,
   onEditInputs,
+  onPickAnotherCart,
 }: {
   report: ReportDefinition
   status: number
   errorTag: string
+  cartName: string | null
   message: string
   onTryAgain: () => void
   onEditInputs: () => void
+  onPickAnotherCart?: () => void
 }) {
   const isNotYetAvailable = status === 501 || errorTag === 'not_yet_available'
   const isLocalCart = errorTag === 'local_cart_unsupported'
+  const isLegacyCart = errorTag === 'cart_not_found'
 
   if (isNotYetAvailable) {
     return (
@@ -617,6 +519,50 @@ function ErrorPanel({
         >
           Back to inputs
         </button>
+      </div>
+    )
+  }
+
+  if (isLegacyCart) {
+    // The backend already returned a message but we override with a copy
+    // tailored to the format issue — the raw backend message ("Cart 'x'
+    // not found on the server. Only .cart.npz files under the cartridges/
+    // dir are supported.") reads as a scary bug. This copy names the
+    // problem in the user's language and points at a fix.
+    const cartLabel = cartName || 'This cart'
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 text-sm">
+          <p className="text-amber-200 font-medium mb-2 flex items-center gap-2">
+            <Lock size={14} />
+            Legacy cart format
+          </p>
+          <p className="text-xs text-slate-300 leading-relaxed">
+            &lsquo;{cartLabel}&rsquo; isn&rsquo;t in a report-compatible format.
+            Reports need the newer <span className="font-mono text-amber-200">.cart.npz</span> format.
+            Try picking a different cart above, or convert this one via
+            Cart Builder &rarr; Save as <span className="font-mono text-amber-200">.cart.npz</span>.
+          </p>
+        </div>
+        <div className="flex flex-col gap-2">
+          {onPickAnotherCart && (
+            <button
+              onClick={onPickAnotherCart}
+              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg
+                         text-sm text-amber-100 border border-amber-500/40 bg-amber-500/10
+                         hover:bg-amber-500/20 transition-colors"
+            >
+              Pick another cart
+            </button>
+          )}
+          <button
+            onClick={onEditInputs}
+            className="w-full px-3 py-2 rounded-lg text-sm text-slate-300 border border-slate-700
+                       hover:border-slate-500 hover:bg-slate-800/40 transition-colors"
+          >
+            Edit inputs
+          </button>
+        </div>
       </div>
     )
   }

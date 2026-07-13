@@ -311,5 +311,113 @@ class TestReportsGenerateRoute(unittest.TestCase):
         self.assertEqual(status, 422, body)
 
 
+class TestReportCartsEnumeration(unittest.TestCase):
+    """Smoke test for GET /api/reports/carts.
+
+    Materializes a temp cartridges dir with one ``.cart.npz`` (compatible),
+    one ``.pkl`` (legacy/incompatible), and one shared-stem entry (both
+    formats — should dedupe as compatible). Points ``get_cartridge_dirs``
+    at the temp dir via monkeypatching the module attribute the route
+    walks, then asserts the response shape, ordering, and dedup rule.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmpdir = tempfile.mkdtemp(prefix="reports_carts_test_")
+
+        # A compatible cart — a real minimal ``.cart.npz`` (any bytes work
+        # for the enumeration step; the endpoint checks existence only).
+        cls.compat_path = os.path.join(cls.tmpdir, "aaa-compat.cart.npz")
+        np.savez(cls.compat_path, embeddings=np.zeros((1, 4), dtype=np.float32))
+
+        # A legacy .pkl cart.
+        cls.legacy_path = os.path.join(cls.tmpdir, "zzz-legacy.pkl")
+        with open(cls.legacy_path, "wb") as f:
+            f.write(b"legacy-cart-bytes")
+
+        # A stem present in BOTH formats — should be deduped as compatible.
+        cls.dual_npz_path = os.path.join(cls.tmpdir, "middle-dual.cart.npz")
+        np.savez(cls.dual_npz_path, embeddings=np.zeros((1, 4), dtype=np.float32))
+        cls.dual_pkl_path = os.path.join(cls.tmpdir, "middle-dual.pkl")
+        with open(cls.dual_pkl_path, "wb") as f:
+            f.write(b"legacy-companion")
+
+        # Point the enumeration walk + companion lookup at our tempdir.
+        # Both ``get_cartridge_dirs`` (imported into reports_routes) and
+        # ``find_companion_file`` (used to double-check the npz resolves)
+        # need to be swapped so the answer is deterministic in tests.
+        from api import reports_routes as rr
+        cls._orig_get_dirs = rr.get_cartridge_dirs
+        cls._orig_find_companion = rr.find_companion_file
+
+        def _test_dirs() -> list[str]:
+            return [cls.tmpdir]
+
+        def _test_find_companion(name: str, suffix: str) -> Optional[str]:
+            path = os.path.join(cls.tmpdir, f"{name}{suffix}")
+            return path if os.path.exists(path) else None
+
+        rr.get_cartridge_dirs = _test_dirs  # type: ignore[assignment]
+        rr.find_companion_file = _test_find_companion  # type: ignore[assignment]
+
+        from fastapi.testclient import TestClient
+        from api.main import app
+        cls.client = TestClient(app)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        from api import reports_routes as rr
+        rr.get_cartridge_dirs = cls._orig_get_dirs  # type: ignore[assignment]
+        rr.find_companion_file = cls._orig_find_companion  # type: ignore[assignment]
+        # Best-effort cleanup — leave the tempdir if any file resists.
+        for p in (cls.compat_path, cls.legacy_path, cls.dual_npz_path, cls.dual_pkl_path):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+        try:
+            os.rmdir(cls.tmpdir)
+        except OSError:
+            pass
+
+    def test_carts_endpoint_shape_and_ordering(self):
+        r = self.client.get("/api/reports/carts")
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertIn("carts", body)
+        carts = body["carts"]
+
+        # Dedupe: 3 unique stems (aaa-compat, middle-dual, zzz-legacy).
+        ids = [c["id"] for c in carts]
+        self.assertEqual(sorted(set(ids)), sorted(ids), "duplicate cart ids in payload")
+        self.assertEqual(set(ids), {"aaa-compat", "middle-dual", "zzz-legacy"})
+
+        # Every entry has the four expected keys.
+        for c in carts:
+            self.assertIn("id", c)
+            self.assertIn("display_name", c)
+            self.assertIn("report_compatible", c)
+            self.assertIn("format", c)
+            self.assertIn(c["format"], ("npz", "pkl"))
+
+        by_id = {c["id"]: c for c in carts}
+        self.assertTrue(by_id["aaa-compat"]["report_compatible"])
+        self.assertEqual(by_id["aaa-compat"]["format"], "npz")
+
+        # Dual-format stem dedupes to compatible.
+        self.assertTrue(by_id["middle-dual"]["report_compatible"])
+        self.assertEqual(by_id["middle-dual"]["format"], "npz")
+
+        # Legacy .pkl only stem is incompatible; display_name marks it.
+        self.assertFalse(by_id["zzz-legacy"]["report_compatible"])
+        self.assertEqual(by_id["zzz-legacy"]["format"], "pkl")
+        self.assertIn("legacy", by_id["zzz-legacy"]["display_name"].lower())
+
+        # Ordering: compatible first (alphabetical), then incompatible
+        # (alphabetical). With this fixture: aaa-compat, middle-dual,
+        # zzz-legacy.
+        self.assertEqual(ids, ["aaa-compat", "middle-dual", "zzz-legacy"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

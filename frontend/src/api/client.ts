@@ -274,6 +274,26 @@ export class GenerateReportError extends Error {
   }
 }
 
+// GET /api/reports/carts — enumerates server carts with per-cart report
+// compatibility. Used by ReportsScreen's cart selector to grey out legacy
+// .pkl carts (report engine only reads .cart.npz) with a helpful tooltip.
+// Ordering is server-side: compatible first alphabetical, then incompatible
+// alphabetical. Failures fall back to an empty list so the selector at
+// least still renders — the input pane's cart_not_found branch is the
+// final safety net.
+
+export interface ReportCartEntry {
+  id: string
+  display_name: string
+  report_compatible: boolean
+  format: 'npz' | 'pkl' | string
+}
+
+export async function fetchReportCarts(): Promise<ReportCartEntry[]> {
+  const data = await fetchJSON<{ carts: ReportCartEntry[] }>('/reports/carts')
+  return data.carts
+}
+
 export async function generateReport(
   req: GenerateReportRequest,
 ): Promise<GenerateReportResponse> {

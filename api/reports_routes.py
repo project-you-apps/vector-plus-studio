@@ -36,6 +36,7 @@ to stream, add a second route rather than making this one async.
 from __future__ import annotations
 
 import logging
+import os
 import time
 import traceback
 from datetime import datetime, timezone
@@ -61,7 +62,7 @@ from .reports import (
     list_reports,
     run_report,
 )
-from .cartridge_io import DATA_DIR, find_companion_file
+from .cartridge_io import DATA_DIR, find_companion_file, get_cartridge_dirs
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +217,90 @@ async def get_report_list() -> dict[str, Any]:
         "reports": list_reports(),
         "wave2_pending": sorted(WAVE2_KNOWN_SLUGS),
     }
+
+
+# ---------------------------------------------------------------------------
+# Cart enumeration for the Reports tab selector (2026-07-13)
+# ---------------------------------------------------------------------------
+#
+# The Reports tab needs to know which server carts the report engine can
+# actually open — i.e. which stems have a companion ``.cart.npz`` on disk.
+# Legacy ``.pkl`` carts (v7/v8) will 404 in ``/generate`` because
+# ``CartHandle`` only reads NPZ; the frontend uses this endpoint to grey out
+# the incompatible entries with a helpful tooltip rather than let the user
+# discover the incompatibility via a scary 404 during Generate.
+#
+# The ``list_cartridges()`` helper in cartridge_io returns richer per-cart
+# info (size, brain/sig companion presence, etc.) but it iterates ``.pkl``
+# and ``.cart.npz`` separately and is used elsewhere. We do a targeted walk
+# here to keep the payload lean and the compatibility rule co-located with
+# the Reports engine.
+
+
+@router.get("/carts")
+async def list_report_carts() -> dict[str, Any]:
+    """Enumerate server carts with per-cart report compatibility.
+
+    A cart is ``report_compatible`` iff ``find_companion_file(stem,
+    ".cart.npz")`` resolves. The lookup mirrors ``_resolve_cart_ref`` so
+    what shows up as green here matches what /generate will accept.
+
+    Response shape::
+
+        {
+          "carts": [
+            {
+              "id": "gutenberg-poetry",
+              "display_name": "gutenberg-poetry",
+              "report_compatible": true,
+              "format": "npz"
+            },
+            {
+              "id": "wiki-nomic-100k",
+              "display_name": "wiki-nomic-100k (legacy)",
+              "report_compatible": false,
+              "format": "pkl"
+            }
+          ]
+        }
+
+    Ordering: compatible first (alphabetical), then incompatible
+    (alphabetical). Deduped by stem — a stem that has both formats on
+    disk shows up once, as report_compatible (the .cart.npz wins).
+    """
+    # {stem: format} — first-seen wins for a given stem, but we upgrade a
+    # "pkl" seen earlier if a matching ".cart.npz" is discovered later so
+    # the same underlying cart isn't listed twice.
+    stem_to_format: dict[str, str] = {}
+    for d in get_cartridge_dirs():
+        try:
+            entries = os.listdir(d)
+        except (FileNotFoundError, OSError):
+            continue
+        for f in entries:
+            if f.endswith(".cart.npz"):
+                stem = f[: -len(".cart.npz")]
+                stem_to_format[stem] = "npz"  # npz always wins
+            elif f.endswith(".pkl"):
+                stem = f[: -len(".pkl")]
+                # Only mark as pkl if we haven't already seen an npz for this
+                # stem — otherwise leave the npz mark in place.
+                stem_to_format.setdefault(stem, "pkl")
+
+    entries: list[dict[str, Any]] = []
+    for stem, fmt in stem_to_format.items():
+        compat = fmt == "npz" and find_companion_file(stem, ".cart.npz") is not None
+        display = stem if compat else f"{stem} (legacy)"
+        entries.append({
+            "id": stem,
+            "display_name": display,
+            "report_compatible": compat,
+            "format": fmt,
+        })
+
+    # Sort: compatible first, then alphabetical within each group.
+    entries.sort(key=lambda e: (not e["report_compatible"], e["id"].lower()))
+    return {"carts": entries}
 
 
 @router.post("/generate", response_model=GenerateReportResponse)
