@@ -212,6 +212,7 @@ from .search import search as do_search
 from .forge import forge_cartridge
 from . import cartbuilder
 from . import uploads as uploads_mod
+from . import reports_routes
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +261,11 @@ app.include_router(cartbuilder.router)
 # only, never the canonical catalog. Forced r-only permissions sidecar on
 # every upload. TTL cleanup runs from the lifespan task.
 app.include_router(uploads_mod.router)
+
+# Reports engine dispatch — POST /api/reports/generate + GET /api/reports/list.
+# The 5 Wave-1 report modules (summary, entity_rollup, change_log, comparison,
+# coverage) self-register via @register_report when reports_routes imports them.
+app.include_router(reports_routes.router)
 
 
 # ---------------------------------------------------------------------------

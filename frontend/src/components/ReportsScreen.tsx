@@ -135,11 +135,15 @@ export default function ReportsScreen() {
       </div>
 
       {/* Slide-in input pane. Renders as an overlay on top of the grid so the
-          user can jump back with the X button without losing scroll position. */}
+          user can jump back with the X button without losing scroll position.
+          cartRef carries the full "server:foo" / "local:bar" identifier; the
+          pane strips the prefix + short-circuits local carts with a friendly
+          notice (reports run server-side, LocalCarts never touched the disk). */}
       {activeReport && (
         <ReportInputPane
           report={activeReport}
           cartName={selectedCartLabel}
+          cartRef={effectiveCartId}
           onClose={() => setActiveReport(null)}
         />
       )}

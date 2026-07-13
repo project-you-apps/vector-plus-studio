@@ -1,0 +1,315 @@
+"""Smoke tests for POST /api/reports/generate.
+
+Verifies the route contract landed 2026-07-13 (Wave-2 dispatch spine):
+
+- All 5 Wave-1 slugs (summary, entity_rollup, change_log, comparison,
+  coverage) return HTTP 200 + non-empty markdown.
+- Comparison accepts cart_ref_b as advisory metadata (does not error
+  either way given current subset-query behavior).
+- Wave-2 known slugs (timeline, trend, financial_rollup, tldr) return
+  HTTP 501 with the "future release" hint body.
+- Unknown slugs return HTTP 404.
+- Missing cart_ref returns HTTP 422 (Pydantic).
+- Bogus cart_ref returns HTTP 404 with the "cart_not_found" error tag.
+
+Uses fastapi.testclient.TestClient. A synthetic ``.cart.npz`` is
+materialized in a tempdir + made discoverable by patching the reports
+route's cart resolver to look there — no reliance on the production
+``cartridges/`` directory.
+
+Run standalone::
+
+    python api/reports/tests/test_generate_route.py
+
+Or via pytest::
+
+    python -m pytest api/reports/tests/test_generate_route.py -v
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import tempfile
+import unittest
+from typing import Optional
+
+import numpy as np
+
+# Support both `python -m pytest ...` and direct execution — mirror the
+# bootstrap the sibling test_coverage.py uses.
+if __name__ == "__main__" and __package__ is None:
+    _here = os.path.dirname(os.path.abspath(__file__))
+    _repo_root = os.path.abspath(os.path.join(_here, "..", "..", ".."))
+    if _repo_root not in sys.path:
+        sys.path.insert(0, _repo_root)
+
+
+def _hippo_row(tombstone: bool = False) -> np.ndarray:
+    row = np.zeros(64, dtype=np.uint8)
+    if tombstone:
+        row[28] = 0x01
+    return row
+
+
+def _make_synthetic_cart(
+    passages: list[str],
+    sources: list[str],
+    tombstones: Optional[list[bool]] = None,
+    dim: int = 16,
+    cart_name: str = "smoke-test-cart",
+) -> str:
+    """Materialize a synthetic ``.cart.npz`` and return its abs path.
+
+    Same shape as the sibling coverage-test builder — plain-text
+    passages + per-pattern source_paths + a valid hippocampus block.
+    Pattern-0 is a JSON string so CartHandle decodes it as a dict.
+    """
+    n = len(passages)
+    assert len(sources) == n
+    tombstones = tombstones or [False] * n
+    assert len(tombstones) == n
+
+    rng = np.random.default_rng(42)
+    embeddings = rng.standard_normal(size=(n, dim), dtype=np.float32) if n else np.zeros((0, dim), dtype=np.float32)
+    # Normalize so cosine-based reports have finite similarities.
+    if n:
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        embeddings = embeddings / norms
+
+    passages_arr = np.array(passages, dtype=object)
+    sources_arr = np.array(sources, dtype=object)
+    hippo = (
+        np.stack([_hippo_row(t) for t in tombstones])
+        if n else np.zeros((0, 64), dtype=np.uint8)
+    )
+    pattern0 = np.array(json.dumps({
+        "cart_name": cart_name,
+        "description": "synthetic cart for /api/reports/generate smoke test",
+    }), dtype=object)
+
+    fd, path = tempfile.mkstemp(suffix=".cart.npz", prefix="reports_route_smoke_")
+    os.close(fd)
+    np.savez(
+        path,
+        embeddings=embeddings,
+        passages=passages_arr,
+        source_paths=sources_arr,
+        hippocampus=hippo,
+        pattern0=pattern0,
+    )
+    return path
+
+
+class TestReportsGenerateRoute(unittest.TestCase):
+    """End-to-end smoke tests through fastapi.testclient.TestClient."""
+
+    # A cart big enough to exercise every Wave-1 report:
+    #  - Sysco Portland mentions for entity_rollup
+    #  - Multiple sources for summary
+    #  - Currency + date content so extractors have signal for comparison
+    CART_PASSAGES = [
+        "Sysco Portland delivery arrived on time. Total $412.55 on 2026-05-04.",
+        "Fuel surcharge from Sysco Portland: $8.95. Invoice dated 2026-05-11.",
+        "Bar Restaurant Supply invoice #4421, $1,205.00, delivered 2026-05-14.",
+        "Sysco Portland weekly order confirmation. Case count: 42. 2026-05-18.",
+        "Bar Restaurant Supply short delivery, $302.00 credit issued 2026-05-21.",
+        "Sysco Portland credit memo, -$88.20. Adjustment posted 2026-05-25.",
+        "Portland Coffee Co. wholesale order, $650.75 on 2026-05-27.",
+    ]
+    CART_SOURCES = [
+        "invoice-may04.pdf",
+        "invoice-may11.pdf",
+        "bar-supply-may14.pdf",
+        "invoice-may18.pdf",
+        "bar-supply-may21.pdf",
+        "invoice-may25.pdf",
+        "coffee-order-may27.pdf",
+    ]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.cart_path = _make_synthetic_cart(
+            cls.CART_PASSAGES, cls.CART_SOURCES,
+            cart_name="reports-route-smoke",
+        )
+        # Patch the cart resolver so bare "reports-route-smoke" resolves
+        # to our tempfile. Simpler than dropping the file into the real
+        # cartridges/ dir and risking cross-test contamination.
+        from api import reports_routes as rr
+        cls._orig_resolver = rr._resolve_cart_ref
+
+        def _test_resolver(cart_ref: str) -> Optional[str]:
+            if not cart_ref:
+                return None
+            ref = cart_ref.strip()
+            if ref.startswith("local:"):
+                return None
+            if ref.startswith("server:"):
+                ref = ref[len("server:"):]
+            if ref in ("reports-route-smoke", "reports-route-smoke.cart.npz",
+                       os.path.basename(cls.cart_path), cls.cart_path):
+                return cls.cart_path
+            return None
+
+        rr._resolve_cart_ref = _test_resolver  # type: ignore[assignment]
+
+        # Build the TestClient AFTER patching so nothing races through
+        # the real DATA_DIR-anchored resolver during app startup.
+        from fastapi.testclient import TestClient
+        from api.main import app
+        cls.client = TestClient(app)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        from api import reports_routes as rr
+        rr._resolve_cart_ref = cls._orig_resolver  # type: ignore[assignment]
+        try:
+            os.unlink(cls.cart_path)
+        except OSError:
+            pass
+
+    # -- happy paths ------------------------------------------------------
+
+    def _post_generate(self, payload: dict) -> tuple[int, dict]:
+        r = self.client.post("/api/reports/generate", json=payload)
+        try:
+            body = r.json()
+        except Exception:
+            body = {"_raw": r.text}
+        return r.status_code, body
+
+    def test_summary(self):
+        status, body = self._post_generate({
+            "report_slug": "summary",
+            "cart_ref": "reports-route-smoke",
+            "inputs": {"top_themes": 3},
+        })
+        self.assertEqual(status, 200, body)
+        self.assertIn("markdown", body)
+        self.assertGreater(len(body["markdown"]), 0)
+        self.assertEqual(body["report_slug"], "summary")
+        self.assertIn("generated_at", body)
+
+    def test_entity_rollup(self):
+        status, body = self._post_generate({
+            "report_slug": "entity_rollup",
+            "cart_ref": "reports-route-smoke",
+            "inputs": {
+                "entity_name": "Sysco Portland",
+                "aliases": "Sysco PDX",
+            },
+        })
+        self.assertEqual(status, 200, body)
+        self.assertGreater(len(body["markdown"]), 0)
+
+    def test_coverage(self):
+        status, body = self._post_generate({
+            "report_slug": "coverage",
+            "cart_ref": "reports-route-smoke",
+            "inputs": {},
+        })
+        self.assertEqual(status, 200, body)
+        self.assertIn("Coverage Report", body["markdown"])
+
+    def test_change_log(self):
+        # Change Log needs two carts. We hand it the same cart on both
+        # sides — the report should render a "no changes" body without
+        # crashing. That's enough for the route-level smoke pass.
+        status, body = self._post_generate({
+            "report_slug": "change_log",
+            "cart_ref": "reports-route-smoke",
+            "inputs": {
+                "cart_id_old": self.cart_path,
+                "cart_id_new": self.cart_path,
+                "diff_strategy": "exact",
+            },
+        })
+        self.assertEqual(status, 200, body)
+        self.assertGreater(len(body["markdown"]), 0)
+
+    def test_comparison(self):
+        status, body = self._post_generate({
+            "report_slug": "comparison",
+            "cart_ref": "reports-route-smoke",
+            "inputs": {
+                "subset_a_name": "Sysco",
+                "subset_a_query": "sysco",
+                "subset_b_name": "Bar Supply",
+                "subset_b_query": "bar restaurant supply",
+            },
+        })
+        self.assertEqual(status, 200, body)
+        self.assertGreater(len(body["markdown"]), 0)
+
+    def test_comparison_with_cart_ref_b_is_advisory(self):
+        # cart_ref_b passes through as metadata but does not gate 422 —
+        # the actual ComparisonReport uses subset queries only. This
+        # documents the intentional deviation from the brief's "required"
+        # phrasing (see reports_routes.py module docstring).
+        status, body = self._post_generate({
+            "report_slug": "comparison",
+            "cart_ref": "reports-route-smoke",
+            "cart_ref_b": "reports-route-smoke",
+            "inputs": {
+                "subset_a_name": "Sysco",
+                "subset_a_query": "sysco",
+                "subset_b_name": "Bar Supply",
+                "subset_b_query": "bar restaurant supply",
+            },
+        })
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["metadata"].get("cart_ref_b"), "reports-route-smoke")
+
+    # -- error paths ------------------------------------------------------
+
+    def test_wave2_slug_returns_501(self):
+        for slug in ("timeline", "trend", "financial_rollup", "tldr"):
+            status, body = self._post_generate({
+                "report_slug": slug,
+                "cart_ref": "reports-route-smoke",
+                "inputs": {},
+            })
+            self.assertEqual(status, 501, (slug, body))
+            self.assertIn("future release", json.dumps(body).lower(), (slug, body))
+
+    def test_unknown_slug_returns_404(self):
+        status, body = self._post_generate({
+            "report_slug": "not_a_real_report",
+            "cart_ref": "reports-route-smoke",
+            "inputs": {},
+        })
+        self.assertEqual(status, 404, body)
+        # detail contains the "unknown_report" tag.
+        self.assertIn("unknown_report", json.dumps(body))
+
+    def test_bogus_cart_ref_returns_404(self):
+        status, body = self._post_generate({
+            "report_slug": "summary",
+            "cart_ref": "definitely-not-a-real-cart",
+            "inputs": {},
+        })
+        self.assertEqual(status, 404, body)
+        self.assertIn("cart_not_found", json.dumps(body))
+
+    def test_local_cart_returns_404_with_local_tag(self):
+        status, body = self._post_generate({
+            "report_slug": "summary",
+            "cart_ref": "local:my-browser-cart",
+            "inputs": {},
+        })
+        self.assertEqual(status, 404, body)
+        self.assertIn("local_cart_unsupported", json.dumps(body))
+
+    def test_missing_cart_ref_is_422(self):
+        status, body = self._post_generate({
+            "report_slug": "summary",
+            "inputs": {},
+        })
+        # Pydantic-level validation error.
+        self.assertEqual(status, 422, body)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
