@@ -12,3 +12,6 @@ einops>=0.7.0
 PyPDF2>=3.0.0
 python-docx>=0.8.11
 PyJWT>=2.8.0
+# Optional: main.py wraps the import in try/except so prod (systemd env)
+# works without it. Local dev pulls env from a gitignored .env file.
+python-dotenv>=1.0.0

@@ -14,6 +14,18 @@ import time
 import threading
 import numpy as np
 
+# Load .env from the repo root (if present) so local dev picks up
+# VECTOR_PLUS_LLM_PROVIDER, CF_WORKER_URL, WORKER_AUTH_TOKEN, etc. without
+# needing them set in the shell. Systemd/shell env vars take precedence
+# (default load_dotenv() behavior — never overrides real env). No-op if
+# .env doesn't exist. Convention added 2026-07-14.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # dotenv is optional in prod — env vars come from systemd there
+    pass
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
