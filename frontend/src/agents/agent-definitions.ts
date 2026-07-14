@@ -141,4 +141,29 @@ export const AGENT_DEFINITIONS: AgentDefinition[] = [
       },
     ],
   },
+  // Free Agent — LAST in the grid on purpose. It's the catch-all fallback
+  // when none of the four specialized recipes above fit the task. Positioning
+  // signals "start with a specialized recipe; drop here if nothing fits."
+  // Name is a baseball pun (2026-07-14, All-Star week) — may rename if it
+  // doesn't stick. Icon uses 'Bot' which is already in AgentCard's ICON_MAP
+  // + thematically appropriate as the "generic agent" glyph.
+  {
+    name: 'free_agent',
+    displayName: 'Free Agent',
+    description:
+      "When none of the specialized recipes fit — describe your task or question, and Free Agent will do its best with your cart as context.",
+    icon: 'Bot',
+    llmDependency: true,
+    inputSchema: [
+      {
+        name: 'user_input',
+        label: 'What would you like the agent to do?',
+        type: 'textarea',
+        required: true,
+        placeholder:
+          'Summarize the last month of additions... rewrite this passage for a general audience... compare the two most-cited papers...',
+        helpText: "Any task or question the cart's material could help with.",
+      },
+    ],
+  },
 ]

@@ -198,18 +198,20 @@ class TestRegistry(unittest.TestCase):
         # Force side-effect imports (mirrors what agents_routes.py does
         # at app boot).
         from api.agents import (  # noqa: F401
-            auto_briefing, qa, professor, cart_curator,
+            auto_briefing, qa, professor, cart_curator, free_agent,
         )
 
-    def test_all_four_registered(self):
+    def test_all_five_registered(self):
         from api.agents.registry import REGISTRY
-        for slug in ("auto_briefing", "qa", "professor", "cart_curator"):
+        for slug in (
+            "auto_briefing", "qa", "professor", "cart_curator", "free_agent",
+        ):
             self.assertIn(slug, REGISTRY, f"Missing agent slug: {slug}")
 
     def test_list_agents_shape(self):
         from api.agents.registry import list_agents
         agents = list_agents()
-        self.assertGreaterEqual(len(agents), 4)
+        self.assertGreaterEqual(len(agents), 5)
         for a in agents:
             self.assertIn("name", a)
             self.assertIn("display_name", a)
@@ -226,7 +228,7 @@ class TestRegistry(unittest.TestCase):
 class TestExecutor(unittest.TestCase):
     def setUp(self):
         from api.agents import (  # noqa: F401
-            auto_briefing, qa, professor, cart_curator,
+            auto_briefing, qa, professor, cart_curator, free_agent,
         )
 
     def test_unknown_slug_raises(self):
@@ -289,7 +291,7 @@ class _AgentSmokeBase(unittest.TestCase):
             raise unittest.SkipTest("Abstract base class")
         # Force side-effect imports of all agent modules.
         from api.agents import (  # noqa: F401
-            auto_briefing, qa, professor, cart_curator,
+            auto_briefing, qa, professor, cart_curator, free_agent,
         )
         cls.cart_path = _make_synthetic_cart(
             _CART_PASSAGES, _CART_SOURCES,
@@ -415,6 +417,47 @@ class TestCartCuratorSmoke(_AgentSmokeBase):
         self.assertIn("Under-represented", output.markdown)
         # Curator cites the FIRST pattern index for each flagged source.
         self.assertGreater(len(output.cited_patterns), 0)
+
+
+class TestFreeAgentSmoke(_AgentSmokeBase):
+    AGENT_SLUG = "free_agent"
+    INPUTS = {
+        "user_input": (
+            "Summarize the Sysco Portland deliveries in three bullet points."
+        ),
+    }
+
+    def test_cites_patterns_and_no_question_framing(self):
+        # Free Agent retrieves top-N + populates cited_patterns like Q&A,
+        # but the prompt drops question framing in favor of "User task:".
+        from api.agents.executor import run_agent
+        fake = _FakeAdapter()
+        with mock.patch("api.llm.get_llm_adapter", return_value=fake):
+            output = run_agent(
+                agent_name=self.AGENT_SLUG,
+                cart_path=self.cart_path,
+                raw_inputs=self.INPUTS,
+            )
+        self.assertGreater(len(output.cited_patterns), 0)
+        # Markdown includes a Sources section with vps:// links.
+        self.assertIn("Sources", output.markdown)
+        self.assertIn("vps://source/", output.markdown)
+        # Response section header, not "Answer" (Q&A idiom).
+        self.assertIn("## Response", output.markdown)
+        self.assertIn("**Task.**", output.markdown)
+        # Prompt contract: general "User task:" framing, NOT question framing.
+        assert fake.last_prompt is not None
+        self.assertIn("User task:", fake.last_prompt)
+        self.assertNotIn("Question:", fake.last_prompt)
+
+    def test_empty_input_raises(self):
+        from api.agents.executor import run_agent
+        with self.assertRaises(ValueError):
+            run_agent(
+                agent_name=self.AGENT_SLUG,
+                cart_path=self.cart_path,
+                raw_inputs={"user_input": ""},
+            )
 
 
 if __name__ == "__main__":

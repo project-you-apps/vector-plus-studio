@@ -63,6 +63,7 @@ from .agents import (  # noqa: F401  (import side-effects only)
     qa,
     professor,
     cart_curator,
+    free_agent,
 )
 from .agents import (
     REGISTRY,
