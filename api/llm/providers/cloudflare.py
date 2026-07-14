@@ -295,7 +295,25 @@ def _extract_text_and_tokens(
     Some models omit ``usage`` entirely. Missing keys degrade to
     ``text=""`` / ``tokens_used=None`` rather than raising, so callers
     always get a well-formed :class:`SynthesisResult`.
+
+    Worker mode (``CF_ENDPOINT_MODE=worker``) returns a FLAT envelope
+    instead — see ``cloudflare-worker/src/index.ts::SynthesizeResponse``:
+
+        {"text": "...", "model": "...", "tokens_used": N,
+         "neurons_used_estimate": M, "elapsed_ms": T}
+
+    We prefer the flat shape when a top-level ``text`` field is present;
+    otherwise fall through to the direct-API ``result.response`` shape.
     """
+    # Worker envelope: flat top-level `text` + `tokens_used`.
+    top_text = response_json.get("text")
+    if isinstance(top_text, str) and top_text:
+        top_tokens = response_json.get("tokens_used")
+        if isinstance(top_tokens, (int, float)):
+            return top_text, int(top_tokens)
+        return top_text, None
+
+    # Direct API envelope: nested `result.response` + `result.usage.total_tokens`.
     result = response_json.get("result") or {}
     if not isinstance(result, dict):
         return "", None
