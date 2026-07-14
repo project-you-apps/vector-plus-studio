@@ -48,11 +48,10 @@ def parse_pdf(filepath: Path) -> list[dict]:
 # Same constants both sides so paired and browser-only builds route the same
 # file the same way (design doc Q3 golden-path invariant).
 PDF_CLASSIFY_TEXT_THRESHOLD = 500
-# Andy 2026-07-05 PM (Grant's pitch deck): expanded from 3 → 15 pages because
-# the deck was clean on pages 1-3 and only had broken ToUnicode fonts on
-# pages 4-7. Sampling only the head missed the corruption. Cost is
-# ~100-500ms extra classify time on a 15-page deck; a 300-page report caps
-# out at 15 samples so classify stays fast on long documents.
+# Sample up to 15 pages during classification. Some PDFs are clean on the
+# first few pages and only expose broken ToUnicode fonts later on; head-only
+# sampling misses that corruption. Cost is ~100-500ms extra classify time
+# on a 15-page document; long PDFs cap here so classify stays fast.
 PDF_CLASSIFY_MAX_PAGES = 15
 # Andy 2026-07-05: PDFs with broken font ToUnicode maps return LOTS of
 # characters (well over the 500-char threshold) but most are Private Use
