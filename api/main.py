@@ -214,6 +214,7 @@ from . import cartbuilder
 from . import uploads as uploads_mod
 from . import reports_routes
 from . import llm_routes
+from . import agents_routes
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +269,12 @@ app.include_router(uploads_mod.router)
 # coverage) self-register via @register_report when reports_routes imports them.
 app.include_router(reports_routes.router)
 app.include_router(llm_routes.router)
+
+# Agents engine dispatch — POST /api/agents/run + GET /api/agents/list +
+# POST /api/agents/save_to_cart. The 4 v1 agents (auto_briefing, qa,
+# professor, cart_curator) self-register via @register_agent when
+# agents_routes imports them at module top.
+app.include_router(agents_routes.router)
 
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ import type {
   MemboxCartInfo, MemboxStatus,
 } from '../api/types'
 import * as api from '../api/client'
-import type { GenerateReportResponse } from '../api/client'
+import type { GenerateReportResponse, RunAgentResponse } from '../api/client'
 import { probeImageBuilder } from '../api/imageBuilder'
 import { detectWebGPU, runWebGpuAssociate, loadBrainForCart, isBrainLoadedFor } from '../lib/webgpuAssociate'
 import { parseCartFile, cosineSearchLocal } from '../lib/localCart'
@@ -121,7 +121,7 @@ export interface WalkStep {
 // Top-level screen state (nav rail picks which screen renders in the main area).
 // 'search' is the default; the original VPS 1.0 search/CRUD experience. Other
 // screens are stubbed in this iteration and fleshed out incrementally.
-export type ActiveScreen = 'search' | 'overview' | 'cartBuilder' | 'crud' | 'reports' | 'sql' | 'settings'
+export type ActiveScreen = 'search' | 'overview' | 'cartBuilder' | 'crud' | 'reports' | 'agents' | 'sql' | 'settings'
 
 // Current report display state — lifted from ReportsScreen.tsx 2026-07-13
 // so a report survives tab switches (Reports → Search → Reports resumes
@@ -139,6 +139,24 @@ export interface CurrentReport {
   reportDisplayName: string
   submittedInputs: Record<string, unknown>
   response: GenerateReportResponse
+  generatedAt: string  // ISO
+}
+
+// Current agent run display state — same shape rationale as CurrentReport:
+// lifted into the store so a run survives tab switches (Agents → Search →
+// Agents resumes where the user left off). Cleared on × Close; overwritten
+// on next Run success. `submittedInputs` = the exact payload used so
+// Regenerate can pre-fill the input pane. `runId` is the server-issued
+// UUID needed by save_to_cart. Same invariant as `currentReport`:
+// setCurrentAgentRun requires non-null; clearCurrentAgentRun is the ONLY
+// path to null. Do not add other clearers.
+export interface CurrentAgentRun {
+  cartRef: string
+  cartLabel: string | null
+  agentSlug: string
+  agentDisplayName: string
+  submittedInputs: Record<string, unknown>
+  response: RunAgentResponse
   generatedAt: string  // ISO
 }
 
@@ -227,6 +245,17 @@ interface AppState {
   currentReport: CurrentReport | null
   setCurrentReport: (report: CurrentReport) => void
   clearCurrentReport: () => void
+
+  // Agents — current run state + cross-tab persistence (2026-07-13).
+  // Same INVARIANT as currentReport: setCurrentAgentRun requires non-null,
+  // clearCurrentAgentRun is the only clear path. Wired to the × Close
+  // button in the results toolbar. sessionId is a browser-instance-scoped
+  // opaque token used to key the server-side neuron-cap counter. Hydrated
+  // from localStorage on first read; regenerated if absent.
+  currentAgentRun: CurrentAgentRun | null
+  setCurrentAgentRun: (run: CurrentAgentRun) => void
+  clearCurrentAgentRun: () => void
+  agentSessionId: string
   pendingSourceFocus: PendingSourceFocus | null
   focusSearchOnSource: (slug: string, displayName: string) => void
   consumePendingSourceFocus: () => PendingSourceFocus | null
@@ -437,6 +466,30 @@ export const useAppStore = create<AppState>((set, get) => ({
   currentReport: null,
   setCurrentReport: (report) => set({ currentReport: report }),
   clearCurrentReport: () => set({ currentReport: null }),
+
+  // Agents current-run state. Same invariant enforcement as currentReport;
+  // setCurrentAgentRun is type-locked non-null in the AppState declaration.
+  currentAgentRun: null,
+  setCurrentAgentRun: (run) => set({ currentAgentRun: run }),
+  clearCurrentAgentRun: () => set({ currentAgentRun: null }),
+  agentSessionId: (() => {
+    // Persist once per browser instance so a page refresh keeps the same
+    // neuron-cap bucket. Regenerate on first read if missing/corrupt.
+    const KEY = 'vp-agent-session-id'
+    try {
+      const existing = localStorage.getItem(KEY)
+      if (existing && existing.length > 8) return existing
+      // Cheap random id — nanoid would be another dep; crypto.randomUUID
+      // is baked into all browsers we target (2026 evergreen).
+      const fresh = (typeof crypto !== 'undefined' && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : `sess-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`
+      localStorage.setItem(KEY, fresh)
+      return fresh
+    } catch {
+      return `sess-fallback-${Date.now().toString(36)}`
+    }
+  })(),
   pendingSourceFocus: null,
   focusSearchOnSource: (slug, displayName) => {
     // Set the focus payload FIRST — SearchBar's mount effect reads via

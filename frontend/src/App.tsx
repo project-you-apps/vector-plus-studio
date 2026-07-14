@@ -15,6 +15,7 @@ import SettingsScreen from './components/SettingsScreen'
 import CartBuilderScreen from './components/CartBuilderScreen'
 import CRUDScreen from './components/CRUDScreen'
 import ReportsScreen from './components/ReportsScreen'
+import AgentsScreen from './components/AgentsScreen'
 import SQLEditorScreen from './components/SQLEditorScreen'
 import FolderPickerModal from './components/FolderPickerModal'
 import SignInModal from './components/SignInModal'
@@ -144,6 +145,8 @@ export default function App() {
         {activeScreen === 'crud' && <CRUDScreen />}
 
         {activeScreen === 'reports' && <ReportsScreen />}
+
+        {activeScreen === 'agents' && <AgentsScreen />}
 
         {activeScreen === 'sql' && <SQLEditorScreen />}
 

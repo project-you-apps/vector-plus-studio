@@ -339,6 +339,134 @@ export async function generateReport(
   return res.json()
 }
 
+// --- Agents engine (2026-07-13 MVP) ---
+//
+// Mirrors the Reports client shape — POST /api/agents/run for dispatch,
+// GET /api/agents/list for enumeration, POST /api/agents/save_to_cart
+// for the v1 stub save action. Wire shape documented in
+// api/agents_routes.py; keep the two in sync (they share the
+// AgentRun / SaveToCart pydantic models).
+
+export interface RunAgentRequest {
+  agent_slug: string
+  cart_ref: string
+  inputs: Record<string, unknown>
+  // Opaque per-browser identifier; used by the server-side neuron-cap
+  // counter to key per-session buckets. Generated once in appStore and
+  // persisted in localStorage so a refresh doesn't rekey the bucket.
+  session_id?: string
+}
+
+export interface RunAgentResponse {
+  run_id: string
+  markdown: string
+  metadata: Record<string, unknown>
+  cited_patterns: number[]
+  warnings: string[]
+  llm_usage: Record<string, unknown>
+  agent_slug: string
+  generated_at: string
+  elapsed_ms: number
+}
+
+export interface RunAgentErrorDetail {
+  error: string
+  message: string
+  agent_slug?: string
+  cart_ref?: string
+  reset_at?: string
+  cap_hit?: string
+}
+
+export class RunAgentError extends Error {
+  status: number
+  detail: RunAgentErrorDetail
+  constructor(status: number, detail: RunAgentErrorDetail) {
+    super(detail.message || `Agent run failed (${status})`)
+    this.status = status
+    this.detail = detail
+  }
+}
+
+export interface AgentListEntry {
+  name: string
+  display_name: string
+  description: string
+  input_schema: Array<Record<string, unknown>>
+  llm_dependency: boolean
+}
+
+export interface AgentListResponse {
+  agents: AgentListEntry[]
+  caps: {
+    max_requests_per_day: number
+    max_neurons_per_day: number
+    warn_threshold: number
+  }
+}
+
+export async function fetchAgentList(): Promise<AgentListResponse> {
+  return fetchJSON<AgentListResponse>('/agents/list')
+}
+
+export async function runAgent(
+  req: RunAgentRequest,
+): Promise<RunAgentResponse> {
+  const res = await fetch(`${BASE}/agents/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(req),
+  })
+  if (!res.ok) {
+    // Same detail-unwrapping dance as generateReport — FastAPI's
+    // HTTPException detail is a dict; Pydantic 422 is a list.
+    let raw: unknown
+    try { raw = await res.json() } catch { raw = null }
+    let detail: RunAgentErrorDetail
+    if (raw && typeof raw === 'object' && 'detail' in raw) {
+      const d = (raw as { detail: unknown }).detail
+      if (Array.isArray(d)) {
+        const first = d[0] as { msg?: string; loc?: string[] } | undefined
+        detail = {
+          error: 'validation_error',
+          message: first?.msg
+            ? `${first.msg}${first.loc ? ` (${first.loc.join('.')})` : ''}`
+            : 'Request validation failed',
+        }
+      } else if (typeof d === 'object' && d !== null) {
+        detail = d as RunAgentErrorDetail
+      } else {
+        detail = { error: 'unknown_error', message: String(d ?? `HTTP ${res.status}`) }
+      }
+    } else {
+      detail = { error: 'unknown_error', message: `HTTP ${res.status}` }
+    }
+    throw new RunAgentError(res.status, detail)
+  }
+  return res.json()
+}
+
+export interface SaveAgentToCartResponse {
+  success: boolean
+  saved_at: string
+  message: string
+  run_id: string
+}
+
+export async function saveAgentToCart(
+  runId: string,
+  opts?: { cartRef?: string; sessionId?: string },
+): Promise<SaveAgentToCartResponse> {
+  return fetchJSON<SaveAgentToCartResponse>('/agents/save_to_cart', {
+    method: 'POST',
+    body: JSON.stringify({
+      run_id: runId,
+      cart_ref: opts?.cartRef ?? null,
+      session_id: opts?.sessionId ?? null,
+    }),
+  })
+}
+
 export async function forgeCartridge(name: string, files: File[]) {
   const form = new FormData()
   form.append('name', name)
