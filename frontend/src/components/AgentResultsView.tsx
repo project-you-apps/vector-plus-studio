@@ -1,13 +1,13 @@
 import { Children, isValidElement, useEffect, useRef, useState } from 'react'
 import {
   X, RefreshCw, Copy, Check, Save, Clock3, AlertTriangle,
-  Download, ChevronDown, FileText, Code, FileType, File, Table, Sheet,
+  Download, ChevronDown, ChevronRight, FileText, Code, FileType, File, Table, Sheet,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { RunAgentResponse } from '../api/client'
 import { saveAgentToCart } from '../api/client'
-import type { AgentDefinition } from '../agents/agent-definitions'
+import type { AgentDefinition, FieldSchema } from '../agents/agent-definitions'
 import { useAppStore } from '../store/appStore'
 import { useCartBuilderStore } from '../store/cartBuilderStore'
 import {
@@ -54,12 +54,14 @@ export default function AgentResultsView({
   agent,
   response,
   cartLabel,
+  submittedInputs,
   onClose,
   onRegenerate,
 }: {
   agent: AgentDefinition
   response: RunAgentResponse
   cartLabel: string | null
+  submittedInputs: Record<string, unknown>
   onClose: () => void
   onRegenerate: () => void
 }) {
@@ -235,6 +237,15 @@ export default function AgentResultsView({
           )}
         </div>
       </div>
+
+      {/* Inputs — collapsible summary of the exact values that produced this
+          run. Sits between the header row and the response body so users
+          reviewing a saved-to-cart run can see WHAT was asked without
+          re-opening the input pane. Single-input recipes (Q&A, Free Agent)
+          auto-expand to a body-styled paragraph; multi-input recipes render
+          a compact "▶ Inputs · a: x · b: y" summary that toggles to a full
+          list. */}
+      <InputsSection schema={agent.inputSchema} values={submittedInputs} accent="purple" />
 
       {/* Warnings */}
       {response.warnings.length > 0 && (
@@ -473,5 +484,146 @@ function DownloadMenuItem({
       {icon}
       <span>{label}</span>
     </button>
+  )
+}
+
+// -----------------------------------------------------------------------------
+// Inputs section (shared shape with ReportResultsView — kept inline in both
+// files per MVP directive; extract if a third consumer appears).
+//
+// Renders the exact values a user submitted for this run. The values sit in
+// the store as `submittedInputs: Record<string, unknown>` — a passthrough of
+// the form payload sent to /api/agents/run. We pair them here with the
+// agent's inputSchema so each row shows the human label + a nicely-rendered
+// value, not the raw slug + raw form value.
+//
+// Interaction:
+//   • Single-field schemas (Q&A's `question`, Free Agent's `user_input`)
+//     auto-expand to a body-styled paragraph. There is no toggle — for a
+//     single-input recipe the value IS the summary.
+//   • Multi-field schemas default collapsed. The header shows a one-line
+//     "Inputs · Label: value · Label: value" summary of only the filled
+//     fields. Click the chevron / header to expand into a dt/dd-style list
+//     that includes empty fields (rendered as em-dash) so users can see the
+//     full form state, not just what was populated.
+//   • State is per-render — reopening the toggle on every result view is
+//     acceptable; no need to persist to the store.
+// -----------------------------------------------------------------------------
+
+// True for values the form treats as "not filled" — mirrors ReportInputPane's
+// `isFilled` inverse. Date-range needs its own check because the empty state
+// is `{from:'', to:''}`, not literal empty string.
+function _isEmptyValue(v: unknown): boolean {
+  if (v === null || v === undefined) return true
+  if (typeof v === 'string' && v === '') return true
+  if (typeof v === 'object') {
+    const dr = v as { from?: unknown; to?: unknown }
+    if ('from' in dr || 'to' in dr) {
+      const from = typeof dr.from === 'string' ? dr.from : ''
+      const to = typeof dr.to === 'string' ? dr.to : ''
+      return !from && !to
+    }
+  }
+  return false
+}
+
+// Render a single field's value for display. Date-range uses the arrow form
+// the brief calls for. Booleans are future-proofed for a later FieldType.
+// Everything else falls through to String(v). Empty always renders as em-dash
+// (consistent with the "pick one, stay consistent" note in the brief).
+function _formatValue(field: FieldSchema, v: unknown): string {
+  if (_isEmptyValue(v)) return '—'
+  if (field.type === 'date-range') {
+    const dr = v as { from?: string; to?: string }
+    const from = dr.from || '(any)'
+    const to = dr.to || '(any)'
+    if (from === '(any)' && to === '(any)') return '(any)'
+    return `${from} → ${to}`
+  }
+  if (typeof v === 'boolean') return v ? 'Yes' : 'No'
+  return String(v)
+}
+
+function InputsSection({
+  schema,
+  values,
+  accent,
+}: {
+  schema: FieldSchema[]
+  values: Record<string, unknown>
+  accent: 'purple' | 'emerald'
+}) {
+  // Nothing to show if the schema is empty (defensive — no v1 recipe has
+  // this, but a future zero-input recipe shouldn't render an empty section).
+  if (!schema || schema.length === 0) return null
+
+  // Single-field + filled → auto-expand to a body paragraph. Q&A and Free
+  // Agent are the two v1 recipes this hits.
+  const singleField = schema.length === 1 ? schema[0] : null
+  const singleFieldValue = singleField ? values[singleField.name] : undefined
+  const singleFieldFilled = singleField && !_isEmptyValue(singleFieldValue)
+
+  // Multi-field or single-field-empty → collapsible list. Default closed.
+  const [expanded, setExpanded] = useState(false)
+
+  const accentText = accent === 'purple' ? 'text-purple-300' : 'text-emerald-300'
+  const accentHover = accent === 'purple' ? 'hover:text-purple-200' : 'hover:text-emerald-200'
+  const accentBorder = accent === 'purple' ? 'border-purple-500/30' : 'border-emerald-500/30'
+  const accentDim = accent === 'purple' ? 'text-purple-300/70' : 'text-emerald-300/70'
+
+  if (singleField && singleFieldFilled) {
+    return (
+      <div className={`mx-4 mt-3 mb-1 rounded-lg border ${accentBorder} bg-slate-900/30 px-4 py-3`}>
+        <div className={`text-[10px] uppercase tracking-wider font-medium ${accentDim} mb-1.5`}>
+          {singleField.label}
+        </div>
+        <div className="text-[13px] text-slate-200 italic leading-relaxed whitespace-pre-wrap">
+          {String(singleFieldValue ?? '')}
+        </div>
+      </div>
+    )
+  }
+
+  // Compact one-line summary of filled fields for the collapsed state.
+  const filledPairs = schema
+    .filter((f) => !_isEmptyValue(values[f.name]))
+    .map((f) => `${f.label}: ${_formatValue(f, values[f.name])}`)
+  const summaryText =
+    filledPairs.length > 0 ? filledPairs.join(' · ') : '(no values filled)'
+
+  return (
+    <div className={`mx-4 mt-3 mb-1 rounded-lg border ${accentBorder} bg-slate-900/30`}>
+      <button
+        type="button"
+        onClick={() => setExpanded((x) => !x)}
+        aria-expanded={expanded}
+        className={`w-full flex items-center gap-2 px-4 py-2 text-left ${accentText} ${accentHover} transition-colors`}
+      >
+        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        <span className="text-[11px] uppercase tracking-wider font-medium">Inputs</span>
+        {!expanded && (
+          <span className="text-[11px] text-slate-400 font-normal normal-case tracking-normal truncate">
+            <span className="text-slate-600 mx-1">·</span>
+            <span className="text-slate-400">{summaryText}</span>
+          </span>
+        )}
+      </button>
+      {expanded && (
+        <dl className="px-4 pb-3 pt-1 grid grid-cols-[minmax(0,180px)_1fr] gap-x-4 gap-y-1 text-[12px]">
+          {schema.map((field) => {
+            const raw = values[field.name]
+            const empty = _isEmptyValue(raw)
+            return (
+              <div key={field.name} className="contents">
+                <dt className="text-slate-500 truncate" title={field.label}>{field.label}</dt>
+                <dd className={empty ? 'text-slate-600 italic' : 'text-slate-200 whitespace-pre-wrap break-words'}>
+                  {_formatValue(field, raw)}
+                </dd>
+              </div>
+            )
+          })}
+        </dl>
+      )}
+    </div>
   )
 }

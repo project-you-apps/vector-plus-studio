@@ -323,6 +323,7 @@ export default function ReportsScreen() {
             report={displayedReport}
             response={currentReport.response}
             cartLabel={currentReport.cartLabel}
+            submittedInputs={currentReport.submittedInputs}
             onClose={handleCloseResults}
             onRegenerate={handleRegenerate}
           />

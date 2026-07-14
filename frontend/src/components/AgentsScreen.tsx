@@ -217,6 +217,7 @@ export default function AgentsScreen() {
             agent={displayedAgent}
             response={currentAgentRun.response}
             cartLabel={currentAgentRun.cartLabel}
+            submittedInputs={currentAgentRun.submittedInputs}
             onClose={handleCloseResults}
             onRegenerate={handleRegenerate}
           />
