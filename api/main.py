@@ -213,6 +213,7 @@ from .forge import forge_cartridge
 from . import cartbuilder
 from . import uploads as uploads_mod
 from . import reports_routes
+from . import llm_routes
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +267,7 @@ app.include_router(uploads_mod.router)
 # The 5 Wave-1 report modules (summary, entity_rollup, change_log, comparison,
 # coverage) self-register via @register_report when reports_routes imports them.
 app.include_router(reports_routes.router)
+app.include_router(llm_routes.router)
 
 
 # ---------------------------------------------------------------------------
