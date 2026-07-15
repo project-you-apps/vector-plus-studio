@@ -13,6 +13,8 @@ import {
   buildCartFromPassages,
   chunkSections,
   parseFile,
+  parseViaImageBuilder,
+  routeForFile,
   type BuiltCart,
   type PipelineProgress,
 } from '../cart-builder-v2'
@@ -84,6 +86,10 @@ export default function CRUDScreen() {
   const localCartTombstoneBySource = useAppStore((s) => s.localCartTombstoneBySource)
   const localCartListSources = useAppStore((s) => s.localCartListSources)
   const localCartSave = useAppStore((s) => s.localCartSave)
+  // Cross-tab data-freshness signal. Bumped after every successful mutation
+  // below so Search's Pattern-0 TOC + results refetch on the next visit
+  // without any polling loop or a full mount cycle.
+  const bumpCartVersion = useAppStore((s) => s.bumpCartVersion)
 
   const activeLocalCart = activeLocalCartName ? localCarts.get(activeLocalCartName) ?? null : null
   const isLocalMount = !!activeLocalCart && !status?.mounted_cartridge
@@ -161,6 +167,7 @@ export default function CRUDScreen() {
       if (resp.success) {
         setAddText('')
         setAddSource('')
+        bumpCartVersion()
       }
     } else {
       const resp = await addPassage(text)
@@ -168,16 +175,22 @@ export default function CRUDScreen() {
       if (resp.success) {
         setAddText('')
         fetchStatus()
+        bumpCartVersion()
       }
     }
   }
 
   // ── Add files (LocalCart only) ──
-  // Reuses cart-builder-v2's parseFile + chunkSections so the file→passage
-  // pipeline matches Cart Builder's behavior exactly (300-word chunks, 50
-  // overlap, same parsers for PDF/DOCX/XLSX/MD/HTML/RTF/TXT). Each chunk
-  // becomes one passage with source = file.name so Source Files panel
-  // groups them by their origin file.
+  // Reuses cart-builder-v2's per-file router so the file→passage pipeline
+  // matches Cart Builder's behavior exactly. Text-shaped files (PDF/DOCX/
+  // XLSX/MD/HTML/RTF/TXT) flow through parseFile + chunkSections (300-word
+  // chunks, 50 overlap). Image files (PNG/JPG/etc.) and scanned PDFs are
+  // routed through parseViaImageBuilder — same OCR path Cart Builder uses.
+  // Without the router, images fell through to the text catch-all parser
+  // and got chunked as raw bytes (dozens of gibberish passages per file);
+  // now they OCR cleanly with graphics + tables surfaced as their own
+  // patterns. Each pattern gets source = file.name so Source Files groups
+  // them by their origin file.
   const handleAddFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return
     if (!isLocalMount) return
@@ -187,23 +200,70 @@ export default function CRUDScreen() {
       let totalFailed = 0
       for (let i = 0; i < files.length; i++) {
         const file = files[i]
-        setAddFilesStatus(`(${i + 1}/${files.length}) Parsing ${file.name}…`)
+        setAddFilesStatus(`(${i + 1}/${files.length}) Routing ${file.name}…`)
         try {
-          const parsed = await parseFile(file)
-          if (parsed.sections.length === 0) {
-            log('add', `${file.name}: no text extracted`, false)
-            totalFailed++
-            continue
+          // Route decision — sync MIME/extension check for images and text,
+          // async pdfjs classification for PDFs (text-bearing vs. scanned).
+          // Matches Cart Builder's pipeline.buildCartFromFiles routing.
+          const route = await routeForFile(file)
+
+          let chunks: Array<{ text: string; source?: string }> = []
+          let addedNote = ''
+
+          if (route === 'image' || route === 'scanned') {
+            // Image / scanned-PDF path — delegates OCR to Image Builder
+            // (127.0.0.1:7879). Throws if Image Builder is unreachable —
+            // the surrounding catch surfaces a helpful log line instead
+            // of chunking raw bytes as text.
+            setAddFilesStatus(
+              `(${i + 1}/${files.length}) OCR-ing ${file.name} via Image Builder…`
+            )
+            const parsed = await parseViaImageBuilder(file)
+            // Text sections (OCR'd markdown) still flow through the
+            // chunker so oversized OCR output gets split at 300-word
+            // windows. Graphics + tables bypass the chunker; each is
+            // its own pattern — matches Cart Builder's writer behavior.
+            const textChunks = chunkSections(parsed.textSections)
+            const allSections = [
+              ...textChunks,
+              ...parsed.graphicSections,
+              ...parsed.tableSections,
+            ]
+            if (allSections.length === 0) {
+              log('add', `${file.name}: OCR returned no content`, false)
+              totalFailed++
+              continue
+            }
+            chunks = allSections
+            addedNote = ' (OCR)'
+          } else {
+            // Existing text path — unchanged behavior for PDF/DOCX/XLSX/
+            // MD/HTML/RTF/TXT files.
+            const parsed = await parseFile(file)
+            if (parsed.sections.length === 0) {
+              log('add', `${file.name}: no text extracted`, false)
+              totalFailed++
+              continue
+            }
+            chunks = chunkSections(parsed.sections)
           }
-          const chunks = chunkSections(parsed.sections)
-          setAddFilesStatus(`(${i + 1}/${files.length}) Embedding ${chunks.length} chunk${chunks.length === 1 ? '' : 's'} from ${file.name}…`)
+
+          setAddFilesStatus(
+            `(${i + 1}/${files.length}) Embedding ${chunks.length} chunk${chunks.length === 1 ? '' : 's'} from ${file.name}…`
+          )
           let fileAdded = 0
           for (let c = 0; c < chunks.length; c++) {
-            setAddFilesStatus(`(${i + 1}/${files.length}) ${file.name}: embedding ${c + 1}/${chunks.length}…`)
+            setAddFilesStatus(
+              `(${i + 1}/${files.length}) ${file.name}: embedding ${c + 1}/${chunks.length}…`
+            )
             const resp = await localCartAddPassage(chunks[c].text, file.name)
             if (resp.success) fileAdded++
           }
-          log('add', `Added ${fileAdded}/${chunks.length} chunk${chunks.length === 1 ? '' : 's'} from ${file.name}`, fileAdded > 0)
+          log(
+            'add',
+            `Added ${fileAdded}/${chunks.length} chunk${chunks.length === 1 ? '' : 's'} from ${file.name}${addedNote}`,
+            fileAdded > 0,
+          )
           totalAdded += fileAdded
         } catch (e) {
           const msg = e instanceof Error ? e.message : 'Unknown parser error'
@@ -216,6 +276,7 @@ export default function CRUDScreen() {
           ? `Done — added ${totalAdded} passages, ${totalFailed} file${totalFailed === 1 ? '' : 's'} failed`
           : `Done — added ${totalAdded} passages from ${files.length} file${files.length === 1 ? '' : 's'}`
       )
+      if (totalAdded > 0) bumpCartVersion()
     } finally {
       setAddFilesProcessing(false)
       // Clear status after a few seconds so the panel returns to clean state
@@ -277,6 +338,7 @@ export default function CRUDScreen() {
         log('update', `Updated pattern #${idx} (new entry + tombstoned old)`, true)
         setUpdateText('')
         setUpdateIdx('')
+        bumpCartVersion()
       },
     })
   }
@@ -341,6 +403,7 @@ export default function CRUDScreen() {
           log('delete', `Tombstoned passage #${idx}`, true)
         }
         setDeleteIdx('')
+        bumpCartVersion()
       },
     })
   }
@@ -369,16 +432,16 @@ export default function CRUDScreen() {
       destructive: true,
       onConfirm: async () => {
         const added = localCartTombstoneBySource(sourcePath)
-        // Andy 2026-06-17 PM: include the actual passage indices that got
-        // tombstoned so it's visible at a glance whether the file→idx
-        // resolution is doing the right thing (vs the "is it tombstoning the
-        // typed idx instead?" suspicion).
+        // Include the actual passage indices that got tombstoned so it's
+        // visible at a glance whether the file→idx resolution is doing the
+        // right thing.
         const idxList = added.length === 0
           ? '(none — no matching sourcePath, possibly legacy cart)'
           : added.length <= 6
             ? `idx ${added.join(', ')}`
             : `idx ${added.slice(0, 6).join(', ')}…(+${added.length - 6} more)`
         log('delete', `Tombstoned ${added.length} from "${sourcePath}" — ${idxList}`, added.length > 0)
+        if (added.length > 0) bumpCartVersion()
       },
     })
   }
@@ -391,6 +454,7 @@ export default function CRUDScreen() {
       await restoreResult(idx)
       log('restore', `Restored pattern #${idx}`, true)
     }
+    bumpCartVersion()
   }
 
   // New Cart is composed entirely in the browser via the cart-builder-v2
@@ -480,7 +544,7 @@ export default function CRUDScreen() {
                       ref={addFilesInputRef}
                       type="file"
                       multiple
-                      accept=".pdf,.docx,.xlsx,.md,.markdown,.html,.htm,.rtf,.txt"
+                      accept=".pdf,.docx,.xlsx,.md,.markdown,.html,.htm,.rtf,.txt,.png,.jpg,.jpeg,.tif,.tiff,.webp,.bmp,.heic,.heif"
                       className="hidden"
                       onChange={(e) => handleAddFiles(e.target.files)}
                     />
@@ -505,6 +569,7 @@ export default function CRUDScreen() {
                     )}
                     <div className="text-[10px] text-slate-500 leading-snug px-1">
                       Supports PDF, DOCX, XLSX, MD, HTML, RTF, TXT — chunked at 300 words, 50-overlap.
+                      Images (PNG, JPG, TIFF, WEBP, BMP, HEIC) and scanned PDFs route through Image Builder for OCR.
                     </div>
                   </>
                 )}
@@ -794,9 +859,11 @@ export default function CRUDScreen() {
                 if (isLocalMount) {
                   const r = await localCartSave()
                   log('save', r.message, r.success)
+                  if (r.success) bumpCartVersion()
                 } else {
                   const r = await saveCartridge()
                   log('save', r.message, r.success)
+                  if (r.success) bumpCartVersion()
                 }
               }}
               className="px-4 py-1.5 rounded-lg text-sm font-medium bg-purple-500/30 border border-purple-500/50 text-purple-200 hover:bg-purple-500/40"

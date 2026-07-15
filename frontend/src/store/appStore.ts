@@ -6,6 +6,7 @@ import type {
 import * as api from '../api/client'
 import type { GenerateReportResponse, RunAgentResponse } from '../api/client'
 import { probeImageBuilder } from '../api/imageBuilder'
+import { probeReportBuilder } from '../api/reportBuilder'
 import { detectWebGPU, runWebGpuAssociate, loadBrainForCart, isBrainLoadedFor } from '../lib/webgpuAssociate'
 import { parseCartFile, cosineSearchLocal } from '../lib/localCart'
 
@@ -226,6 +227,30 @@ export interface ImageBuilderCapabilities {
   supported_formats: string[]
 }
 
+// Report Builder — third companion local service. FastAPI on 127.0.0.1:7880
+// runs the Wave 1 report engine + Agents engine against `.cart.npz` files in
+// a user-owned cart folder. Same detection state shape as Desktop Helper /
+// Image Builder; token is shared under DESKTOP_HELPER_TOKEN_KEY so one
+// pairing unlocks all three services.
+export type ReportBuilderState =
+  | 'unknown'
+  | 'detecting'
+  | 'not-found'
+  | 'detected-unpaired'
+  | 'detected-paired'
+
+export interface ReportBuilderCapabilities {
+  exe: string
+  version?: string
+  port: number
+  capabilities: string[]
+  reports: string[]
+  agents: string[]
+  wave2_pending: string[]
+  vision: boolean
+  cart_dir: string
+}
+
 interface AppState {
   // Active screen (nav rail)
   activeScreen: ActiveScreen
@@ -378,6 +403,15 @@ interface AppState {
   pattern0BackToTopSignal: number
   triggerPattern0BackToTop: () => void
 
+  // Cross-tab data-freshness signal. Bumped by any cart-mutating action so
+  // consumers on OTHER tabs (Search's Pattern-0 TOC, results list) can refetch
+  // without polling. The counter is monotonic so any effect subscribed to it
+  // fires on every mutation. Contract: this is a DATA refresh signal, not a
+  // UI reset — subscribers must preserve scroll position, search input, and
+  // any pending user work. See Pattern0TocPanel + SearchBar for consumers.
+  cartVersion: number
+  bumpCartVersion: () => void
+
   // Editor -- used for both Add Passage and Edit Passage
   editorOpen: boolean
   editorText: string
@@ -441,6 +475,15 @@ interface AppState {
   imageBuilderState: ImageBuilderState
   imageBuilderCapabilities: ImageBuilderCapabilities | null
   detectImageBuilder: () => Promise<void>
+
+  // Report Builder — third companion service. Same detection shape as
+  // Desktop Helper / Image Builder; token is shared across all three.
+  // When paired AND the active cart_ref carries a `local:` prefix, the
+  // Reports + Agents client swaps its base URL for 127.0.0.1:7880 so
+  // local carts execute without a droplet round-trip.
+  reportBuilderState: ReportBuilderState
+  reportBuilderCapabilities: ReportBuilderCapabilities | null
+  detectReportBuilder: () => Promise<void>
 
   // Actions
   fetchStatus: () => Promise<void>
@@ -704,6 +747,40 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  // ---- Report Builder ----
+  // Loopback probe on 127.0.0.1:7880. Same detection state machine as
+  // Image Builder; token is shared under DESKTOP_HELPER_TOKEN_KEY so
+  // one pairing lights up all three Builders. When Report Builder is
+  // paired AND the active cart_ref starts with `local:`, the client
+  // routes generateReport / runAgent / fetchReportCarts to the local
+  // exe instead of the droplet — data stays on the user's machine end
+  // to end.
+  reportBuilderState: 'unknown',
+  reportBuilderCapabilities: null,
+
+  detectReportBuilder: async () => {
+    const { reportBuilderState, desktopHelperToken } = get()
+    if (reportBuilderState === 'detecting') return
+    set({ reportBuilderState: 'detecting' })
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 1000)
+    try {
+      const result = await probeReportBuilder(controller.signal)
+      if (!result.ok) {
+        set({ reportBuilderState: 'not-found', reportBuilderCapabilities: null })
+        return
+      }
+      set({
+        reportBuilderCapabilities: result.capabilities,
+        reportBuilderState: desktopHelperToken ? 'detected-paired' : 'detected-unpaired',
+      })
+    } catch {
+      set({ reportBuilderState: 'not-found', reportBuilderCapabilities: null })
+    } finally {
+      clearTimeout(timer)
+    }
+  },
+
   localCarts: new Map(),
   activeLocalCart: null,
   localCartLoading: false,
@@ -776,6 +853,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       walkTrail: [],
       showTocPanel: true,
     })
+    // Signal every subscribed tab that the mounted-cart identity changed,
+    // matching the backend unmount path. Ensures Search's Pattern-0 TOC
+    // + results refresh on the next tab visit even when the user unmounts
+    // via the Header pill or the Search dropdown while sitting elsewhere.
+    get().bumpCartVersion()
   },
 
   // ---- LocalCart edit operations ----
@@ -1164,6 +1246,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     pattern0BackToTopSignal: s.pattern0BackToTopSignal + 1,
   })),
 
+  cartVersion: 0,
+  bumpCartVersion: () => set((s) => ({ cartVersion: s.cartVersion + 1 })),
+
   editorOpen: false,
   editorText: '',
   editorOriginalIdx: null,
@@ -1449,6 +1534,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         walkTrail: [], searchModeLabel: '', searchElapsed: 0,
         showTocPanel: true,
       })
+      // Fire the cross-tab data-freshness signal so consumers on other
+      // screens (Pattern-0 TOC, results list) refetch against the new cart
+      // the next time they render, without waiting for a full remount.
+      get().bumpCartVersion()
       pushToast('success', `Mounted ${resp.name} (${resp.pattern_count} patterns)`, 4000)
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Mount request failed'
@@ -1462,13 +1551,24 @@ export const useAppStore = create<AppState>((set, get) => ({
   unmount: async () => {
     try {
       await api.unmountCartridge()
-      await get().fetchStatus()
+      // Clear ALL cart-derived caches BEFORE the refresh so any consumer
+      // that reads mid-flight sees the empty state, not the ghost. The
+      // cartridges array is wiped first so the mount dropdown can't render
+      // a stale entry pointing at a path the backend no longer knows about
+      // (e.g. a sandbox upload that just got ejected or TTL-evicted). The
+      // list is then re-fetched below with the current server truth.
       set({
+        cartridges: [],
         results: [], query: '', deletedPatterns: [],
         walkTrail: [], searchModeLabel: '', searchElapsed: 0,
         showTocPanel: true,
         sandboxPerPatternMeta: null,
       })
+      // Await both refreshes so a subsequent user click on the dropdown
+      // observes fresh state, not the transiently-empty in-between window.
+      await get().fetchStatus()
+      await get().fetchCartridges()
+      get().bumpCartVersion()
     } catch (e) {
       console.error('Unmount failed:', e)
     }

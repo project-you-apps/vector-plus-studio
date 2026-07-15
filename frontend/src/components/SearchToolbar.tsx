@@ -97,8 +97,14 @@ export default function SearchToolbar() {
       const res = await api.ejectCartridge(sandboxPath)
       if (res.success) {
         pushToast('success', 'Cart ejected — file deleted from sandbox.', 4000)
-        fetchCartridges()
-        useAppStore.getState().fetchStatus()
+        // Await BOTH refreshes before the handler returns. Non-awaited
+        // fetches leave a race window in which the mount dropdown still
+        // renders the ejected cart's ghost row; a fast click on it would
+        // reissue a mount request against a now-nonexistent path and
+        // surface a "Cartridge not found" error citing the deleted file.
+        await fetchCartridges()
+        await useAppStore.getState().fetchStatus()
+        useAppStore.getState().bumpCartVersion()
       }
     } catch (err) {
       pushToast('error', `Eject failed: ${err instanceof Error ? err.message : 'unknown'}`, 6000)

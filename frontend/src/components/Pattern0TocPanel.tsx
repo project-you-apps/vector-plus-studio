@@ -114,6 +114,12 @@ export default function Pattern0TocPanel() {
   // the store so the toolbar can toggle its button's disabled/tooltip.
   const pattern0BackToTopSignal = useAppStore((s) => s.pattern0BackToTopSignal)
   const setPattern0DrillActive = useAppStore((s) => s.setPattern0DrillActive)
+  // Cross-tab data-freshness signal — bumped when Edit Carts saves,
+  // tombstones, restores, or adds passages. Subscribing here forces the
+  // Pattern-0 fetch to re-run so the TOC counts + descriptions reflect the
+  // edit on the next visit to Search, without waiting for a full mount
+  // cycle or a tab remount.
+  const cartVersion = useAppStore((s) => s.cartVersion)
 
   const [data, setData] = useState<Pattern0Response | null>(null)
   const [loading, setLoading] = useState(false)
@@ -191,21 +197,29 @@ export default function Pattern0TocPanel() {
     return () => { cancelled = true }
   }, [activeLocalCart, mountedCartridge, drillPath, drillOffset])
 
-  // Fetch whenever the mounted cart changes. LocalCart doesn't have a
-  // server-side Pattern-0 (nothing was uploaded); in that case we synthesize
-  // a derived response from LocalCart's sourcePaths without touching the
-  // backend. See localCartListSources() in appStore for the source-count
-  // logic we mirror here.
+  // UI-reset effect — fires ONLY on mounted-cart identity change. Filter,
+  // pagination, and drill state belong to whichever cart was previously
+  // active and don't resolve against the new one, so clear them. Kept
+  // separate from the data-fetch effect so a cartVersion bump (an Edit
+  // Carts save on the SAME cart) does a data refresh without clobbering
+  // the user's filter text, page position, or open drill — the brief's
+  // "data refresh, not a state reset" contract.
   useEffect(() => {
-    let cancelled = false
     setOffset(0)
     setPageJump('')
     setFilter('')
-    // Exit drill on cart change — the drillPath belongs to whichever cart was
-    // previously active and won't resolve against the new one.
     setDrillPath(null)
     setDrillOffset(0)
     setDrillPageJump('')
+  }, [mountedCartridge, activeLocalCart])
+
+  // Fetch whenever the mounted cart changes OR an Edit Carts mutation bumps
+  // cartVersion. LocalCart doesn't have a server-side Pattern-0 (nothing was
+  // uploaded); in that case we synthesize a derived response from LocalCart's
+  // sourcePaths without touching the backend. See localCartListSources() in
+  // appStore for the source-count logic we mirror here.
+  useEffect(() => {
+    let cancelled = false
 
     if (activeLocalCart) {
       // Browser-mounted cart — synthesize response client-side. Prefer the
@@ -322,7 +336,10 @@ export default function Pattern0TocPanel() {
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [mountedCartridge, activeLocalCart, localCarts])
+    // cartVersion is included so any Edit Carts mutation (save/tombstone/
+    // restore/add) that doesn't change the mounted-cart identity still
+    // triggers a refetch. The other deps handle mount-identity changes.
+  }, [mountedCartridge, activeLocalCart, localCarts, cartVersion])
 
   // Client-side substring filter (case-insensitive on name + description).
   const filteredItems = useMemo(() => {
