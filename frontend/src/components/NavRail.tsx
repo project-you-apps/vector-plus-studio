@@ -10,6 +10,7 @@ interface NavItem {
   label: string
   icon: React.ComponentType<{ size?: number; className?: string }>
   tooltip: string
+  disabled?: boolean
 }
 
 // Screens are listed in nav order. Search is the default landing screen.
@@ -22,7 +23,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: 'crud',        label: 'Edit Carts',   icon: Pencil,          tooltip: 'Add / update / delete passages on the mounted cart' },
   { key: 'reports',     label: 'Reports',      icon: FileBarChart,    tooltip: 'Structured views over the mounted cart (Summary, Timeline, Trend, …)' },
   { key: 'agents',      label: 'Agents',       icon: Bot,             tooltip: 'Scoped agent recipes (Auto-Briefing, Q&A, Professor, Curator) that run against the cart' },
-  { key: 'sql',         label: 'SQL',          icon: Terminal,        tooltip: 'SQL-like query editor (planned)' },
+  { key: 'sql',         label: 'SQL',          icon: Terminal,        tooltip: 'The SQL Interpreter is coming soon',                                     disabled: true },
   { key: 'settings',    label: 'Settings',     icon: Settings,        tooltip: 'Search modes, theme, advanced options' },
 ]
 
@@ -39,17 +40,22 @@ export default function NavRail() {
       {NAV_ITEMS.map((item) => {
         const Icon = item.icon
         const active = activeScreen === item.key
+        const disabled = item.disabled === true
         return (
           <button
             key={item.key}
-            onClick={() => setActiveScreen(item.key)}
+            onClick={disabled ? undefined : () => setActiveScreen(item.key)}
             aria-label={item.label}
             aria-current={active ? 'page' : undefined}
+            aria-disabled={disabled || undefined}
+            disabled={disabled}
             title={item.tooltip}
             className={`group flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors text-left ${
-              active
-                ? 'bg-purple-500/20 text-purple-300 font-medium'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+              disabled
+                ? 'text-slate-600 cursor-not-allowed opacity-60'
+                : active
+                  ? 'bg-purple-500/20 text-purple-300 font-medium'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
             }`}
           >
             <Icon size={16} className="flex-shrink-0" />
