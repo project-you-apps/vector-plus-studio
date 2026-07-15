@@ -46,8 +46,9 @@ from .source_link import source_link
 # ---------------------------------------------------------------------------
 
 # Threshold above which we warn the user that the search was too generic.
-# Grant's 6-month Sysco cart is expected to produce ~30-99 mentions for
-# a proper entity_name; >100 usually means someone typed "invoice" or "Portland".
+# A typical medium-sized cart produces ~30-99 mentions for a proper entity
+# name; >100 usually means someone typed a common word like "invoice" or a
+# city name that appears in many unrelated passages.
 GENERIC_MATCH_WARNING_THRESHOLD = 100
 
 # Context window per §5: "surrounding sentences" ~= ±100 chars unless a
@@ -484,9 +485,9 @@ def _extract_first_date(
     """Pick the best date for a passage.
 
     Strategy: prefer a date inside the passage body (that's the invoice /
-    email / doc date). Fall back to the source filename — Grant's Sysco
-    carts encode ``-YYYY-MM-DD.`` in the filename which is often the
-    only structured date on the passage.
+    email / doc date). Fall back to the source filename — many document
+    ingest pipelines encode ``-YYYY-MM-DD.`` in the filename which is
+    often the only structured date attached to the passage.
     """
     for target in (passage_text, source):
         if not target:
