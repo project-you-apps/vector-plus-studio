@@ -358,12 +358,25 @@ interface AppState {
   exactMatch: boolean
   setExactMatch: (exact: boolean) => void
 
-  // Pattern-0 TOC visibility on Search tab (Andy 2026-07-02). Old flow:
-  // TOC shows on first cart mount, replaced by results after first search,
-  // user can navigate back via the Pattern-0 button in SearchToolbar.
-  // Reset true on cart mount/unmount/select; false when search runs.
+  // Pattern-0 TOC visibility on Search tab. Old flow: TOC shows on first cart
+  // mount, replaced by results after first search, user can navigate back via
+  // the Pattern-0 button in SearchToolbar. Reset true on cart mount/unmount/
+  // select; false when search runs.
   showTocPanel: boolean
   setShowTocPanel: (show: boolean) => void
+
+  // Cross-component signal for the Pattern-0 button in SearchToolbar to
+  // collapse an open per-file drill-down in Pattern0TocPanel back to the TOC
+  // top view. Pattern0TocPanel owns the drill state locally (drillPath /
+  // drillOffset); this counter lets an outside component request a reset
+  // without lifting all of that state into the store. Bumping the value fires
+  // a useEffect in Pattern0TocPanel that clears the drill. Also tracks
+  // whether the drill is currently open so the button's disabled/tooltip
+  // states can differentiate "already at top" from "drilled, click to go up".
+  pattern0DrillActive: boolean
+  setPattern0DrillActive: (active: boolean) => void
+  pattern0BackToTopSignal: number
+  triggerPattern0BackToTop: () => void
 
   // Editor -- used for both Add Passage and Edit Passage
   editorOpen: boolean
@@ -1143,6 +1156,13 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   showTocPanel: true,
   setShowTocPanel: (show) => set({ showTocPanel: show }),
+
+  pattern0DrillActive: false,
+  setPattern0DrillActive: (active) => set({ pattern0DrillActive: active }),
+  pattern0BackToTopSignal: 0,
+  triggerPattern0BackToTop: () => set((s) => ({
+    pattern0BackToTopSignal: s.pattern0BackToTopSignal + 1,
+  })),
 
   editorOpen: false,
   editorText: '',

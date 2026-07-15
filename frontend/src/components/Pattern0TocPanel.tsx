@@ -109,6 +109,11 @@ export default function Pattern0TocPanel() {
   const listPassagesBySource = useAppStore((s) => s.localCartListPassagesBySource)
   const openModal = useAppStore((s) => s.openModal)
   const navigateModal = useAppStore((s) => s.navigateModal)
+  // Cross-component signal from SearchToolbar's Pattern-0 button to collapse
+  // an open drill back to the top TOC view. Also report drill status back to
+  // the store so the toolbar can toggle its button's disabled/tooltip.
+  const pattern0BackToTopSignal = useAppStore((s) => s.pattern0BackToTopSignal)
+  const setPattern0DrillActive = useAppStore((s) => s.setPattern0DrillActive)
 
   const [data, setData] = useState<Pattern0Response | null>(null)
   const [loading, setLoading] = useState(false)
@@ -134,6 +139,25 @@ export default function Pattern0TocPanel() {
     tombstonedCount: number
     passages: Array<{ idx: number; title: string; preview: string; tombstoned: boolean }>
   }>({ total: 0, activeCount: 0, tombstonedCount: 0, passages: [] })
+
+  // Report drill activity to the store so SearchToolbar's Pattern-0 button
+  // can differentiate "at top of TOC" (button dimmed) from "drilled into a
+  // file" (button live, click collapses back to top). Clears on unmount so a
+  // remounted panel starts at "not drilled."
+  useEffect(() => {
+    setPattern0DrillActive(drillPath !== null)
+    return () => setPattern0DrillActive(false)
+  }, [drillPath, setPattern0DrillActive])
+
+  // React to a back-to-top request from SearchToolbar's Pattern-0 button.
+  // The initial mount fires this with signal === 0, which is a no-op (drill
+  // state is already at its initial values). Subsequent increments collapse
+  // any open drill and reset pagination.
+  useEffect(() => {
+    setDrillPath(null)
+    setDrillOffset(0)
+    setDrillPageJump('')
+  }, [pattern0BackToTopSignal])
 
   useEffect(() => {
     // Only fire the server fetch for sandbox mounts. LocalCart flow uses

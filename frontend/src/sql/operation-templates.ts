@@ -29,15 +29,20 @@ export const SQL_OPERATIONS: SQLOperation[] = [
   'LIKE', 'INSERT', 'UPDATE', 'DELETE', 'LIMIT',
 ]
 
+// Every snippet ends with `\n` so successive pill clicks (or user typing) land
+// on a fresh line instead of jamming against the previous snippet's tail. If
+// a snippet naturally ends mid-clause (SELECT ... WHERE ), the trailing
+// newline lets the user compose the next clause below it and click another
+// pill without manual line breaks.
 export const OPERATION_TEMPLATES: Record<SQLOperation, string> = {
-  'SELECT':   `SELECT * FROM cart WHERE `,
+  'SELECT':   `SELECT * FROM cart WHERE \n`,
   'WHERE':    `WHERE source LIKE '%.pdf' AND relevance > 0.7\n`,
   'JOIN':     `LEFT JOIN cart 'other-cart-id' ON similarity(text) > 0.8\n`,
   'ORDER BY': `ORDER BY relevance DESC, date ASC\n`,
   'GROUP BY': `GROUP BY source, MONTH(date)\n`,
-  'LIKE':     `LIKE '%coconut milk%'`,
+  'LIKE':     `LIKE '%coconut milk%'\n`,
   'INSERT':   `INSERT INTO cart (text, source, tags)\n  VALUES ('new passage', 'manual-entry', 'important');\n`,
   'UPDATE':   `UPDATE cart SET tags = 'reviewed' WHERE pattern_id = 142;\n`,
   'DELETE':   `DELETE FROM cart WHERE pattern_id = 142;  -- tombstones\n`,
-  'LIMIT':    `LIMIT 10 OFFSET 0`,
+  'LIMIT':    `LIMIT 10 OFFSET 0\n`,
 }

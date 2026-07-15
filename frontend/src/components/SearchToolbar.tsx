@@ -31,6 +31,7 @@ export default function SearchToolbar() {
     localCarts, activeLocalCart, localCartLoading,
     mountLocalCart, unmountLocalCart, selectLocalCart,
     showTocPanel, setShowTocPanel,
+    pattern0DrillActive, triggerPattern0BackToTop,
   } = useAppStore()
   const localFileInputRef = useRef<HTMLInputElement>(null)
   const [walkTrailOpen, setWalkTrailOpen] = useState(false)
@@ -425,22 +426,37 @@ export default function SearchToolbar() {
 
       {/* Pattern-0 button — return the Search tab to the TOC view after a
           search. Visible only when a cart is mounted (server or local). When
-          the TOC is already visible, dims to signal "already here." */}
-      {(status?.mounted_cartridge || activeLocalCart) && (
-        <button
-          onClick={() => setShowTocPanel(true)}
-          disabled={showTocPanel}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border transition-colors ${
-            showTocPanel
-              ? 'border-slate-800 bg-slate-800/20 text-slate-500 cursor-default'
-              : 'border-slate-700 bg-slate-800/40 hover:bg-slate-800/70 hover:border-purple-500/40 text-slate-200'
-          }`}
-          title={showTocPanel ? 'Pattern-0 TOC is already visible' : 'Return to the Pattern-0 table of contents for this cart'}
-        >
-          <BookOpen size={14} className={showTocPanel ? 'text-slate-500' : 'text-purple-400'} />
-          <span className="font-medium">Pattern-0</span>
-        </button>
-      )}
+          the TOC is already visible AND no per-file drill is open, dims to
+          signal "already here." When the TOC is visible but the user has
+          drilled into a file, stays live and acts as back-to-top (collapses
+          the drill via a store signal that Pattern0TocPanel watches). */}
+      {(status?.mounted_cartridge || activeLocalCart) && (() => {
+        const atTop = showTocPanel && !pattern0DrillActive
+        return (
+          <button
+            onClick={() => {
+              setShowTocPanel(true)
+              triggerPattern0BackToTop()
+            }}
+            disabled={atTop}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+              atTop
+                ? 'border-slate-800 bg-slate-800/20 text-slate-500 cursor-default'
+                : 'border-slate-700 bg-slate-800/40 hover:bg-slate-800/70 hover:border-purple-500/40 text-slate-200'
+            }`}
+            title={
+              atTop
+                ? 'Pattern-0 TOC is already visible'
+                : pattern0DrillActive
+                  ? 'Back to the top of the Pattern-0 table of contents'
+                  : 'Return to the Pattern-0 table of contents for this cart'
+            }
+          >
+            <BookOpen size={14} className={atTop ? 'text-slate-500' : 'text-purple-400'} />
+            <span className="font-medium">Pattern-0</span>
+          </button>
+        )
+      })()}
 
       {/* Search mode dropdown */}
       <div className="relative" ref={modeRef}>
