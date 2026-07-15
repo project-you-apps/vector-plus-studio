@@ -39,6 +39,18 @@ import numpy as np
 
 
 # ---------------------------------------------------------------------------
+# Hippocampus flags — canonical layout
+# ---------------------------------------------------------------------------
+
+# Offset of the flags byte within the 64-byte hippocampus row (see
+# ``api/cartridge_io.py::HIPPO_FORMAT``). Bit 0 of that byte is the
+# tombstone marker (``FLAG_TOMBSTONE`` in
+# ``api/cartbuilder/cartridge_builder.py``).
+_HIPPO_FLAGS_OFFSET = 28
+_FLAG_TOMBSTONE = 0x01
+
+
+# ---------------------------------------------------------------------------
 # CartHandle
 # ---------------------------------------------------------------------------
 
@@ -245,6 +257,27 @@ class CartHandle:
         if not self._per_pattern_meta or idx >= len(self._per_pattern_meta):
             return {}
         return self._per_pattern_meta[idx]
+
+    def is_tombstoned(self, idx: int) -> bool:
+        """True iff pattern ``idx`` is tombstoned.
+
+        Reads bit 0 (``FLAG_TOMBSTONE``) of the flags byte at offset 28
+        of the 64-byte hippocampus row. Returns ``False`` when the cart
+        has no hippocampus array or the row is too short to carry a
+        flags byte — legacy Cart Builder GUI / brain-only carts pre-date
+        the tombstone convention and read as fully live.
+
+        Raises :class:`IndexError` if ``idx`` is out of range on a cart
+        that DOES carry a hippocampus (mirrors
+        :py:meth:`get_hippocampus_row`).
+        """
+        row = self.get_hippocampus_row(idx)
+        if row is None or len(row) <= _HIPPO_FLAGS_OFFSET:
+            return False
+        try:
+            return bool(int(row[_HIPPO_FLAGS_OFFSET]) & _FLAG_TOMBSTONE)
+        except (IndexError, TypeError, ValueError):
+            return False
 
     def get_hippocampus_row(self, idx: int) -> Optional[np.ndarray]:
         """Return the raw 64-byte hippocampus row for ``idx`` (uint8

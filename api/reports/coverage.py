@@ -27,30 +27,25 @@ Design decisions worth flagging:
 
 - **Slug**: ``"coverage"`` — single word, no underscore. Matches the
   frontend entry in ``report-definitions.ts``.
-- **Extractors**: ``extract_dates`` + ``extract_currency`` imported
-  lazily inside ``generate()``. Coverage does NOT reuse
-  ``extract_entity_mentions`` because that helper takes a
+- **Extractors**: ``extract_dates`` + ``extract_currency`` +
+  ``discover_entities`` imported lazily inside ``generate()``. Coverage
+  does NOT use ``extract_entity_mentions`` because that helper takes a
   ``entity_name`` argument (targeted lookup) whereas Coverage needs to
-  DISCOVER entities to find orphans. A local proper-noun regex serves
-  as the orphan-discovery scanner — flagged here so a future Wave adds
-  a shared ``discover_entities()`` helper to ``extractors/entities.py``
-  and Coverage swaps to that. The additive-only constraint on Wave 1c
-  ruled out modifying the extractor module today.
+  DISCOVER entities to find orphans; ``discover_entities`` (a companion
+  in ``extractors/entities.py``) is the discovery-shaped counterpart.
 - **Themes**: bigram approach mirroring ``summary.py``. Duplicated
   locally (matching the Wave-1b idiom — every report is self-contained
   even when there is overlap) rather than importing the module-private
   ``_bigrams`` helper.
-- **Tombstones**: inline flag byte check
-  (``row[28] & 0x01 != 0``) — the same pattern used across
-  ``change_log.py``, ``entity_rollup.py``, and ``comparison.py`` until
-  a shared ``is_tombstoned`` helper lands.
+- **Tombstones**: :py:meth:`CartHandle.is_tombstoned` on the shared
+  cart reader — same helper used across all Wave 1 reports.
 """
 from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
 from datetime import date
-from typing import Any, Optional
+from typing import Any
 
 from .base import Report, ReportInput, ReportOptions, ReportOutput
 from .cart_reader import CartHandle
@@ -61,13 +56,6 @@ from .source_link import source_link
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-
-# Tombstone flag = bit 0 of the flags byte at offset 28 of the 64-byte
-# hippocampus row. Matches the pattern in change_log.py / entity_rollup.py /
-# comparison.py and the FLAG_TOMBSTONE constant in
-# ``api/cartbuilder/cartridge_builder.py``.
-_HIPPO_FLAGS_OFFSET = 28
-_FLAG_TOMBSTONE = 0x01
 
 # Passage prefix used for theme bigram mining — matches ``summary.py`` so
 # the two reports agree on what a "theme" is at the passage level.
@@ -94,19 +82,9 @@ _SAMPLE_SNIPPET_CHARS = 100
 # Word tokenizer for bigram mining — same shape as summary.py's tokenizer.
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9\-]{1,}")
 
-# Proper-noun candidate regex — 1-3 consecutive capitalized tokens of at
-# least 3 chars each. The 3-char minimum trims most sentence-openers
-# ("The", "But", "Our"); the stopword filter downstream catches the rest.
-# 3-word cap keeps us from swallowing "The Board Of Directors Voted" as
-# one entity.
-_PROPER_NOUN_RE = re.compile(
-    r"\b([A-Z][a-zA-Z0-9]{2,}(?:\s+[A-Z][a-zA-Z0-9]{2,}){0,2})\b"
-)
-
-# English stopword set for bigram theme mining + proper-noun filtering.
-# Wider than summary.py's because orphan discovery needs to reject more
-# sentence-openers ("There", "These", weekday names, months) that
-# capitalize but are not entities.
+# English stopword set for bigram theme mining. Kept in sync with the
+# ``discover_entities`` default so orphan-detection and bigram-theme
+# passes agree on which capitalize-in-prose tokens don't count.
 _STOPWORDS: frozenset[str] = frozenset({
     "the", "a", "an", "and", "or", "but", "if", "then", "of", "in", "on",
     "at", "to", "for", "with", "by", "as", "is", "are", "was", "were", "be",
@@ -130,25 +108,6 @@ _STOPWORDS: frozenset[str] = frozenset({
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
-
-def _is_tombstoned_row(row: Optional[Any]) -> bool:
-    """Return True if the raw hippocampus row's flags byte has the
-    tombstone bit set.
-
-    ``row`` is a numpy uint8 array of length 64 (or ``None`` if the cart
-    has no hippocampus). Kept intentionally tolerant — missing / short
-    rows read as "live" so legacy Cart Builder GUI carts without an
-    H-block still surface in Coverage.
-    """
-    if row is None:
-        return False
-    if len(row) <= _HIPPO_FLAGS_OFFSET:
-        return False
-    try:
-        return bool(int(row[_HIPPO_FLAGS_OFFSET]) & _FLAG_TOMBSTONE)
-    except (TypeError, ValueError):
-        return False
-
 
 def _bigrams(text: str) -> list[str]:
     """Yield lowercase 2-word bigrams from ``text``, skipping stopwords.
@@ -300,6 +259,10 @@ class CoverageReport(Report):
             from .extractors.currency import extract_currency as _extract_currency
         except ImportError:  # pragma: no cover
             _extract_currency = None
+        try:
+            from .extractors.entities import discover_entities as _discover_entities
+        except ImportError:  # pragma: no cover
+            _discover_entities = None
 
         cart = CartHandle(cart_path)
         warnings: list[str] = list(cart.length_warnings)
@@ -319,8 +282,7 @@ class CoverageReport(Report):
         live_items: list[dict[str, Any]] = []
         tombstoned = 0
         for idx in range(cart.count):
-            row = cart.get_hippocampus_row(idx)
-            if _is_tombstoned_row(row):
+            if cart.is_tombstoned(idx):
                 tombstoned += 1
                 continue
             text = cart.get_passage(idx)
@@ -345,24 +307,17 @@ class CoverageReport(Report):
                 except Exception:
                     currency_here = []
 
+            # Proper-noun candidates. ``min_length=3`` matches the
+            # historical 3+ char per-token behavior; the built-in
+            # discovery stopwords already cover the sentence-opener /
+            # weekday / month filter, so no ``extra_stopwords`` is
+            # needed to preserve output.
             entities_here: list[str] = []
-            if text:
-                seen_in_item: set[str] = set()
-                for m in _PROPER_NOUN_RE.finditer(text):
-                    candidate = m.group(1).strip()
-                    # Skip if the first token is a stopword (weekdays,
-                    # month names, sentence openers) or the whole
-                    # candidate is too short after strip.
-                    if not candidate:
-                        continue
-                    first_tok = candidate.split()[0].lower()
-                    if first_tok in _STOPWORDS:
-                        continue
-                    key = candidate.lower()
-                    if key in seen_in_item:
-                        continue
-                    seen_in_item.add(key)
-                    entities_here.append(candidate)
+            if _discover_entities is not None and text:
+                try:
+                    entities_here = _discover_entities(text, min_length=3)
+                except Exception:
+                    entities_here = []
 
             live_items.append({
                 "idx": idx,

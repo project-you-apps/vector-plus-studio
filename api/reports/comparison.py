@@ -24,10 +24,9 @@ overlap math, and aggregate metrics stay identical.
 
 Tombstones
 ----------
-Skips patterns whose hippocampus ``flags`` byte (offset 28 in the H-row,
-per ``api/cartridge_io.py::HIPPO_FORMAT``) has bit 0 set. This is the
-membot tombstone bit — tombstoned patterns are the H-row equivalent of
-soft-deletes and must not surface in reports.
+Skips patterns flagged as tombstoned via
+:py:meth:`CartHandle.is_tombstoned`. Tombstoned patterns are the H-row
+equivalent of soft-deletes and must not surface in reports.
 
 Extractor dependency
 --------------------
@@ -39,21 +38,11 @@ call time with a clear message instead of on module load.
 """
 from __future__ import annotations
 
-from typing import Optional
-
 from .base import Report, ReportInput, ReportOptions, ReportOutput
 from .cart_reader import CartHandle
 from .registry import register_report
 from .source_link import source_link
 
-
-# Offset of membot's ``flags`` byte within the 64-byte hippocampus row.
-# Bit 0 = tombstone. Matches ``api/cartridge_io.py::HIPPO_FORMAT``
-# (fields: pattern_id I, format_version B, cartridge_type B,
-# parent_ptr I, child_ptr I, sibling_ptr I, source_hash I,
-# sequence_num H, timestamp I, flags B  ← this one).
-_HIPPO_FLAGS_OFFSET = 28
-_HIPPO_TOMBSTONE_BIT = 0x01
 
 # Cap on how many "distinctive" bullets we emit per side. Spec §4 says
 # "first 5". Keeping the number a constant so it's easy to tune later
@@ -174,7 +163,7 @@ class ComparisonReport(Report):
         query_b_lc = subset_b_query.lower()
 
         for idx, text, source in cart.iter_passages():
-            if _is_tombstoned(cart, idx):
+            if cart.is_tombstoned(idx):
                 tombstone_count += 1
                 continue
             text_lc = text.lower()
@@ -426,19 +415,6 @@ class ComparisonReport(Report):
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
-
-def _is_tombstoned(cart: CartHandle, idx: int) -> bool:
-    """True iff the hippocampus flags byte at bit 0 is set for ``idx``.
-
-    Falls back to False when the cart has no hippocampus array — legacy
-    /brain-only carts pre-date the tombstone convention so we treat them
-    as fully live.
-    """
-    row = cart.get_hippocampus_row(idx)
-    if row is None or len(row) <= _HIPPO_FLAGS_OFFSET:
-        return False
-    return bool(int(row[_HIPPO_FLAGS_OFFSET]) & _HIPPO_TOMBSTONE_BIT)
-
 
 def _matches_subset(query_lc: str, text_lc: str, source_lc: str) -> bool:
     """Wave-1 subset membership: pure substring containment.

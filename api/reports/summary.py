@@ -16,10 +16,9 @@ Design decisions worth flagging for later waves:
   cluster by shared bigrams (first 200 chars per passage). If fewer than
   3 distinct themes surface, we fall back to Pattern-0 description
   tokens. Wave-2 replaces this with high-diversity Membot search.
-- **Tombstones**: skipped from counts + coverage + themes. Bit 0 of
-  byte 28 in each hippocampus row (per
-  ``api/cartbuilder/cartridge_builder.py::FLAG_TOMBSTONE``). If any
-  tombstones were skipped we surface a warning noting the count.
+- **Tombstones**: skipped from counts + coverage + themes via
+  :py:meth:`CartHandle.is_tombstoned`. If any tombstones were skipped
+  we surface a warning noting the count.
 - **Extractors**: imported lazily inside ``generate()`` so the module
   loads even if ``api.reports.extractors`` hasn't shipped yet. When
   the module IS present, we assume ``extract_dates(text) -> iterable``
@@ -40,16 +39,6 @@ from .base import Report, ReportInput, ReportOptions, ReportOutput
 from .cart_reader import CartHandle
 from .registry import register_report
 from .source_link import source_link
-
-
-# ---------------------------------------------------------------------------
-# Tombstone detection — mirrors api/cartbuilder/cartridge_builder.py
-# ---------------------------------------------------------------------------
-
-# HIPPO_FORMAT flags byte lives at offset 28 in the 64-byte row.
-# Bit 0 = tombstone (see FLAG_TOMBSTONE in cartridge_builder.py).
-_HIPPO_FLAGS_OFFSET = 28
-_FLAG_TOMBSTONE = 0x01
 
 
 # ---------------------------------------------------------------------------
@@ -260,11 +249,9 @@ class SummaryReport(Report):
         per_source_count: Counter[str] = Counter()
 
         for idx, _text, source in cart.iter_passages():
-            row = cart.get_hippocampus_row(idx)
-            if row is not None and len(row) > _HIPPO_FLAGS_OFFSET:
-                if int(row[_HIPPO_FLAGS_OFFSET]) & _FLAG_TOMBSTONE:
-                    tombstoned += 1
-                    continue
+            if cart.is_tombstoned(idx):
+                tombstoned += 1
+                continue
             live_indices.append(idx)
             # Empty source label = "unknown"; keeps the source table honest.
             per_source_count[source or ""] += 1

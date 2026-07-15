@@ -45,12 +45,6 @@ from .source_link import source_link
 # Constants
 # ---------------------------------------------------------------------------
 
-# Hippocampus flags byte lives at offset 28 in the 64-byte row (see
-# ``api/cartridge_io.py::HIPPO_FORMAT`` and ``cartbuilder/cartridge_builder.py``
-# for the layout). Bit 0 = tombstone.
-HIPPO_FLAGS_OFFSET = 28
-FLAG_TOMBSTONE = 0x01
-
 # Threshold above which we warn the user that the search was too generic.
 # Grant's 6-month Sysco cart is expected to produce ~30-99 mentions for
 # a proper entity_name; >100 usually means someone typed "invoice" or "Portland".
@@ -176,7 +170,7 @@ class EntityRollupReport(Report):
         # Walk every passage; skip tombstones; collect mentions.
         mentions: list[_Mention] = []
         for idx, passage_text, source in cart.iter_passages():
-            if _is_tombstoned(cart, idx):
+            if cart.is_tombstoned(idx):
                 continue
             if not passage_text:
                 continue
@@ -661,23 +655,6 @@ def _walk_right_to_sentence_end(text: str, end: int) -> int:
         if text[i] in _SENTENCE_TERMINATORS:
             return i + 1  # inclusive of the terminator
     return hard_right
-
-
-def _is_tombstoned(cart: CartHandle, idx: int) -> bool:
-    """True iff pattern ``idx``'s hippocampus flags byte has bit 0
-    (``FLAG_TOMBSTONE``) set.
-
-    Returns False for carts without a hippocampus array — treating
-    "no hippo" as "everything live" matches how the wider engine
-    handles legacy carts (see ``api/search.py``).
-    """
-    row = cart.get_hippocampus_row(idx)
-    if row is None:
-        return False
-    try:
-        return bool(int(row[HIPPO_FLAGS_OFFSET]) & FLAG_TOMBSTONE)
-    except (IndexError, TypeError):
-        return False
 
 
 __all__ = ["EntityRollupReport"]

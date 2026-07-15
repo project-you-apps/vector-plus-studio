@@ -34,6 +34,7 @@ from api.reports.extractors import (  # noqa: E402
     DateExtraction,
     MentionSpan,
     MoneyExtraction,
+    discover_entities,
     extract_currency,
     extract_dates,
     extract_entity_mentions,
@@ -340,6 +341,80 @@ class TestExtractEntityMentions(unittest.TestCase):
     def test_empty_input_returns_empty(self):
         self.assertEqual(extract_entity_mentions("", "anything"), [])
         self.assertEqual(extract_entity_mentions("text", ""), [])
+
+
+# ---------------------------------------------------------------------------
+# Entity discovery tests (companion to extract_entity_mentions)
+# ---------------------------------------------------------------------------
+
+class TestDiscoverEntities(unittest.TestCase):
+
+    def test_basic_discovery(self):
+        text = (
+            "Sysco Portland delivered on Monday. "
+            "Franklin Foods invoiced separately."
+        )
+        out = discover_entities(text, min_length=3)
+        # Sysco Portland + Franklin Foods surface; Monday filtered by
+        # the built-in weekday stopword.
+        self.assertIn("Sysco Portland", out)
+        self.assertIn("Franklin Foods", out)
+        self.assertNotIn("Monday", out)
+
+    def test_dedup_case_insensitive_first_seen_wins(self):
+        text = "Sysco Portland shipped. Later SYSCO PORTLAND invoiced."
+        out = discover_entities(text, min_length=3)
+        # Exactly one entry; first-seen surface form ("Sysco Portland") wins.
+        self.assertEqual(out.count("Sysco Portland"), 1)
+        self.assertNotIn("SYSCO PORTLAND", out)
+
+    def test_first_seen_order_preserved(self):
+        text = "Bravo shipped. Alpha arrived. Charlie followed."
+        out = discover_entities(text, min_length=3)
+        # Order preserved by first appearance in text.
+        self.assertEqual(out, ["Bravo", "Alpha", "Charlie"])
+
+    def test_stopword_first_token_rejected(self):
+        text = "The Alpha team shipped. But Bravo failed. Our Charlie held."
+        out = discover_entities(text, min_length=3)
+        # "The Alpha team" / "But Bravo" / "Our Charlie" all get rejected
+        # because the first token is a stopword.
+        self.assertNotIn("The Alpha", out)
+        self.assertNotIn("But Bravo", out)
+        self.assertNotIn("Our Charlie", out)
+
+    def test_extra_stopwords_merged(self):
+        text = "Acme shipped. Widgets arrived."
+        out = discover_entities(
+            text, min_length=3, extra_stopwords=frozenset({"acme"}),
+        )
+        # Acme filtered by extra_stopwords; Widgets remains.
+        self.assertNotIn("Acme", out)
+        self.assertIn("Widgets", out)
+
+    def test_min_length_gate(self):
+        # min_length=3 rejects 2-char tokens (matches Coverage's
+        # historical 3+ char behavior); min_length=2 admits them.
+        text = "AI Group launched."
+        out_strict = discover_entities(text, min_length=3)
+        self.assertNotIn("AI Group", out_strict)
+        # "Group" alone still surfaces under the strict gate.
+        self.assertIn("Group", out_strict)
+        # Default (min_length=2) admits the 2-char "AI".
+        out_default = discover_entities(text)
+        self.assertIn("AI Group", out_default)
+
+    def test_empty_input_returns_empty(self):
+        self.assertEqual(discover_entities(""), [])
+        self.assertEqual(discover_entities("no proper nouns here."), [])
+
+    def test_at_most_three_token_span(self):
+        # Regex caps candidates at 3 tokens; a 4-token capitalized run
+        # surfaces the first 3 as one entity and the 4th as its own.
+        text = "Alpha Bravo Charlie Delta arrived."
+        out = discover_entities(text, min_length=3)
+        self.assertIn("Alpha Bravo Charlie", out)
+        self.assertIn("Delta", out)
 
 
 # ---------------------------------------------------------------------------

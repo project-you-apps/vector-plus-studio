@@ -1,12 +1,16 @@
 """Entity-mention extraction from raw passage text.
 
-Case-insensitive matching with alias support. Context extraction is
-sentence-boundary aware — reports (Entity Rollup §5 in particular) want
-the mention plus surrounding context that reads like a sentence, not a
-sliced-mid-word char window.
+Two shapes are exported:
 
-See ``Report Types Design 2026-07-10.md`` §0.3 for the shared-extractor
-contract and §5 (Entity Rollup) for the primary consumer.
+- :func:`extract_entity_mentions` — targeted-lookup: given a canonical
+  entity name (and optional aliases), find every mention in the text.
+  Case-insensitive with sentence-aware context. Entity Rollup is the
+  primary consumer.
+- :func:`discover_entities` — discovery: given text WITHOUT a target
+  list, surface proper-noun candidates using capitalization heuristics
+  + a first-token stopword filter. Coverage Report's orphan-entity
+  detection is the primary consumer; any future report that needs
+  discovery rather than lookup reuses it here.
 """
 from __future__ import annotations
 
@@ -189,4 +193,95 @@ def _sentence_aware_context(
     return text[left_bound:right_bound].strip()
 
 
-__all__ = ["MentionSpan", "extract_entity_mentions"]
+# ---------------------------------------------------------------------------
+# discover_entities — discovery-shape companion (no target list)
+# ---------------------------------------------------------------------------
+
+# Default stopword set for entity discovery. First-token filter — if the
+# first capitalized token in a proper-noun candidate lower-cases to a
+# member of this set, the candidate is dropped. Covers standard English
+# function words that occasionally start sentences and weekday / month
+# names that naturally capitalize in prose without being entities.
+_DISCOVERY_STOPWORDS: frozenset[str] = frozenset({
+    "the", "a", "an", "and", "or", "but", "if", "then", "of", "in", "on",
+    "at", "to", "for", "with", "by", "as", "is", "are", "was", "were", "be",
+    "been", "being", "have", "has", "had", "do", "does", "did", "this",
+    "that", "these", "those", "it", "its", "i", "we", "you", "they", "he",
+    "she", "him", "her", "them", "us", "my", "your", "our", "their", "his",
+    "hers", "not", "no", "yes", "so", "than", "from", "into", "onto",
+    "up", "down", "out", "over", "under", "about", "just", "very", "also",
+    "will", "would", "should", "could", "can", "may", "might", "must",
+    "there", "here", "what", "which", "who", "whom", "whose", "when",
+    "where", "why", "how", "any", "some", "all", "each", "every", "one",
+    "two", "three", "am", "pm",
+    # Weekdays / months — capitalize naturally in prose.
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
+    "sunday", "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+})
+
+
+def discover_entities(
+    text: str,
+    min_length: int = 2,
+    extra_stopwords: Optional[frozenset[str]] = None,
+) -> list[str]:
+    """Discover proper-noun entity mentions in ``text`` without a target list.
+
+    Companion to :func:`extract_entity_mentions` (targeted-lookup shape).
+    Returns discovered entity surface forms deduplicated
+    case-insensitively (first-seen surface form wins) in first-seen
+    offset order — the shape Coverage Report's orphan-entity detection
+    wants, and the shape any future report needing discovery-not-lookup
+    will reuse.
+
+    Heuristic: capture 1-3 consecutive capitalized tokens where each
+    token starts with an uppercase ASCII letter followed by
+    ``min_length - 1`` or more alphanumerics. Reject when the first
+    token (lowercased) matches the built-in stopword set OR the
+    ``extra_stopwords`` frozenset (a caller-supplied domain-specific
+    tightening).
+
+    Args:
+        text: Raw passage text.
+        min_length: Minimum characters per capitalized token. Default 2
+            lets 2-char acronyms like ``US`` through. Callers wanting to
+            filter shorter sentence openers should pass ``3`` — Coverage
+            Report's orphan detection does exactly that.
+        extra_stopwords: Additional first-token stopwords (lowercased)
+            to merge into the default set.
+
+    Returns:
+        List of discovered entity strings in first-seen order.
+    """
+    if not text:
+        return []
+    if min_length < 1:
+        min_length = 1
+    tail = min_length - 1  # ``{tail,}`` on the trailing char class
+    pattern = re.compile(
+        r"\b([A-Z][a-zA-Z0-9]{" + str(tail) + r",}"
+        r"(?:\s+[A-Z][a-zA-Z0-9]{" + str(tail) + r",}){0,2})\b"
+    )
+    stopwords = _DISCOVERY_STOPWORDS
+    if extra_stopwords:
+        stopwords = stopwords | extra_stopwords
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for m in pattern.finditer(text):
+        candidate = m.group(1).strip()
+        if not candidate:
+            continue
+        first_tok = candidate.split()[0].lower()
+        if first_tok in stopwords:
+            continue
+        key = candidate.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(candidate)
+    return ordered
+
+
+__all__ = ["MentionSpan", "extract_entity_mentions", "discover_entities"]

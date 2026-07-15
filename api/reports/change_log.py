@@ -15,12 +15,11 @@ Design notes worth calling out:
   :func:`_resolve_cart_path`). Both cart ids are user-supplied form
   values from :attr:`ReportInput.raw`; the frontend definition in
   ``report-definitions.ts`` names them ``cart_id_old`` / ``cart_id_new``.
-- Tombstoned patterns on BOTH sides are skipped up front. Otherwise a
-  pattern tombstoned in the NEW cart would look like a removal when it
-  is really a suppression — the semantics differ (a tombstone means "I
-  hid this", a removal means "I never had this"). Bit 0 (0x01) of the
-  ``flags`` byte at offset 28 of each hippocampus row is the tombstone
-  flag; see ``api/cartridge_io.py`` for the canonical H-block layout.
+- Tombstoned patterns on BOTH sides are skipped up front via
+  :py:meth:`CartHandle.is_tombstoned`. Otherwise a pattern tombstoned in
+  the NEW cart would look like a removal when it is really a suppression
+  — the semantics differ (a tombstone means "I hid this", a removal
+  means "I never had this").
 - The semantic strategy is O(N × M). For carts of a few hundred to a
   couple thousand patterns this is well under a second, but Grant's
   Sysco carts approach 10k and paired snapshots of a personal Heartbeat
@@ -85,13 +84,6 @@ _SHORT_SUMMARY_CHARS = 80
 # changed" and needs enough context to see the diff.
 _MODIFIED_EXCERPT_CHARS = 160
 
-# Tombstone flag lives in bit 0 (0x01) of the flags byte at offset 28
-# of the 64-byte hippocampus row. See docs/PATTERN-ANATOMY.md §3 and
-# api/cartridge_io.py::FLAG_TOMBSTONE for the canonical layout.
-_HIPPO_FLAGS_OFFSET = 28
-_HIPPO_FLAG_TOMBSTONE = 0x01
-
-
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -110,20 +102,6 @@ class _PatternRef:
     source: str
 
 
-def _is_tombstoned(cart: CartHandle, idx: int) -> bool:
-    """Return True if pattern ``idx`` is tombstoned in ``cart``.
-
-    Reads the flags byte from the raw hippocampus row (no full struct
-    unpack needed — we only care about one bit). Returns False if the
-    cart has no hippocampus, which covers Cart Builder GUI carts that
-    write embeddings + passages without an H-block.
-    """
-    row = cart.get_hippocampus_row(idx)
-    if row is None:
-        return False
-    return bool(row[_HIPPO_FLAGS_OFFSET] & _HIPPO_FLAG_TOMBSTONE)
-
-
 def _live_refs(cart: CartHandle) -> list[_PatternRef]:
     """Enumerate non-tombstoned patterns as ``_PatternRef`` records.
 
@@ -133,7 +111,7 @@ def _live_refs(cart: CartHandle) -> list[_PatternRef]:
     return [
         _PatternRef(idx=i, text=cart.get_passage(i), source=cart.get_source(i))
         for i in range(cart.count)
-        if not _is_tombstoned(cart, i)
+        if not cart.is_tombstoned(i)
     ]
 
 

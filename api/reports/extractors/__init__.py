@@ -27,13 +27,14 @@ Usage::
 """
 from .currency import MoneyExtraction, extract_currency
 from .dates import DateExtraction, extract_dates
-from .entities import MentionSpan, extract_entity_mentions
+from .entities import MentionSpan, discover_entities, extract_entity_mentions
 
 __all__ = [
     # Functions
     "extract_dates",
     "extract_currency",
     "extract_entity_mentions",
+    "discover_entities",
     # Dataclasses
     "DateExtraction",
     "MoneyExtraction",
