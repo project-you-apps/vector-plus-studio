@@ -189,6 +189,7 @@ class FreeAgent(Agent):
             "cart_name": cart.cart_name,
             "pattern_count": cart.count,
             "patterns_retrieved": len(patterns),
+            "retrieved_source_count": len({p.source for p in patterns if p.source}),
             "user_input": user_input,
             "llm_provider": result.provider,
             "llm_model": result.model,

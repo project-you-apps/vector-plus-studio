@@ -175,6 +175,7 @@ class AutoBriefingAgent(Agent):
             "cart_name": cart_name,
             "pattern_count": cart.count,
             "patterns_sampled": len(patterns),
+            "retrieved_source_count": len({p.source for p in patterns if p.source}),
             "focus": focus or None,
             "tone": tone,
             "llm_provider": result.provider,

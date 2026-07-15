@@ -190,6 +190,7 @@ class QAAgent(Agent):
             "cart_name": cart.cart_name,
             "pattern_count": cart.count,
             "patterns_retrieved": len(patterns),
+            "retrieved_source_count": len({p.source for p in patterns if p.source}),
             "question": question,
             "answer_style": style,
             "llm_provider": result.provider,

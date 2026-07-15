@@ -230,6 +230,7 @@ class ProfessorAgent(Agent):
             "cart_name": cart.cart_name,
             "pattern_count": cart.count,
             "patterns_retrieved": len(patterns),
+            "retrieved_source_count": len({p.source for p in patterns if p.source}),
             "num_questions": num_q,
             "difficulty": difficulty,
             "topic": topic or None,

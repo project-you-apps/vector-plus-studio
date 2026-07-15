@@ -161,6 +161,7 @@ export default function AgentResultsView({
   }, [downloadOpen])
 
   const elapsed = response.elapsed_ms ?? null
+  const footprint = _getRetrievalFootprint(response.metadata, response.cited_patterns)
 
   return (
     <section
@@ -233,6 +234,15 @@ export default function AgentResultsView({
             <span className="inline-flex items-center gap-1 font-mono text-[10px] text-slate-500">
               <Clock3 size={10} />
               {elapsed} ms
+            </span>
+          )}
+          {footprint && (
+            <span
+              className="font-mono text-[10px] text-slate-500"
+              title="Agents work over the most relevant patterns for your task, not the entire cart."
+            >
+              scanned {footprint.patterns} pattern{footprint.patterns === 1 ? '' : 's'} from{' '}
+              {footprint.sources} source{footprint.sources === 1 ? '' : 's'}
             </span>
           )}
         </div>
@@ -525,6 +535,41 @@ function _isEmptyValue(v: unknown): boolean {
     }
   }
   return false
+}
+
+// Coerce a metadata value to a finite non-negative integer count, else null.
+// Metadata values are `unknown` because the response envelope is a bag.
+function _numOrNull(v: unknown): number | null {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return null
+  return Math.round(v)
+}
+
+// Read a "scanned N patterns from M sources" footprint from the response
+// metadata. Kept keyname-tolerant because different agents/reports populate
+// slightly different keys (patterns_retrieved / patterns_sampled /
+// live_pattern_count / pattern_count; retrieved_source_count /
+// unique_source_count). Falls back to cited_patterns.length for pattern
+// count when no metadata key is present. Returns null (line hidden) if
+// either count is missing or zero — silent absence is better than
+// "scanned 0 patterns from 0 sources".
+function _getRetrievalFootprint(
+  metadata: Record<string, unknown> | undefined | null,
+  citedPatterns?: number[],
+): { patterns: number; sources: number } | null {
+  const meta = metadata || {}
+  const patterns =
+    _numOrNull(meta.retrieved_pattern_count) ??
+    _numOrNull(meta.patterns_retrieved) ??
+    _numOrNull(meta.patterns_sampled) ??
+    _numOrNull(meta.live_pattern_count) ??
+    _numOrNull(meta.pattern_count) ??
+    (Array.isArray(citedPatterns) ? citedPatterns.length : null)
+  const sources =
+    _numOrNull(meta.retrieved_source_count) ??
+    _numOrNull(meta.unique_source_count)
+  if (patterns === null || sources === null) return null
+  if (patterns <= 0 || sources <= 0) return null
+  return { patterns, sources }
 }
 
 // Render a single field's value for display. Date-range uses the arrow form

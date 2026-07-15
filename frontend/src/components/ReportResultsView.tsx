@@ -158,6 +158,7 @@ export default function ReportResultsView({
       : typeof meta.route_elapsed_ms === 'number'
         ? meta.route_elapsed_ms as number
         : null
+  const footprint = _getRetrievalFootprint(response.metadata)
 
   return (
     <section
@@ -229,6 +230,15 @@ export default function ReportResultsView({
             <span className="inline-flex items-center gap-1 font-mono text-[10px] text-slate-500">
               <Clock3 size={10} />
               {elapsed} ms
+            </span>
+          )}
+          {footprint && (
+            <span
+              className="font-mono text-[10px] text-slate-500"
+              title="Reports work over the patterns your cart contains. Some reports scan every live pattern; Q&A-shaped reports pull the most relevant few for your query."
+            >
+              scanned {footprint.patterns} pattern{footprint.patterns === 1 ? '' : 's'} from{' '}
+              {footprint.sources} source{footprint.sources === 1 ? '' : 's'}
             </span>
           )}
         </div>
@@ -525,6 +535,39 @@ function DownloadMenuItem({
 //   • State is per-render — reopening the toggle on every result view is
 //     acceptable; no need to persist to the store.
 // -----------------------------------------------------------------------------
+
+// Coerce a metadata value to a finite non-negative integer count, else null.
+// Metadata values are `unknown` because the response envelope is a bag.
+function _numOrNull(v: unknown): number | null {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return null
+  return Math.round(v)
+}
+
+// Read a "scanned N patterns from M sources" footprint from the response
+// metadata. Kept keyname-tolerant because different reports populate
+// slightly different keys (patterns_retrieved / patterns_sampled /
+// live_pattern_count / pattern_count; retrieved_source_count /
+// unique_source_count). Reports don't carry a top-level cited_patterns
+// list, so the pattern count relies entirely on metadata. Returns null
+// (line hidden) if either count is missing or zero — silent absence is
+// better than "scanned 0 patterns from 0 sources".
+function _getRetrievalFootprint(
+  metadata: Record<string, unknown> | undefined | null,
+): { patterns: number; sources: number } | null {
+  const meta = metadata || {}
+  const patterns =
+    _numOrNull(meta.retrieved_pattern_count) ??
+    _numOrNull(meta.patterns_retrieved) ??
+    _numOrNull(meta.patterns_sampled) ??
+    _numOrNull(meta.live_pattern_count) ??
+    _numOrNull(meta.pattern_count)
+  const sources =
+    _numOrNull(meta.retrieved_source_count) ??
+    _numOrNull(meta.unique_source_count)
+  if (patterns === null || sources === null) return null
+  if (patterns <= 0 || sources <= 0) return null
+  return { patterns, sources }
+}
 
 function _isEmptyValue(v: unknown): boolean {
   if (v === null || v === undefined) return true
