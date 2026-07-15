@@ -190,6 +190,7 @@ export default function AgentInputPane({
   cartName,
   cartRef,
   initialInputs,
+  reportBuilderPaired = false,
   onClose,
   onSuccess,
   onPickAnotherCart,
@@ -198,6 +199,10 @@ export default function AgentInputPane({
   cartName: string | null
   cartRef: string | null
   initialInputs?: Record<string, unknown> | null
+  // When true, local: carts route to the paired Report Builder on
+  // localhost:7880 instead of failing. Gates both the amber warning
+  // and the Send-button disable.
+  reportBuilderPaired?: boolean
   onClose: () => void
   onSuccess?: (
     response: RunAgentResponse,
@@ -229,7 +234,7 @@ export default function AgentInputPane({
     () => agent.inputSchema.filter((f) => f.required && !isFilled(f, values[f.name])),
     [agent.inputSchema, values],
   )
-  const canSend = missingRequired.length === 0 && !!cartRef && !isLocalCart(cartRef)
+  const canSend = missingRequired.length === 0 && !!cartRef && (!isLocalCart(cartRef) || reportBuilderPaired)
 
   const lastRequestRef = useRef<{
     slug: string
@@ -341,13 +346,14 @@ export default function AgentInputPane({
               </span>
             </div>
 
-            {isLocalCart(cartRef) && (
+            {isLocalCart(cartRef) && !reportBuilderPaired && (
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2
                               text-[11px] text-amber-200 flex items-start gap-2">
                 <AlertTriangle size={12} className="shrink-0 mt-0.5" />
                 <span>
-                  Agents run server-side. Pick a server cart in the cart selector to
-                  run this agent against a browser-only LocalCart.
+                  Agents run server-side. Pick a server cart in the cart selector,
+                  OR launch Report Builder to run this agent locally against your
+                  browser-only LocalCart.
                 </span>
               </div>
             )}

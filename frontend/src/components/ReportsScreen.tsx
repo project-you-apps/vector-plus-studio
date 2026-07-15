@@ -450,6 +450,7 @@ export default function ReportsScreen() {
           cartName={selectedCartLabel}
           cartRef={effectiveCartId}
           initialInputs={prefillInputs}
+          reportBuilderPaired={reportBuilderPaired}
           onClose={() => setActiveReport(null)}
           onSuccess={handleGenerateSuccess}
           onPickAnotherCart={focusCartSelector}

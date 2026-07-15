@@ -199,6 +199,7 @@ export default function ReportInputPane({
   cartName,
   cartRef,
   initialInputs,
+  reportBuilderPaired = false,
   onClose,
   onSuccess,
   onPickAnotherCart,
@@ -210,6 +211,10 @@ export default function ReportInputPane({
   // Regenerate flow in ReportResultsView so the user can tweak one
   // field and re-run without re-typing everything.
   initialInputs?: Record<string, unknown> | null
+  // When true, local: carts route to the paired Report Builder on
+  // localhost:7880 instead of failing with "server-side only." Gates
+  // the amber warning shown for local carts.
+  reportBuilderPaired?: boolean
   onClose: () => void
   // Called when Generate succeeds. Parent takes ownership of the
   // response and switches the main content column to the full-width
@@ -249,7 +254,7 @@ export default function ReportInputPane({
     () => report.inputSchema.filter((f) => f.required && !isFilled(f, values[f.name])),
     [report.inputSchema, values],
   )
-  const canGenerate = missingRequired.length === 0 && !!cartRef && !isLocalCart(cartRef)
+  const canGenerate = missingRequired.length === 0 && !!cartRef && (!isLocalCart(cartRef) || reportBuilderPaired)
 
   // Track the last-submitted payload so Try Again re-issues the same
   // request without the user having to re-click Generate on every field.
@@ -372,13 +377,14 @@ export default function ReportInputPane({
               </span>
             </div>
 
-            {isLocalCart(cartRef) && (
+            {isLocalCart(cartRef) && !reportBuilderPaired && (
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2
                               text-[11px] text-amber-200 flex items-start gap-2">
                 <AlertTriangle size={12} className="shrink-0 mt-0.5" />
                 <span>
-                  Reports run server-side. Pick a server cart in the cart selector to
-                  generate this report against a browser-only LocalCart.
+                  Reports run server-side. Pick a server cart in the cart selector,
+                  OR launch Report Builder to run this report locally against your
+                  browser-only LocalCart.
                 </span>
               </div>
             )}

@@ -315,6 +315,7 @@ export default function AgentsScreen() {
           cartName={selectedCartLabel}
           cartRef={effectiveCartId}
           initialInputs={prefillInputs}
+          reportBuilderPaired={reportBuilderPaired}
           onClose={() => setActiveAgent(null)}
           onSuccess={handleSendSuccess}
           onPickAnotherCart={focusCartSelector}
