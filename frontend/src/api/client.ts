@@ -4,10 +4,59 @@ import type {
   MemboxCartInfo, MemboxStatus, MemboxImprintRequest, MemboxMountRequest,
 } from './types'
 import { useAuthStore } from '../store/authStore'
+import {
+  REPORT_BUILDER_DEFAULT_ORIGIN,
+  readReportBuilderToken,
+} from './reportBuilder'
 
 // Set VITE_API_BASE at build time for hosted deploys (e.g. '/vps/api'). Local
 // dev uses '/api' which the Vite proxy routes to localhost:8000.
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) || '/api'
+
+// ---------------------------------------------------------------------------
+// Report Builder routing
+// ---------------------------------------------------------------------------
+//
+// When the user has a paired Report Builder AND the active cart_ref
+// carries the browser-local prefix (`local:`), Reports + Agents calls
+// route to the local exe on 127.0.0.1:7880 instead of the droplet.
+// Data (the cart's contents) stays on the user's machine; only the
+// anonymized prompt + retrieved context leave for LLM synthesis.
+//
+// Detection lives in the app store (reportBuilderState). We read the
+// store lazily via a factory so the client doesn't take a hard runtime
+// dep on appStore (avoids circular-import issues; tests can inject).
+
+let _reportBuilderStateReader: () => 'unknown' | 'detecting' | 'not-found' |
+  'detected-unpaired' | 'detected-paired' = () => 'unknown'
+
+// Called once from appStore module scope at import time — same trick as
+// authStore.getState(). Kept as a setter so tests can override.
+export function _registerReportBuilderStateReader(
+  fn: () => 'unknown' | 'detecting' | 'not-found' |
+    'detected-unpaired' | 'detected-paired',
+) {
+  _reportBuilderStateReader = fn
+}
+
+interface RouterTarget {
+  base: string
+  headers: Record<string, string>
+}
+
+// Decide whether to route a Reports / Agents call to Report Builder.
+// Returns null when the droplet path should be used (default). Returns
+// {base, headers} when the local exe should handle it.
+function reportBuilderTarget(cartRef: string | null | undefined): RouterTarget | null {
+  if (!cartRef || !cartRef.startsWith('local:')) return null
+  if (_reportBuilderStateReader() !== 'detected-paired') return null
+  const token = readReportBuilderToken()
+  if (!token) return null
+  return {
+    base: REPORT_BUILDER_DEFAULT_ORIGIN,
+    headers: { Authorization: `Bearer ${token}` },
+  }
+}
 
 // Reads the current Supabase access token from the auth store (kept in sync via
 // onAuthStateChange in authStore.init). Returns an empty object when signed out
@@ -294,17 +343,50 @@ export interface ReportCartEntry {
   location?: 'canonical' | 'sandbox' | string
 }
 
+// Fetches the droplet's cart list. When Report Builder is paired, the
+// caller (ReportsScreen / AgentsScreen) also calls fetchLocalReportCarts
+// and merges the two lists — local: entries carry a `location: 'local'`
+// badge so the selector renders them distinctly.
 export async function fetchReportCarts(): Promise<ReportCartEntry[]> {
   const data = await fetchJSON<{ carts: ReportCartEntry[] }>('/reports/carts')
   return data.carts
 }
 
+// Enumerate the paired Report Builder's local cart folder. Returns null
+// when Report Builder isn't paired (nothing to enumerate). All entries
+// come back report_compatible + format='npz' + location='local' — the
+// exe only opens NPZ.
+export async function fetchLocalReportCarts(): Promise<ReportCartEntry[] | null> {
+  if (_reportBuilderStateReader() !== 'detected-paired') return null
+  const token = readReportBuilderToken()
+  if (!token) return null
+  try {
+    const res = await fetch(`${REPORT_BUILDER_DEFAULT_ORIGIN}/reports/carts`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) return []
+    const body = (await res.json()) as { carts: ReportCartEntry[] }
+    return body.carts.map((c) => ({ ...c, location: 'local' as const }))
+  } catch {
+    return []
+  }
+}
+
 export async function generateReport(
   req: GenerateReportRequest,
 ): Promise<GenerateReportResponse> {
-  const res = await fetch(`${BASE}/reports/generate`, {
+  // Route to Report Builder when the cart_ref is browser-local AND the
+  // exe is paired. Falls through to the droplet path otherwise so
+  // canonical + sandbox carts continue to run server-side.
+  const target = reportBuilderTarget(req.cart_ref)
+  const url = target ? `${target.base}/reports/generate` : `${BASE}/reports/generate`
+  const headers = target
+    ? { 'Content-Type': 'application/json', ...target.headers }
+    : { 'Content-Type': 'application/json', ...authHeaders() }
+  const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    headers,
     body: JSON.stringify(req),
   })
   if (!res.ok) {
@@ -412,9 +494,19 @@ export async function fetchAgentList(): Promise<AgentListResponse> {
 export async function runAgent(
   req: RunAgentRequest,
 ): Promise<RunAgentResponse> {
-  const res = await fetch(`${BASE}/agents/run`, {
+  // Same routing rule as generateReport — local: cart on a paired
+  // Report Builder runs against the local exe. Neuron-cap headers are
+  // meaningless in that path (the exe returns caps=0 in /agents/list)
+  // so the response shape stays the same; callers just don't see the
+  // X-Agent-* warning headers.
+  const target = reportBuilderTarget(req.cart_ref)
+  const url = target ? `${target.base}/agents/run` : `${BASE}/agents/run`
+  const headers = target
+    ? { 'Content-Type': 'application/json', ...target.headers }
+    : { 'Content-Type': 'application/json', ...authHeaders() }
+  const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    headers,
     body: JSON.stringify(req),
   })
   if (!res.ok) {
@@ -457,13 +549,30 @@ export async function saveAgentToCart(
   runId: string,
   opts?: { cartRef?: string; sessionId?: string },
 ): Promise<SaveAgentToCartResponse> {
+  // Save-to-cart is anchored to the run's source cart. When that cart
+  // was `local:`, the run object lives in the Report Builder's cache,
+  // so save must hit the same exe or the run_id 404s.
+  const target = reportBuilderTarget(opts?.cartRef)
+  const body = JSON.stringify({
+    run_id: runId,
+    cart_ref: opts?.cartRef ?? null,
+    session_id: opts?.sessionId ?? null,
+  })
+  if (target) {
+    const res = await fetch(`${target.base}/agents/save_to_cart`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...target.headers },
+      body,
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`Report Builder save_to_cart ${res.status}: ${text}`)
+    }
+    return res.json()
+  }
   return fetchJSON<SaveAgentToCartResponse>('/agents/save_to_cart', {
     method: 'POST',
-    body: JSON.stringify({
-      run_id: runId,
-      cart_ref: opts?.cartRef ?? null,
-      session_id: opts?.sessionId ?? null,
-    }),
+    body,
   })
 }
 

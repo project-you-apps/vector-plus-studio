@@ -7,7 +7,11 @@ import { AGENT_DEFINITIONS, type AgentDefinition } from '../agents/agent-definit
 import AgentCard from './AgentCard'
 import AgentInputPane from './AgentInputPane'
 import AgentResultsView from './AgentResultsView'
-import { fetchReportCarts, type ReportCartEntry, type RunAgentResponse } from '../api/client'
+import {
+  fetchReportCarts, fetchLocalReportCarts,
+  type ReportCartEntry, type RunAgentResponse,
+} from '../api/client'
+import ReportBuilderStatusPill from './ReportBuilderStatusPill'
 
 // Agents screen — the UX shell for the 4 v1 agent recipes (Auto-Briefing,
 // Q&A, Professor, Cart Curator). Structure mirrors ReportsScreen exactly:
@@ -34,8 +38,17 @@ export default function AgentsScreen() {
   const cartridges = useAppStore((s) => s.cartridges)
   const localCarts = useAppStore((s) => s.localCarts)
 
+  const detectReportBuilder = useAppStore((s) => s.detectReportBuilder)
+  const reportBuilderState = useAppStore((s) => s.reportBuilderState)
+  const reportBuilderPaired = reportBuilderState === 'detected-paired'
+
   const [cartCompat, setCartCompat] = useState<Map<string, ReportCartEntry>>(new Map())
+  const [localReportBuilderCarts, setLocalReportBuilderCarts] = useState<ReportCartEntry[]>([])
   const cartSelectorButtonRef = useRef<HTMLButtonElement | null>(null)
+
+  useEffect(() => {
+    void detectReportBuilder()
+  }, [detectReportBuilder])
 
   useEffect(() => {
     let cancelled = false
@@ -50,6 +63,23 @@ export default function AgentsScreen() {
     return () => { cancelled = true }
   }, [cartridges])
 
+  useEffect(() => {
+    let cancelled = false
+    if (!reportBuilderPaired) {
+      setLocalReportBuilderCarts([])
+      return () => { cancelled = true }
+    }
+    fetchLocalReportCarts()
+      .then((entries) => {
+        if (cancelled) return
+        setLocalReportBuilderCarts(entries ?? [])
+      })
+      .catch(() => {
+        if (!cancelled) setLocalReportBuilderCarts([])
+      })
+    return () => { cancelled = true }
+  }, [reportBuilderPaired])
+
   const cartOptions = useMemo(() => {
     const opts: CartOption[] = []
     const seen = new Set<string>()
@@ -58,13 +88,28 @@ export default function AgentsScreen() {
       seen.add(o.id)
       opts.push(o)
     }
+    // Browser LocalCarts: report_compatible flips true when Report
+    // Builder is paired — the local exe knows how to open them.
     for (const name of localCarts.keys()) {
       push({
         id: `local:${name}`,
         label: name,
         kind: 'local',
-        reportCompatible: false,
+        reportCompatible: reportBuilderPaired,
         format: 'npz',
+        location: 'local',
+      })
+    }
+    // Report Builder's own /reports/carts enumeration — carts sitting
+    // in the user's cart folder that aren't browser-mounted.
+    for (const meta of localReportBuilderCarts) {
+      push({
+        id: `local:${meta.id}`,
+        label: meta.display_name,
+        kind: 'local',
+        reportCompatible: true,
+        format: (meta.format as 'npz' | 'pkl') ?? 'npz',
+        location: 'local',
       })
     }
     for (const c of cartridges) {
@@ -90,7 +135,7 @@ export default function AgentsScreen() {
       })
     }
     return opts
-  }, [cartridges, localCarts, cartCompat])
+  }, [cartridges, localCarts, cartCompat, localReportBuilderCarts, reportBuilderPaired])
 
   const defaultCartId = useMemo(() => {
     if (activeLocalCart) return `local:${activeLocalCart}`
@@ -212,6 +257,14 @@ export default function AgentsScreen() {
           )}
         </div>
 
+        {/* Report Builder pill — same visual language as ReportsScreen.
+            When paired, local: carts route to 127.0.0.1:7880 so agent
+            runs against on-disk carts don't leave the machine. */}
+        <ReportBuilderStatusPill
+          state={reportBuilderState}
+          onRecheck={() => void detectReportBuilder()}
+        />
+
         {hasResultView && displayedAgent && currentAgentRun ? (
           <AgentResultsView
             agent={displayedAgent}
@@ -296,7 +349,7 @@ interface CartOption {
   kind: 'local' | 'server'
   reportCompatible: boolean
   format: 'npz' | 'pkl'
-  location?: 'canonical' | 'sandbox'
+  location?: 'canonical' | 'sandbox' | 'local'
 }
 
 function CartKindBadge({
@@ -304,7 +357,7 @@ function CartKindBadge({
   location,
 }: {
   kind: 'local' | 'server'
-  location?: 'canonical' | 'sandbox'
+  location?: 'canonical' | 'sandbox' | 'local'
 }) {
   const isSandbox = kind === 'server' && location === 'sandbox'
   if (isSandbox) {
@@ -318,15 +371,23 @@ function CartKindBadge({
       </span>
     )
   }
+  if (kind === 'local') {
+    return (
+      <span
+        className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded font-mono
+                   bg-violet-500/15 border border-violet-500/40 text-violet-300"
+        title="Local cart — reports + agents run on the paired Report Builder (127.0.0.1:7880). Cart data stays on your machine."
+      >
+        local
+      </span>
+    )
+  }
   return (
     <span
-      className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded font-mono ${
-        kind === 'local'
-          ? 'bg-cyan-500/15 border border-cyan-500/40 text-cyan-300'
-          : 'bg-purple-500/15 border border-purple-500/40 text-purple-300'
-      }`}
+      className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded font-mono
+                 bg-purple-500/15 border border-purple-500/40 text-purple-300"
     >
-      {kind}
+      server
     </span>
   )
 }

@@ -7,7 +7,11 @@ import { REPORT_DEFINITIONS, type ReportDefinition } from '../reports/report-def
 import ReportCard from './ReportCard'
 import ReportInputPane from './ReportInputPane'
 import ReportResultsView from './ReportResultsView'
-import { fetchReportCarts, type GenerateReportResponse, type ReportCartEntry } from '../api/client'
+import {
+  fetchReportCarts, fetchLocalReportCarts,
+  type GenerateReportResponse, type ReportCartEntry,
+} from '../api/client'
+import ReportBuilderStatusPill from './ReportBuilderStatusPill'
 
 // Reports screen — the UX shell for the 8 report types (see
 // docs/vps-internal/Report Types Design 2026-07-10.md).
@@ -58,13 +62,25 @@ export default function ReportsScreen() {
   const cartridges = useAppStore((s) => s.cartridges)
   const localCarts = useAppStore((s) => s.localCarts)
 
+  // Report Builder detection — kicks off a loopback probe on mount so
+  // the pill lights up before the user tries to run a local: cart. State
+  // is read via selectors so pill + routing pick up changes reactively.
+  const detectReportBuilder = useAppStore((s) => s.detectReportBuilder)
+  const reportBuilderState = useAppStore((s) => s.reportBuilderState)
+  const reportBuilderPaired = reportBuilderState === 'detected-paired'
+
   // Server-side per-cart report compatibility map, populated on mount.
   // Missing entry means "backend didn't tell us about this cart" — for
-  // LocalCarts (browser-only) that's the correct answer; we mark them
-  // as incompatible because Reports run server-side.
+  // LocalCarts (browser-only) it defaults to incompatible; when Report
+  // Builder is paired, the merge pass below promotes them to compatible.
   const [cartCompat, setCartCompat] = useState<Map<string, ReportCartEntry>>(new Map())
+  const [localReportBuilderCarts, setLocalReportBuilderCarts] = useState<ReportCartEntry[]>([])
 
   const cartSelectorButtonRef = useRef<HTMLButtonElement | null>(null)
+
+  useEffect(() => {
+    void detectReportBuilder()
+  }, [detectReportBuilder])
 
   useEffect(() => {
     let cancelled = false
@@ -82,6 +98,27 @@ export default function ReportsScreen() {
       })
     return () => { cancelled = true }
   }, [cartridges])
+
+  // Enumerate the Report Builder's local cart folder when it's paired.
+  // Empty list when not paired — the selector just falls back to the
+  // droplet-only view. Refires when the paired state flips so pairing
+  // mid-session lights up the local: entries immediately.
+  useEffect(() => {
+    let cancelled = false
+    if (!reportBuilderPaired) {
+      setLocalReportBuilderCarts([])
+      return () => { cancelled = true }
+    }
+    fetchLocalReportCarts()
+      .then((entries) => {
+        if (cancelled) return
+        setLocalReportBuilderCarts(entries ?? [])
+      })
+      .catch(() => {
+        if (!cancelled) setLocalReportBuilderCarts([])
+      })
+    return () => { cancelled = true }
+  }, [reportBuilderPaired])
 
   // Build the cart-picker options. LocalCart names come first (they're the
   // browser-mounted "hot" carts the user just opened), then the server
@@ -103,13 +140,32 @@ export default function ReportsScreen() {
       seen.add(o.id)
       opts.push(o)
     }
+    // Browser-mounted LocalCarts: when Report Builder is paired, these
+    // become executable via the local exe on 7880 — flip
+    // reportCompatible=true so the selector doesn't hide them.
+    // Location = 'local' either way so the sandbox/canonical/local
+    // badge stays distinct.
     for (const name of localCarts.keys()) {
       push({
         id: `local:${name}`,
         label: name,
         kind: 'local',
-        reportCompatible: false,
+        reportCompatible: reportBuilderPaired,
         format: 'npz',
+        location: 'local',
+      })
+    }
+    // Report Builder's own /reports/carts enumeration — carts sitting in
+    // the user's local vector-plus-carts folder that aren't mounted as
+    // browser LocalCarts. Same `local:` prefix + local location badge.
+    for (const meta of localReportBuilderCarts) {
+      push({
+        id: `local:${meta.id}`,
+        label: meta.display_name,
+        kind: 'local',
+        reportCompatible: true,
+        format: (meta.format as 'npz' | 'pkl') ?? 'npz',
+        location: 'local',
       })
     }
     for (const c of cartridges) {
@@ -151,7 +207,7 @@ export default function ReportsScreen() {
       })
     }
     return opts
-  }, [cartridges, localCarts, cartCompat])
+  }, [cartridges, localCarts, cartCompat, localReportBuilderCarts, reportBuilderPaired])
 
   const defaultCartId = useMemo(() => {
     if (activeLocalCart) return `local:${activeLocalCart}`
@@ -318,6 +374,17 @@ export default function ReportsScreen() {
           )}
         </div>
 
+        {/* Report Builder pill — surfaces the third companion Builder's
+            detection state. When paired, reports + agents on `local:`
+            carts route to the local exe (127.0.0.1:7880); server carts
+            stay on the droplet regardless. Kept below the header so
+            fresh visitors see the affordance without it dominating the
+            grid. */}
+        <ReportBuilderStatusPill
+          state={reportBuilderState}
+          onRecheck={() => void detectReportBuilder()}
+        />
+
         {hasResultView && displayedReport && currentReport ? (
           <ReportResultsView
             report={displayedReport}
@@ -424,22 +491,23 @@ interface CartOption {
   kind: 'local' | 'server'
   reportCompatible: boolean
   format: 'npz' | 'pkl'
-  location?: 'canonical' | 'sandbox'
+  location?: 'canonical' | 'sandbox' | 'local'
 }
 
 // Small uppercase pill that identifies which surface a cart lives on.
-// Three states:
-//   • local        (cyan)   — browser-only LocalCart, never touched server.
-//   • server       (purple) — canonical droplet cart under cartridges/ or sample_data/.
+// Four states:
+//   • local        (cyan)   — browser-only LocalCart.
+//   • local (RB)   (violet) — cart in the paired Report Builder's folder;
+//                              routes to 127.0.0.1:7880 for report + agent
+//                              runs so the cart data stays on-device.
+//   • server       (purple) — canonical droplet cart under cartridges/.
 //   • sandbox      (amber)  — short-TTL upload under _session_uploads/.
-// Sandbox uses amber to match the visual language of the "temporary"
-// warnings (amber panels for legacy/expired carts, amber ejection prompts).
 function CartKindBadge({
   kind,
   location,
 }: {
   kind: 'local' | 'server'
-  location?: 'canonical' | 'sandbox'
+  location?: 'canonical' | 'sandbox' | 'local'
 }) {
   const isSandbox = kind === 'server' && location === 'sandbox'
   if (isSandbox) {
@@ -453,15 +521,26 @@ function CartKindBadge({
       </span>
     )
   }
+  // Local carts get a violet badge to signal Report Builder routing. If
+  // Report Builder isn't paired, the outer compatibility filter already
+  // hides the entry, so the badge only surfaces when the routing is live.
+  if (kind === 'local') {
+    return (
+      <span
+        className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded font-mono
+                   bg-violet-500/15 border border-violet-500/40 text-violet-300"
+        title="Local cart — reports + agents run on the paired Report Builder (127.0.0.1:7880). Cart data stays on your machine."
+      >
+        local
+      </span>
+    )
+  }
   return (
     <span
-      className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded font-mono ${
-        kind === 'local'
-          ? 'bg-cyan-500/15 border border-cyan-500/40 text-cyan-300'
-          : 'bg-purple-500/15 border border-purple-500/40 text-purple-300'
-      }`}
+      className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded font-mono
+                 bg-purple-500/15 border border-purple-500/40 text-purple-300"
     >
-      {kind}
+      server
     </span>
   )
 }

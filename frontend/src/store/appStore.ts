@@ -7,6 +7,7 @@ import * as api from '../api/client'
 import type { GenerateReportResponse, RunAgentResponse } from '../api/client'
 import { probeImageBuilder } from '../api/imageBuilder'
 import { probeReportBuilder } from '../api/reportBuilder'
+import { _registerReportBuilderStateReader } from '../api/client'
 import { detectWebGPU, runWebGpuAssociate, loadBrainForCart, isBrainLoadedFor } from '../lib/webgpuAssociate'
 import { parseCartFile, cosineSearchLocal } from '../lib/localCart'
 
@@ -1799,3 +1800,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 }))
+
+// Hand the client.ts routing layer a lazy reader for Report Builder
+// state so it doesn't need to import from the store (circular). Any
+// component that flips reportBuilderState via detectReportBuilder /
+// pair / unpair also flips this — the reader sees fresh state on every
+// call, no manual re-registration needed.
+_registerReportBuilderStateReader(() => useAppStore.getState().reportBuilderState)
