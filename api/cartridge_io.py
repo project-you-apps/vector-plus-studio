@@ -42,13 +42,43 @@ HIPPO_FORMAT = '<I B B I I I I H I B B 34s'
 HIPPO_SIZE = 64
 
 # Step 2b — perms_byte bit layout (offset 29 in the hippo row).
+#
+# Future-shape (added 2026-07-18): bits 3 and 4 are reserved for the
+# Google-Drive-style role tiers we'll ship when the permission UI lands.
+# Documenting the assignments now so no code stomps on them.
+#
+#     bit 0: PERM_R  Read/View               (Viewer tier)
+#     bit 1: PERM_W  Write/Edit
+#     bit 2: PERM_X  eXecute (lambda-passage)
+#     bit 3: PERM_C  Comment/annotate        (Commenter tier, reserved)
+#     bit 4: PERM_M  Manage permissions      (Manager tier, reserved)
+#     bits 5-7: reserved
+#
+# Tier composition maps cleanly onto masks:
+#     Viewer          = R                (0x01)
+#     Commenter       = R | C            (0x09)
+#     Editor          = R | W            (0x03 — current PERM_DEFAULT)
+#     Content Manager = R | W | X        (0x07)
+#     Manager / Owner = R | W | X | M    (0x17)
+#
+# PERM_C and PERM_M are declared as constants below but not yet enforced —
+# the annotation-only and permission-management surfaces don't exist yet.
 PERM_R = 0x01  # readable — included in search results
 PERM_W = 0x02  # writable — can be tombstoned, restored, or in-place updated
 PERM_X = 0x04  # reserved for future executable / lambda-passage feature
+PERM_C = 0x08  # reserved: Commenter tier (annotate but not modify content)
+PERM_M = 0x10  # reserved: Manager tier (change permissions on this pattern)
 
 # Backward-compat: when the perms_byte is zero (carts built before Step 2b),
 # treat it as rw — existing behavior was "all patterns writable if cart unlocked."
 PERM_DEFAULT_LEGACY = PERM_R | PERM_W
+
+# Offset of the perms_byte within the 64-byte hippocampus row. The write
+# path also uses this via PERMS_BYTE_OFFSET declared alongside
+# write_hippocampus_perms below (kept for backward-compat with existing
+# imports). Readers use PERMS_BYTE_OFFSET_READ for symmetry with
+# LIFECYCLE_BYTE_OFFSET.
+PERMS_BYTE_OFFSET_READ = 29
 
 
 # Lifecycle byte — per-pattern truth_status + behavioral flags (offset 30).

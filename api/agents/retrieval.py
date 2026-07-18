@@ -116,19 +116,32 @@ def _should_include(
 ) -> bool:
     """Return True if pattern ``idx`` passes the given ``pattern_filter``.
 
-    Tombstoned patterns are ALWAYS excluded — tombstone is a delete flag,
-    orthogonal to lifecycle. Everything else is filtered per mode:
+    Three orthogonal exclusion axes, applied in order:
 
-    * ``"active_only"`` — only truth_status == ACTIVE (the default; matches
-      the "current relevant patterns" semantics agents want by default).
-    * ``"include_superseded"`` — ACTIVE + SUPERSEDED (useful for
-      diff-style questions where superseded history is relevant).
-    * ``"all"`` — every non-tombstoned pattern, regardless of lifecycle.
+    1. **Tombstone (byte 28 bit 0)** — ALWAYS excluded. Tombstone is a
+       delete flag, orthogonal to lifecycle.
+    2. **PERM_R (byte 29 bit 0)** — ALWAYS excluded when explicitly
+       cleared. Legacy carts (perms_byte == 0) and missing hippocampus
+       rows read as readable via the ``PERM_DEFAULT_LEGACY = R+W``
+       backward-compat rule. This closes the invariant that a pattern
+       marked non-readable via ``bin/set_pattern_permissions.py`` should
+       not surface in retrieval (added 2026-07-18).
+    3. **truth_status (byte 30 bits 0-2)** — filtered per
+       ``pattern_filter`` mode:
+
+       * ``"active_only"`` — only truth_status == ACTIVE (the default;
+         matches the "current relevant patterns" semantics agents want).
+       * ``"include_superseded"`` — ACTIVE + SUPERSEDED (useful for
+         diff-style questions where superseded history is relevant).
+       * ``"all"`` — every non-tombstoned readable pattern, regardless
+         of lifecycle.
 
     Unknown ``pattern_filter`` values fall through to ``"active_only"``,
     matching the safest possible default.
     """
     if cart.is_tombstoned(idx):
+        return False
+    if not cart.is_readable(idx):
         return False
     if pattern_filter == "all":
         return True

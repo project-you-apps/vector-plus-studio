@@ -46,14 +46,23 @@ from api.reports.cart_reader import CartHandle  # noqa: E402
 def _make_cart_with_lifecycles(
     lifecycles: list[int],
     tombstones: list[bool] | None = None,
+    perms: list[int] | None = None,
     passages: list[str] | None = None,
 ) -> str:
     """Build a small synthetic cart where pattern i carries the byte-30
     lifecycle value from ``lifecycles[i]``. Every pattern gets a distinct
-    passage so retrieval by query works predictably."""
+    passage so retrieval by query works predictably.
+
+    ``perms[i]`` (optional) sets the byte-29 perms_byte on row i. When
+    omitted every pattern gets the legacy default (byte-29 == 0, which
+    reads back as PERM_R+PERM_W). Pass an explicit 0x02 (PERM_W only)
+    to exclude a pattern from retrieval via the ``is_readable`` gate.
+    """
     n = len(lifecycles)
     tombstones = tombstones or [False] * n
     assert len(tombstones) == n
+    perms = perms if perms is not None else [0] * n
+    assert len(perms) == n
     if passages is None:
         # Distinct token per pattern so top-N retrieval by query is
         # deterministic — pattern i is uniquely identified by "unique-i".
@@ -67,10 +76,11 @@ def _make_cart_with_lifecycles(
     sources_arr = np.array([f"src-{i}.txt" for i in range(n)], dtype=object)
 
     rows = []
-    for lc, tomb in zip(lifecycles, tombstones):
+    for lc, tomb, perm in zip(lifecycles, tombstones, perms):
         row = np.zeros(64, dtype=np.uint8)
         if tomb:
             row[28] = 0x01
+        row[29] = perm & 0xFF
         row[30] = lc & 0xFF
         rows.append(row)
     hippo = np.stack(rows) if n else np.zeros((0, 64), dtype=np.uint8)
@@ -225,6 +235,79 @@ class TestBackwardCompatDefaultCarts(unittest.TestCase):
                     {0, 1, 2, 3},
                     f"Mode {mode!r} lost live patterns on a zero-byte cart",
                 )
+        finally:
+            os.unlink(path)
+
+
+class TestPermRReadInvariant(unittest.TestCase):
+    """Byte-29 PERM_R invariant (added 2026-07-18): a pattern with an
+    explicit non-zero perms_byte lacking PERM_R must be excluded from
+    retrieval in every filter mode. Tombstone + is_readable + truth_status
+    are three orthogonal exclusion axes; all three must gate independently.
+    """
+
+    def test_perm_r_cleared_excludes_from_every_mode(self):
+        # Pattern 0: PERM_W only (0x02) — explicitly non-readable.
+        # Pattern 1: PERM_R + PERM_W (0x03) — normal readable.
+        # Pattern 2: all-zero perms_byte — legacy default, treated as R+W.
+        lifecycles = [
+            pack_lifecycle_byte(truth_status=TRUTH_STATUS_ACTIVE),
+            pack_lifecycle_byte(truth_status=TRUTH_STATUS_ACTIVE),
+            pack_lifecycle_byte(truth_status=TRUTH_STATUS_ACTIVE),
+        ]
+        perms = [0x02, 0x03, 0x00]  # W-only, R+W, legacy-default
+        path = _make_cart_with_lifecycles(lifecycles, perms=perms)
+        try:
+            cart = CartHandle(path)
+            for mode in ("active_only", "include_superseded", "all"):
+                hits = retrieve_top_patterns(
+                    cart, "cabbage", 10, pattern_filter=mode,
+                )
+                hit_idxs = {h.idx for h in hits}
+                self.assertEqual(
+                    hit_idxs,
+                    {1, 2},
+                    f"PERM_R=0 pattern leaked in mode {mode!r}",
+                )
+        finally:
+            os.unlink(path)
+
+    def test_perm_r_compose_with_truth_status(self):
+        # Perm gate applies BEFORE the truth_status filter. A pattern that
+        # would pass truth_status but not PERM_R stays hidden. A pattern
+        # that would pass PERM_R but not truth_status also stays hidden.
+        lifecycles = [
+            pack_lifecycle_byte(truth_status=TRUTH_STATUS_ACTIVE),      # R+W ACTIVE
+            pack_lifecycle_byte(truth_status=TRUTH_STATUS_ACTIVE),      # W-only ACTIVE (should hide)
+            pack_lifecycle_byte(truth_status=TRUTH_STATUS_SUPERSEDED),  # R+W SUPERSEDED (hides via active_only)
+        ]
+        perms = [0x03, 0x02, 0x03]
+        path = _make_cart_with_lifecycles(lifecycles, perms=perms)
+        try:
+            cart = CartHandle(path)
+            hits = retrieve_top_patterns(cart, "cabbage", 10, pattern_filter="active_only")
+            self.assertEqual({h.idx for h in hits}, {0})
+            hits = retrieve_top_patterns(cart, "cabbage", 10, pattern_filter="include_superseded")
+            self.assertEqual({h.idx for h in hits}, {0, 2})
+            hits = retrieve_top_patterns(cart, "cabbage", 10, pattern_filter="all")
+            self.assertEqual({h.idx for h in hits}, {0, 2})  # #1 still gated by PERM_R
+        finally:
+            os.unlink(path)
+
+    def test_legacy_perms_byte_zero_reads_as_readable(self):
+        # Load-bearing backward-compat: every cart on disk today has
+        # perms_byte == 0 for every pattern. All patterns must remain
+        # readable.
+        lifecycles = [0, 0, 0, 0]
+        perms = [0, 0, 0, 0]
+        path = _make_cart_with_lifecycles(lifecycles, perms=perms)
+        try:
+            cart = CartHandle(path)
+            hits = retrieve_top_patterns(cart, "cabbage", 10, pattern_filter="active_only")
+            self.assertEqual({h.idx for h in hits}, {0, 1, 2, 3})
+            # is_readable direct check for good measure
+            for i in range(4):
+                self.assertTrue(cart.is_readable(i))
         finally:
             os.unlink(path)
 

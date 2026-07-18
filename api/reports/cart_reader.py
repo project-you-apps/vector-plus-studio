@@ -60,6 +60,8 @@ from api.cartridge_io import (
     LIFECYCLE_FLAG_TO_CONSOLIDATE as _LIFECYCLE_FLAG_TO_CONSOLIDATE,
     TRUTH_STATUS_NAMES as _TRUTH_STATUS_NAMES,
     parse_lifecycle_byte as _parse_lifecycle_byte,
+    PERMS_BYTE_OFFSET_READ as _PERMS_BYTE_OFFSET,
+    PERM_R as _PERM_R,
 )
 
 
@@ -362,6 +364,32 @@ class CartHandle:
         "raw": int}``. Missing byte → all defaults (ACTIVE, no flags).
         """
         return _parse_lifecycle_byte(self._lifecycle_byte(idx))
+
+    # -- perms byte (byte 29) — Step 2b permissions ---------------------
+    # See ``api/cartridge_io.py`` for the full bit layout including the
+    # reserved Commenter (bit 3) / Manager (bit 4) tiers.
+
+    def is_readable(self, idx: int) -> bool:
+        """True iff pattern ``idx`` is readable (PERM_R bit set).
+
+        Mirrors the tombstone / is_active idiom: missing hippocampus /
+        short row / zero perms_byte all read as True (legacy carts
+        pre-Step-2b defaulted to R+W). Only an explicit non-zero
+        perms_byte with PERM_R unset excludes the pattern from search
+        results. Closes the invariant that ``PERM_R = 0`` should hide
+        a pattern from ``retrieve_top_patterns`` (see
+        ``api/agents/retrieval.py:_should_include``).
+        """
+        row = self.get_hippocampus_row(idx)
+        if row is None or len(row) <= _PERMS_BYTE_OFFSET:
+            return True  # legacy / brain-only cart — treat as readable
+        try:
+            perms = int(row[_PERMS_BYTE_OFFSET]) & 0xFF
+        except (IndexError, TypeError, ValueError):
+            return True
+        if perms == 0:
+            return True  # perms_byte zero → PERM_DEFAULT_LEGACY (R+W)
+        return bool(perms & _PERM_R)
 
     def get_hippocampus_row(self, idx: int) -> Optional[np.ndarray]:
         """Return the raw 64-byte hippocampus row for ``idx`` (uint8
