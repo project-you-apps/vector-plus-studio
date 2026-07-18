@@ -13,13 +13,10 @@ const BrowserCartBuilder = lazy(() => import('./BrowserCartBuilder'))
 
 // Cart Builder — v1.1 surface is browser-side (LOCAL mode). The pre-WebGPU
 // legacy server-side flow (drop zone, server-managed workspace, Pattern 0
-// preview panel, sticky build bar) was retired 2026-05-10 in favor of the
-// single unified BrowserCartBuilder component. CLOUD mode (carts persist in
-// your own cloud data store + cloud-source picker for input documents)
-// lands with v1.2 alongside the OAuth substrate.
-//
-// See CC_unified-source-picker_2026-05.md for the three-axis architecture
-// this UI eventually expresses: source × format × destination.
+// preview panel, sticky build bar) was retired in favor of the single
+// unified BrowserCartBuilder component. CLOUD mode (carts persist in your
+// own cloud data store + cloud-source picker for input documents) lands
+// with v1.2 alongside the OAuth substrate.
 //
 // CartBrowser at the bottom shows curated/sandbox carts as a read-only
 // catalog. Click takes you to the Search screen rather than back into a
@@ -37,7 +34,7 @@ export default function CartBuilderScreen() {
   // Probe for the Desktop Cart Builder exe when the user lands on this tab.
   // 1-sec timeout inside the store action; failure is silent (badge falls
   // through to GPU/WebGPU/CPU). We fire on mount rather than app boot so
-  // Search-only sessions never do a loopback probe (Andy 2026-07-01).
+  // Search-only sessions never do a loopback probe.
   // Image Builder gets the same treatment; both probes are Promise.all-ed so
   // the two 1-sec budgets overlap (~1 sec total instead of 2). Failure is
   // silent for both — the pills fall through to their 'not-found' state.
@@ -59,16 +56,16 @@ export default function CartBuilderScreen() {
           </p>
         </div>
 
-        {/* Desktop Helper status banner — Andy 2026-07-02. The header
-            BackendBadge is generic; Cart Builder specifically needs to show
-            whether Build will route to the local exe or run in the browser.
+        {/* Desktop Helper status banner. The header BackendBadge is
+            generic; Cart Builder specifically needs to show whether
+            Build will route to the local exe or run in the browser.
             Detection re-fires on tab mount (see useEffect above); the
             Recheck button lets the user re-probe after starting the exe
             without leaving + returning to the tab.
-            Rendered as a full-width banner (Andy 2026-07-02 revisit — the
-            prior corner-pill was easy to miss and users were confused when
-            the header BackendBadge kept reading GPU). Hidden only in the
-            'unknown' pre-detection flicker window. */}
+            Rendered as a full-width banner because the prior corner-pill
+            was easy to miss and users were confused when the header
+            BackendBadge kept reading GPU. Hidden only in the 'unknown'
+            pre-detection flicker window. */}
         <DesktopHelperStatusPill
           state={desktopHelperState}
           onPair={openDesktopHelperPairModal}
@@ -245,7 +242,7 @@ function DownloadBuildersButton() {
   // pop a "meanwhile, prepare your machine" checklist to keep the user
   // engaged and pre-stage the install steps. We do NOT preventDefault on
   // the anchor click: the browser's download behavior fires normally and
-  // the modal sits on top. Andy 2026-07-11.
+  // the modal sits on top.
   const [showModal, setShowModal] = useState(false)
   return (
     <>

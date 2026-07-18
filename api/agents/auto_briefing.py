@@ -7,7 +7,7 @@ narrative that reads like a good analyst's day-one summary.
 Design decisions (2026-07-13 v1)
 --------------------------------
 - **One-shot.** No scheduling infra in v1; the scheduled variant is a
-  v1.5 dispatch (design doc). This agent produces a fresh briefing every
+  v1.5 dispatch. This agent produces a fresh briefing every
   time it's run — differentiation from "yesterday's briefing" requires
   persistence we don't have yet.
 
@@ -81,7 +81,7 @@ class AutoBriefingAgent(Agent):
         inputs: AgentInput,
         options: AgentOptions,
     ) -> AgentOutput:
-        # Lazy import — matches the Wave-1 report convention. Keeps the
+        # Lazy import — matches the report convention. Keeps the
         # module importable without the LLM adapter being configured
         # (registry lookups don't trigger LLM boot).
         from api.llm import get_llm_adapter

@@ -1,14 +1,12 @@
 """Shared extraction primitives for the VPS Reports engine.
 
-Wave-1a foundation module (Andy 2026-07-11). Timeline (§2), Trend (§3),
-Entity Rollup (§5), and Financial Rollup (§6) — plus any wave-2 reports
-that layer LLM extraction on top — all consume the three functions and
-three dataclasses re-exported here.
+Foundation module. Timeline, Trend, Entity Rollup, and Financial
+Rollup — plus any future reports that layer LLM extraction on top —
+all consume the three functions and three dataclasses re-exported here.
 
-Design: ``docs/vps-internal/Report Types Design 2026-07-10.md`` §0.3.
-This wave: pure regex. Wave-2 hook: an optional LLM-fallback callable
-per extractor for ambiguous inputs; see the ``TODO(wave-2)`` markers
-in each submodule.
+Pure regex today. An optional LLM-fallback callable per extractor for
+ambiguous inputs is a planned extension; see the ``TODO`` markers in
+each submodule for where it plugs in.
 
 Usage::
 

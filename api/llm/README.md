@@ -11,15 +11,13 @@ result = llm.synthesize(prompt, model_hint="large", max_tokens=1024)
 
 ## The three-tier LLM story
 
-Full framing lives in
-`docs/vps-internal/Cloudflare Agents Investigation 2026-07-10.md`
-(Section 7). Short version:
+Short version:
 
-| Tier             | Provider  | Adapter                     | Cost to VPS                       | Quality              | User setup                       |
-|------------------|-----------|-----------------------------|-----------------------------------|----------------------|----------------------------------|
-| **Free**         | Track C   | `CloudflareAdapter`         | ~$0 for first ~200 users          | Good for reports     | None (default)                   |
-| **Enterprise**   | Track B   | `AnthropicAdapter` *(TBD)*  | Per-token Claude billing          | Best                 | None                             |
-| **Power user**   | Track A   | `HeartbeatAdapter` *(TBD)*  | $0                                | Best (their Claude)  | Install Heartbeat + Claude sub   |
+| Tier             | Adapter                     | Cost to VPS                       | Quality              | User setup                       |
+|------------------|-----------------------------|-----------------------------------|----------------------|----------------------------------|
+| **Free**         | `CloudflareAdapter`         | ~$0 for first ~200 users          | Good for reports     | None (default)                   |
+| **Enterprise**   | `AnthropicAdapter` *(TBD)*  | Per-token Claude billing          | Best                 | None                             |
+| **Power user**   | `HeartbeatAdapter` *(TBD)*  | $0                                | Best (their Claude)  | Install Heartbeat + Claude sub   |
 
 Cloudflare Workers AI is the default. Anthropic + Heartbeat are
 placeholder implementations that raise `LLMError`; the shape is kept
@@ -38,7 +36,7 @@ export VECTOR_PLUS_LLM_PROVIDER=heartbeat    # not yet implemented
 Unknown values raise `LLMError` at construction time so misconfiguration
 surfaces immediately.
 
-## Configuring the Cloudflare adapter (Track C)
+## Configuring the Cloudflare adapter
 
 Two operating modes controlled by `CF_ENDPOINT_MODE`:
 
@@ -63,10 +61,10 @@ export WORKER_AUTH_TOKEN=<shared secret with the Worker>
 ```
 
 The adapter calls `POST {CF_WORKER_URL}/synthesize` with
-`X-Worker-Auth: {WORKER_AUTH_TOKEN}`. 60-second timeout. The Worker
-itself is being built in parallel — until it ships, use `direct` mode.
+`X-Worker-Auth: {WORKER_AUTH_TOKEN}`. 60-second timeout. Until the
+Worker fronting is available, use `direct` mode.
 
-## Configuring Anthropic (Track B, not yet wired)
+## Configuring Anthropic (not yet wired)
 
 When the real implementation lands, the config surface will be:
 
@@ -78,7 +76,7 @@ export ANTHROPIC_API_KEY=<your Anthropic key>
 Endpoint: `POST https://api.anthropic.com/v1/messages` with
 `x-api-key: {ANTHROPIC_API_KEY}`.
 
-## Configuring Heartbeat (Track A, not yet wired)
+## Configuring Heartbeat (not yet wired)
 
 Requires:
 
@@ -127,15 +125,14 @@ def generate_executive_tldr(cart_path: str, top_passages: list[str]) -> str:
 Every provider translates the same four hints. If a hint isn't
 recognized, providers fall back to `default` silently.
 
-| `model_hint` | Cloudflare (Track C)                       | Anthropic (Track B, planned) |
+| `model_hint` | Cloudflare                                 | Anthropic (planned)           |
 |--------------|--------------------------------------------|-------------------------------|
 | `default`    | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | `claude-haiku-4-5`            |
 | `small`      | `@cf/meta/llama-3.1-8b-instruct`           | `claude-haiku-4-5`            |
 | `large`      | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | `claude-sonnet-5`             |
 | `vision`     | `@cf/meta/llama-4-scout-17b-16e-instruct`  | `claude-opus-4-8`             |
 
-Report-type → model-hint recommendation lives in Section 3 of the
-investigation doc:
+Report-type → model-hint recommendation:
 
 | Report            | Recommended hint |
 |-------------------|------------------|

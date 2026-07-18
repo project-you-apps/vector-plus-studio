@@ -26,7 +26,7 @@ from .engine import engine, TextRegionEncoder
 # one struct per pattern in the cart NPZ's `hippocampus` array.
 # Full spec: docs/PATTERN-ANATOMY.md §3 "The Hippocampus: H-row and H-block".
 #
-# Step 2b update (Andy 2026-05-06): broke the first byte of the previously-35-byte
+# Step 2b update: broke the first byte of the previously-35-byte
 # `reserved` field out into a dedicated `perms_byte` for our RWX semantics.
 # The original `flags` byte at offset 28 is fully claimed by membot's
 # cartridge_builder.py for {tombstone, pinned, has_parent, has_child,
@@ -168,7 +168,7 @@ def list_cartridges() -> list[dict]:
 
     Zero-byte files are filtered — sample_data ships placeholder .pkl stubs
     that aren't real carts; they were showing as `0.0 MB` and click-to-mount
-    failed silently (Andy 2026-05-06). Anything under 1KB is treated as a
+    failed silently. Anything under 1KB is treated as a
     stub and skipped.
     """
     results = []
@@ -386,7 +386,7 @@ def save_brain_manifest(brain_path, embeddings):
 
 
 # ---------------------------------------------------------------------------
-# Cart-format RWX (Step 2a of the RWX roadmap, Andy 2026-05-05).
+# Cart-format RWX (Step 2a of the RWX roadmap).
 #
 # Permissions live in a sidecar JSON `<cart_basename>.permissions.json`
 # alongside the cart file. Sidecar (vs. embedded in NPZ) so existing carts

@@ -12,7 +12,7 @@ const DEFAULT_BATCH_SIZE = 8
 // Thrown when the WebGPU device is lost / hung / removed mid-build. Distinct
 // from buffer-OOM (which is recoverable by halving batch size). On device-lost
 // the embedder must be torn down and reloaded on WASM — no batch size helps a
-// corpse. See [[CC_webgpu-device-lost-fallback-2026-06-29]] for the diagnosis.
+// corpse.
 //
 // Parameter-property shorthand (`public readonly underlying: Error` in the
 // constructor signature) is forbidden by the project's `erasableSyntaxOnly`
@@ -32,9 +32,8 @@ export class WebGpuDeviceLostError extends Error {
 // long for WebGPU to handle at all. Halving exhausted, we're at batch=1, and
 // the same chunk still won't fit. Caller (embedTexts outer loop) should
 // route the offending batch to WASM, which doesn't have the 2 GiB single-
-// buffer cap. See [[CC_webgpu-device-lost-fallback-2026-06-29]] Patch 7
-// section for the diagnosis (originally surfaced on home machine builds
-// with very long Claude-Code transcript MDs producing 7K+ token chunks).
+// buffer cap. Originally surfaced on very long transcript MDs producing
+// 7K+ token chunks that exceeded the single-buffer limit.
 export class WebGpuBufferCapError extends Error {
   public readonly underlying: Error
   constructor(underlying: Error) {

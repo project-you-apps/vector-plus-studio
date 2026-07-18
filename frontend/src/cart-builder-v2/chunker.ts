@@ -149,7 +149,7 @@ export function chunkSections(
     // Line-aware chunker: chunk boundaries fall between lines, never
     // mid-line, so markdown structure (tables, lists, headings, paragraph
     // breaks) survives intact for the passage viewer's markdown renderer.
-    // Andy 2026-07-05: previous split(/\s+/) + join(' ') implementation
+    // previous split(/\s+/) + join(' ') implementation
     // destroyed all newlines, turning Docling OCR into a single wall of
     // piped text — mirror of the backend chunk_texts fix.
     const preCharSplit: Section[] = []

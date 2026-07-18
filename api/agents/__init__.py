@@ -27,8 +27,6 @@ Standing conventions (mirroring reports engine):
 
 - All agents call ``prompt.wrap_llama3_instruct()`` before invoking the
   LLM adapter — see ``prompt.py`` for the rationale.
-
-Full architecture: ``docs/vps-internal/Agents Tab Design 2026-07-13.md``.
 """
 from .base import Agent, AgentInput, AgentOptions, AgentOutput
 from .executor import run_agent

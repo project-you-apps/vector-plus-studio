@@ -274,9 +274,8 @@ export default function BrowserCartBuilder() {
   // DXGI_ERROR_DEVICE_HUNG. probeWebGpuCapability() runs a tiny real embed;
   // if it fails or times out, the cached embedder is silently swapped to WASM
   // BEFORE the user's first Build click — no failed builds, no page reload.
-  // Pre-2026-06-29 the probe only did requestAdapter(); see
-  // [[CC_webgpu-device-lost-fallback-2026-06-29]] for the laptop-build repro
-  // that motivated the deeper probe.
+  // An earlier revision only did requestAdapter() at boot; the deeper probe
+  // was added after builds on constrained devices repro'd the DXGI hang.
   useEffect(() => {
     let cancelled = false
     const probe = async () => {
@@ -690,14 +689,10 @@ export default function BrowserCartBuilder() {
               cloud · v1.2
             </span>
             {/* Forcing function: visible alpha-state banner for the v1 provenance
-                sidecar (source_paths.npy). Annoying enough we want to retire it;
-                visible enough externally that pilot customers will ask "when does
-                v2 land?", creating sales pressure to actually land v2 schema.
-                See CC_cart-provenance-schema_2026-06-15 for v2 spec + pilot
-                blocker reasoning. Retire this badge once v2 ships. */}
+                sidecar (source_paths.npy). Retire this badge once the v2 schema ships. */}
             <span
               className="text-[10px] uppercase tracking-wider text-amber-300 bg-amber-500/15 border border-amber-500/40 px-2 py-0.5 rounded font-mono cursor-help"
-              title="Provenance v1 sidecar — source_paths.npy carries filename per pattern alongside h-row. ALPHA. v2 (h-row source_idx + strings table) required before pilot launches with legal/clinical/CPA customers. See CC_cart-provenance-schema_2026-06-15."
+              title="Provenance v1 sidecar — source_paths.npy carries filename per pattern alongside h-row. ALPHA. A future v2 schema (h-row source_idx + strings table) will replace it."
             >
               provenance: v1 (alpha)
             </span>

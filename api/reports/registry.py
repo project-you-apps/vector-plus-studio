@@ -12,13 +12,13 @@ the decorator on their :class:`~api.reports.base.Report` subclass:
         display_name = "Summary"
         ...
 
-Wave-2 wires the FastAPI route to ``run_report`` (executor.py). Wave-2+
-also adds ``GET /api/reports/`` which serializes :func:`list_reports`
-for the frontend card grid.
+The FastAPI route wires to ``run_report`` (executor.py). A future
+``GET /api/reports/`` endpoint will serialize :func:`list_reports` for
+the frontend card grid.
 
 Naming discipline: ``Report.name`` values MUST match the ``name`` field
 in ``frontend/src/reports/report-definitions.ts`` for the frontend →
-backend routing to work. Current expected slugs (Andy 2026-07-11):
+backend routing to work. Current expected slugs:
 
     summary
     timeline
@@ -29,9 +29,7 @@ backend routing to work. Current expected slugs (Andy 2026-07-11):
     change_log         # NOT "change-log"
     tldr               # NOT "executive-tldr"
 
-The Wave-1a foundation dispatch brief called out hyphenated slugs; the
-actual frontend definitions use underscores. Wave-1b agents: match the
-frontend file, not the brief.
+Underscores are canonical here — match the frontend file.
 """
 from __future__ import annotations
 
@@ -98,13 +96,12 @@ def get_report_by_name(name: str) -> Optional[type[Report]]:
 def list_reports() -> list[dict[str, Any]]:
     """Return metadata for every registered report.
 
-    Powers the Wave-2 ``GET /api/reports/`` list endpoint (frontend
+    Powers the future ``GET /api/reports/`` list endpoint (frontend
     card grid). The shape here is deliberately the same as
     :meth:`Report.describe` so the endpoint is a one-liner.
 
     Order: insertion order (Python 3.7+ dict semantics), which matches
     ``import`` order of the report modules. Import order is set in
-    ``api/reports/__init__.py`` to mirror the Report Types Design doc
-    section ordering (§1 Summary first, §8 TL;DR last).
+    ``api/reports/__init__.py`` (Summary first, TL;DR last).
     """
     return [cls.describe() for cls in REGISTRY.values()]

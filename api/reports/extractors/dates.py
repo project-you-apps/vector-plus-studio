@@ -1,8 +1,8 @@
 """Date extraction from raw passage text.
 
-Wave-1 uses pure regex — four formats cover the demo-cart universe
+Uses pure regex — four formats cover the target universe
 (ISO, US-slash, long-name, and Sysco-style ``YYYYMMDD`` compact
-embeddings from invoice filenames). Wave-2 hook noted at the bottom
+embeddings from invoice filenames). a future hook noted at the bottom
 for LLM fallback ("yesterday", "last Tuesday", etc).
 
 See ``Report Types Design 2026-07-10.md`` §0.3 for the shared-extractor
@@ -25,8 +25,8 @@ from typing import Optional
 class DateExtraction:
     """A single extracted date span.
 
-    ``confidence`` is 1.0 for regex hits in Wave-1 across the board; the
-    field is here so Wave-2 LLM-fallback hits can carry lower scores
+    ``confidence`` is 1.0 for regex hits across the board; the
+    field is here so a future release LLM-fallback hits can carry lower scores
     without a shape change. ``source_format`` records which regex bucket
     fired so consumers (Trend flag thresholds, Timeline granularity
     fallback) can reason about ambiguity.
@@ -211,8 +211,8 @@ def extract_dates(text: str) -> list[DateExtraction]:
     # Ensure final list is sorted by start.
     winners.sort(key=lambda h: h.start)
 
-    # TODO(wave-2): LLM-fallback for relative dates ("yesterday", "last
-    # Tuesday", "next Q3"). Design in §C.1 of the design doc — plug an
+    # TODO(a future release): LLM-fallback for relative dates ("yesterday", "last
+    # Tuesday", "next Q3"). Plug an
     # optional callable that receives (text, anchor_date) and returns
     # additional DateExtraction records with confidence < 1.0.
 

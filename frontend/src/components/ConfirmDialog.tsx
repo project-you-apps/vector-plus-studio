@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { AlertTriangle, X } from 'lucide-react'
 
 // ConfirmDialog — reusable destructive-action confirmation modal.
-// Andy 2026-05-06: standard practice for destructive actions in VPS.
+// standard practice for destructive actions in VPS.
 //
 // Usage:
 //   const [confirmState, setConfirmState] = useState<ConfirmState>(null)

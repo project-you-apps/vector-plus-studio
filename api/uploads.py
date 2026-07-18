@@ -1,11 +1,12 @@
 """
 api/uploads.py — Public-demo upload endpoint for client-side cartridge files.
 
-Andy 2026-05-06: when the server is in read-only mode (public droplet demo),
-users can't open the server's filesystem via the native file picker, but they
-DO want to evaluate VPS against their own carts. Solution: client uploads
-a `.cart.npz` to a sandboxed temp dir; backend forces a read-only permissions
-sidecar; user mounts via the existing /api/cartridges/mount path.
+When the server is in read-only mode (public droplet demo), users can't
+open the server's filesystem via the native file picker, but they DO
+want to evaluate VPS against their own carts. Solution: client uploads
+a `.cart.npz` to a sandboxed temp dir; backend forces a read-only
+permissions sidecar; user mounts via the existing /api/cartridges/mount
+path.
 
 Sandboxing layers:
   • Per-file UUID prefix so concurrent uploads don't collide.
@@ -14,7 +15,7 @@ Sandboxing layers:
   • Size cap (default 250MB; configurable via VPS_UPLOAD_MAX_MB env var).
   • Magic-byte check on the first 4 bytes — NPZ must be PK zip. Naive
     renamed files are rejected.
-  • Deep structural NPZ validation (Andy 2026-05-08): testzip() integrity
+  • Deep structural NPZ validation: testzip() integrity
     check + zip-slip defense (no `..`, no absolute paths, no backslashes
     in entry names) + zip-bomb defense (per-entry compression ratio cap +
     total uncompressed size cap) + entry-type allowlist (`.npy` only).
@@ -270,7 +271,7 @@ router = APIRouter(prefix="/api/cartridges", tags=["uploads"])
 async def eject_cartridge(cart_path: str):
     """Immediately delete a sandboxed upload + its permissions sidecar.
 
-    Privacy/control feature (Andy 2026-05-08): users who uploaded a sensitive
+    Privacy/control feature: users who uploaded a sensitive
     cart shouldn't have to wait up to 1h for TTL eviction. This endpoint
     deletes the file on demand.
 
@@ -344,7 +345,7 @@ async def upload_cartridge(file: UploadFile = File(...)):
     catalog. The forced read-only permissions sidecar ensures the cart can't
     be written to once mounted, regardless of any sidecar inside the cart.
 
-    Streaming write architecture (Andy 2026-05-09): reads in 64KB chunks
+    Streaming write architecture: reads in 64KB chunks
     directly to disk rather than buffering the full upload in memory. Memory
     footprint per concurrent upload drops from MAX_UPLOAD_MB (250 MB) to
     64 KB, so the droplet survives N concurrent demo-day uploads without

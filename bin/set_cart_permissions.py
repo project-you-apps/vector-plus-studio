@@ -2,7 +2,7 @@
 """
 set_cart_permissions.py — write a `.permissions.json` sidecar next to a cart.
 
-Step 2a tool from the RWX roadmap (Andy 2026-05-05). Used to retrofit
+Step 2a tool from the RWX roadmap. Used to retrofit
 existing carts (e.g. on the droplet) with read-only permissions for the
 public demo, without rebuilding the cart.
 

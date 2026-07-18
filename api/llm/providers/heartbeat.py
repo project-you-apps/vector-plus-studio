@@ -1,10 +1,10 @@
-"""Heartbeat / BYO-Claude adapter — Track A (placeholder).
+"""Heartbeat / BYO-Claude adapter (placeholder).
 
-Track A is the "power user brings their own Claude" path: the user
-already has a Claude Pro / Team subscription and the Heartbeat browser
-extension installed, and VPS hands off the prompt through that surface.
-Free to us; user-supplied quality (typically the best of the three
-tracks); requires user setup.
+The "power user brings their own Claude" path: the user already has a
+Claude Pro / Team subscription and the Heartbeat browser extension
+installed, and VPS hands off the prompt through that surface. Free to
+us; user-supplied quality (typically the best of the three tiers);
+requires user setup.
 
 **Not yet implemented.** The likely shape when we ship it:
 
@@ -33,7 +33,7 @@ from ..adapter import LLMAdapter, LLMError, SynthesisResult
 
 
 class HeartbeatAdapter(LLMAdapter):
-    """Placeholder for the Track A Heartbeat / BYO-Claude adapter.
+    """Placeholder for the Heartbeat / BYO-Claude adapter.
 
     :meth:`synthesize` raises :class:`LLMError` with an actionable
     message pointing the operator at Heartbeat setup. Downstream code
@@ -53,6 +53,5 @@ class HeartbeatAdapter(LLMAdapter):
     ) -> SynthesisResult:
         raise LLMError(
             "Heartbeat adapter not yet implemented — install Heartbeat "
-            "browser extension + configure MCP for Track A BYO-Claude "
-            "flow."
+            "browser extension + configure MCP for BYO-Claude flow."
         )

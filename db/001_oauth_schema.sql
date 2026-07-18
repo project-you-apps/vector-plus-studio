@@ -5,9 +5,7 @@
 -- Idempotent: uses `add column if not exists`, `create ... if not exists`, and
 -- `drop policy if exists` before recreating. Re-running is safe.
 --
--- Source: docs/vps-internal/OAUTH-PRE-SCOPE.md, Blocks B0.3 + E.
---
--- IMPORTANT — Path B (Andy 2026-05-11):
+-- IMPORTANT — Path B:
 -- A `public.profiles` table already exists from Heartbeat dev with shape:
 --   id, username, full_name, avatar_url, updated_at, email
 -- and an existing `handle_new_user` trigger that auto-creates profile rows.

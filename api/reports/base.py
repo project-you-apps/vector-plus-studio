@@ -1,15 +1,13 @@
 """Report engine base types — the interface every report module implements.
 
-This module is the foundation for the VPS Reports engine. Wave-1 report
+This module is the foundation for the VPS Reports engine. Report
 modules (Summary / Timeline / Trend / Comparison / Entity Rollup /
 Financial Rollup / Change Log / Executive TL;DR) all subclass
 :class:`Report` and re-export via the :mod:`api.reports.registry`
 decorator ``@register_report``.
 
-Cross-cutting design lives in
-``docs/vps-internal/Report Types Design 2026-07-10.md`` (§0 "Common
-architecture"). This file implements §0.1 literally; §0.2 (registry) is
-in ``registry.py``; §0.3 (extractors) is a separate Wave-1a dispatch.
+Common architecture: this module defines the ABC + IO shapes; the
+registry lives in ``registry.py``; extractors are dispatched separately.
 
 Type dependencies:
 
@@ -125,8 +123,8 @@ class ReportOptions:
     frontend form never touches these.
 
     ``max_llm_calls`` is a hard cap enforced by the executor **before**
-    ``generate()`` runs — a Wave-1 non-LLM report gets ``max_llm_calls=0``
-    and stays cost-safe by construction. Executive TL;DR requires
+    ``generate()`` runs — a non-LLM report gets ``max_llm_calls=0`` and
+    stays cost-safe by construction. Executive TL;DR requires
     ``max_llm_calls >= 1`` or the executor short-circuits with a clear
     error pointing at this field.
     """
@@ -137,7 +135,7 @@ class ReportOptions:
     llm_model_hint: str = "default"
 
     # Hard budget cap. Reports check this before their FIRST synthesize()
-    # call. 0 = no LLM allowed (Wave-1 default). Executor blocks reports
+    # call. 0 = no LLM allowed (the default). Executor blocks reports
     # marked ``llm_dependency=True`` when this is 0.
     max_llm_calls: int = 0
 
@@ -166,7 +164,7 @@ class ReportOutput:
     - ``csv_data``: populated by Trend + Financial Rollup — those reports
       are naturally consumed as data grids.
     - ``html_extra``: populated by anything that markdown can't express
-      cleanly (SVG charts, nested tables). Wave-2 concern.
+      cleanly (SVG charts, nested tables). Future work.
     - ``metadata``: timing, LLM calls made, source-passage references,
       warnings surfaced by the report author. UI reads this for the
       audit / "show your work" footer.
@@ -182,8 +180,7 @@ class ReportOutput:
     warnings: list[str] = field(default_factory=list)
 
     def to_json_response(self) -> dict[str, Any]:
-        """Serialize for the FastAPI ``/api/reports/generate`` route
-        (wave-2 dispatch).
+        """Serialize for the FastAPI ``/api/reports/generate`` route.
 
         The route wraps this in the outer envelope; the report itself
         only owns what's inside. Keeping the shape flat so the frontend
@@ -214,17 +211,16 @@ class Report(ABC):
     ``name`` MUST match the corresponding entry in
     ``frontend/src/reports/report-definitions.ts`` — the frontend maps
     the card the user clicks onto ``POST /api/reports/generate`` with
-    that slug. Currently expected slugs (Andy 2026-07-11):
+    that slug. Currently expected slugs:
     ``summary``, ``timeline``, ``trend``, ``comparison``,
     ``entity_rollup``, ``financial_rollup``, ``change_log``, ``tldr``.
     (See ``registry.py`` for the naming-collision discipline.)
 
     ``input_schema`` mirrors the frontend ``FieldSchema[]`` array shape
     verbatim; keeping the source-of-truth on the backend lets us
-    auto-generate the frontend list from ``list_reports()`` when we wire
-    up the list endpoint (post-Wave-1). Until then, the two sides are
-    manually kept in sync — the smoke test in Wave-1b will assert
-    equality.
+    auto-generate the frontend list from ``list_reports()`` when the
+    list endpoint is wired. Until then, the two sides are manually kept
+    in sync — a smoke test asserts equality.
     """
 
     # -- class-level metadata (overridden by subclasses) ------------------
@@ -237,12 +233,12 @@ class Report(ABC):
     # List[dict] mirroring frontend ``FieldSchema``; each entry:
     # {name, label, type, required, default?, options?, placeholder?, helpText?}
     input_schema: list[dict[str, Any]] = []
-    # True iff ``generate()`` calls ``llm.synthesize()``. Wave-1: only
-    # Executive TL;DR is True.
+    # True iff ``generate()`` calls ``llm.synthesize()``. Only Executive
+    # TL;DR is True today.
     llm_dependency: bool = False
     # True iff this report makes sense as a scheduled brief (Hot Stack
-    # composition surface). Wave-1: Summary + Entity Rollup + Financial +
-    # TL;DR are candidates; Change Log requires two carts so skip.
+    # composition surface). Summary + Entity Rollup + Financial + TL;DR
+    # are candidates; Change Log requires two carts so skip.
     supports_scheduling: bool = False
 
     # -- interface --------------------------------------------------------

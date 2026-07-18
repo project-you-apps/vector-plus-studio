@@ -5,7 +5,7 @@
 // Read+write by default — the user just built this cart in their own
 // browser, so they own it and should be able to Edit Carts on it
 // without an extra unlock step. Matches the pattern-level perms_byte
-// default (PERM_R | PERM_W) in hippocampus.ts. Andy 2026-05-10.
+// default (PERM_R | PERM_W) in hippocampus.ts..
 //
 // To narrow permissions before sharing/uploading, the user can edit
 // the sidecar manually or use bin/set_cart_permissions.py to set

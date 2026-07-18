@@ -37,9 +37,8 @@ export interface SearchResult {
   paper_id?: string | null
   // Provenance v1 sidecar — per-pattern source filename. Populated for
   // local-mounted carts where the cart .npz contains a source_paths.npy
-  // entry (browser-built carts 2026-06-15+). undefined for legacy carts;
-  // ResultCard hides the source line when undefined. See
-  // CC_cart-provenance-schema_2026-06-15 for v2 schema upgrade plan.
+  // entry. undefined for legacy carts; ResultCard hides the source line
+  // when undefined.
   source_path?: string | null
   // Step 2b: per-pattern RWX from the hippocampus row's perms_byte.
   // null when the cart has no hippocampus data; otherwise an object with
@@ -137,7 +136,7 @@ export interface Pattern0Response {
   table_count?: number
 }
 
-// Per-pattern metadata sidecar (Andy 2026-07-06 AM). Response of
+// Per-pattern metadata sidecar. Response of
 // GET /api/cart/per-pattern-meta. Records parallel `passages` — one entry
 // per pattern with content_type + type-specific extras (image_b64 for
 // graphics, html for tables). Enables sandbox-mounted carts to reach parity

@@ -31,8 +31,8 @@ IMAGE_BUILDER_ORIGIN_DEFAULT = f"http://{IMAGE_BUILDER_HOST}:{IMAGE_BUILDER_PORT
 # push past 3 min on integrated graphics. 600s covers realistic worst-
 # case laptop OCR while still failing loud if the pipeline actually hangs.
 # GPU machines finish in seconds and never approach this ceiling.
-# (2026-07-07 bump from 180s after Ryzen 5 integrated-graphics laptop
-#  timed out on Sysco invoice + multi-page PDF during demo prep.)
+# Bumped from 180s after integrated-graphics laptops timed out on
+# multi-page PDF OCR.
 OCR_TIMEOUT_SEC = 600.0
 
 # Token file — same location image-builder/auth.py writes to. Cart Builder

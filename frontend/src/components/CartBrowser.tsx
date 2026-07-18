@@ -8,7 +8,7 @@ import { useCartBuilderStore } from '../store/cartBuilderStore'
 import type { CartBuilderListedCart, CartBuilderDoc } from '../api/cartbuilder'
 
 // CartBrowser — shared "My Carts" panel embedded in both Cart Builder and
-// Edit Carts (Andy 2026-05-05 IA Q2). Lists carts, ingestable docs, and
+// Edit Carts (IA Q2). Lists carts, ingestable docs, and
 // subdirectories with breadcrumb navigation. Folder management (add/remove
 // saved root folders) lives here too.
 //

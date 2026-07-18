@@ -46,12 +46,12 @@ export const pdfParser: Parser = {
 // whitespace so pages with only page numbers / running headers don't tip
 // borderline scans into the text path.
 export const PDF_CLASSIFY_TEXT_THRESHOLD = 500
-// Andy 2026-07-05 PM (Grant's pitch deck): expanded from 3 → 15 pages
-// because the deck was clean on pages 1-3 and only had broken ToUnicode
-// fonts on pages 4-7 — sampling only the head missed the corruption.
-// 15 caps classify cost on very long documents.
+// Expanded from 3 → 15 pages because some PDFs are clean on the first
+// few pages and only have broken ToUnicode fonts on later pages —
+// sampling only the head misses that corruption. 15 caps classify cost
+// on very long documents.
 export const PDF_CLASSIFY_MAX_PAGES = 15
-// Andy 2026-07-05: PDFs with broken font ToUnicode maps return LOTS of
+// PDFs with broken font ToUnicode maps return LOTS of
 // characters but most are Private Use Area / replacement / non-Latin
 // garbage that produces unreadable ingest. Two-level check:
 //   - Per-page: if ANY sampled page has substantial content (>50 chars)

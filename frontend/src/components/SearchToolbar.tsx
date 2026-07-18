@@ -149,7 +149,7 @@ export default function SearchToolbar() {
       }
       fetchCartridges()
       useAppStore.getState().fetchStatus()
-      // Andy 2026-07-06 AM: fire per-pattern-meta fetch on sandbox upload
+      // fire per-pattern-meta fetch on sandbox upload
       // so images render. This wasn't happening because handleUpload calls
       // api.mountCartridge directly instead of the store's mount() action.
       useAppStore.getState().fetchSandboxPerPatternMeta()

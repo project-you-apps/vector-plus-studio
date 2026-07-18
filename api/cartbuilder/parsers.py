@@ -46,14 +46,14 @@ def parse_pdf(filepath: Path) -> list[dict]:
 # Day 2 — PDF classification for Image Builder routing. Mirrors the
 # frontend classifyPdf() (frontend/src/cart-builder-v2/parsers/pdf.ts).
 # Same constants both sides so paired and browser-only builds route the same
-# file the same way (design doc Q3 golden-path invariant).
+# file the same way (golden-path invariant).
 PDF_CLASSIFY_TEXT_THRESHOLD = 500
 # Sample up to 15 pages during classification. Some PDFs are clean on the
 # first few pages and only expose broken ToUnicode fonts later on; head-only
 # sampling misses that corruption. Cost is ~100-500ms extra classify time
 # on a 15-page document; long PDFs cap here so classify stays fast.
 PDF_CLASSIFY_MAX_PAGES = 15
-# Andy 2026-07-05: PDFs with broken font ToUnicode maps return LOTS of
+# PDFs with broken font ToUnicode maps return LOTS of
 # characters (well over the 500-char threshold) but most are Private Use
 # Area / replacement / non-Latin garbage that produces unreadable ingest.
 # Two-level check:
@@ -420,7 +420,7 @@ def chunk_texts(sections: list[dict], chunk_size: int = 300, overlap: int = 50) 
     them as-intended. Overlap is expressed as trailing lines whose combined
     word count is >= `overlap`.
 
-    Andy 2026-07-05: previous implementation (`text.split()` then
+    previous implementation (`text.split()` then
     `" ".join()`) destroyed all newlines, turning Docling OCR output into
     a single wall of piped text that remark-gfm parsed as paragraph, not
     table. This fix restores structural markdown.

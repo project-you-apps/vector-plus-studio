@@ -58,7 +58,7 @@ body {
  * mode is toggled by Header.tsx setting `html.light`. Without these rules,
  * input backgrounds stay near-black and only the borders soften, leaving
  * Edit Carts text boxes + Cart Builder name field illegible in light mode
- * (Andy 2026-05-05). These selectors flip the background + text + placeholder
+ *. These selectors flip the background + text + placeholder
  * + focus border so any current or future <input>/<textarea>/<select> works.
  * --------------------------------------------------------------------------- */
 html.light input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
@@ -86,7 +86,7 @@ html.light { --chrome-bg: #f1f5f9; }
 /* Light-mode bumps for translucent purple/cyan/etc. accent backgrounds.
    Default opacities (e.g. bg-purple-500/5, border-purple-500/30) are tuned
    for slate-900 backdrops — they vanish on slate-50. The fix is element-
-   specific so dark mode is unchanged. Andy 2026-05-06: Edit Carts mounted
+   specific so dark mode is unchanged. Edit Carts mounted
    banner was almost invisible in light mode. */
 html.light .bg-purple-500\/5  { background-color: rgb(168 85 247 / 0.18); }
 html.light .bg-cyan-500\/5    { background-color: rgb(6 182 212 / 0.18); }
@@ -104,7 +104,7 @@ html.light .border-green-500\/30  { border-color: rgb(34 197 94 / 0.6); }
    thumb works in dark mode but in light mode (a) the slate-700 track washes
    out against white, (b) the 60%-opacity purple track over white renders
    semi-saturated, and (c) the white thumb has no shadow so it visually fuses
-   with either track. Andy 2026-05-09 — both states looked broken in QA. */
+   with either track. — both states looked broken in QA. */
 html.light [role="switch"] {
   background-color: rgb(203 213 225);   /* slate-300 — soft visible off-state */
 }
@@ -116,7 +116,7 @@ html.light [role="switch"] > span {
 }
 
 /* Text colors that worked on dark backgrounds need darker variants in light.
-   Original overrides covered -200 shade only for some colors. Andy 2026-05-09
+   Original overrides covered -200 shade only for some colors.
    spotted the WebGPU badge being too light in light mode and asked for a
    sweep — *"all the Light Green text in Light Mode needs to be Dark Green
    ... in fact, I would darken all the light colored text on Light Mode
@@ -125,7 +125,7 @@ html.light [role="switch"] > span {
    Mapping convention:  -100 → -900,  -200 → -800,  -300 → -700,  -400 → -600. */
 
 /* Slate (text + chrome) */
-html.light .text-slate-100  { color: rgb(15 23 42); }  /* → slate-900 — was missing from the original sweep; caused invisible h1/h2/h3/strong text in PassageModal under light mode (Andy 2026-06-28 QA) */
+html.light .text-slate-100  { color: rgb(15 23 42); }  /* → slate-900 — was missing from the original sweep; caused invisible h1/h2/h3/strong text in PassageModal under light mode */
 html.light .text-slate-200  { color: rgb(15 23 42); }
 html.light .text-slate-300  { color: rgb(30 41 59); }
 html.light .text-slate-400  { color: rgb(51 65 85); }

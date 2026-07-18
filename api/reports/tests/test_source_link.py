@@ -1,6 +1,6 @@
 """Unit tests for the source_link helper.
 
-The slug rule + link syntax is load-bearing for the frontend's Phase A
+The slug rule + link syntax is load-bearing for the frontend's 
 drill-down (custom ``a`` renderer in ``ReportResultsView.tsx`` intercepts
 ``vps://source/{slug}`` and dispatches a Search-tab focus). If either
 side of the contract drifts, clicks silently no-op — hence the specific
@@ -76,7 +76,7 @@ class TestSourceLink(unittest.TestCase):
 
     def test_link_preserves_prefix_in_display(self):
         # Display text keeps the "Poem:" prefix — only the slug strips
-        # it — so the rendered surface reads the same as before Phase A.
+        # it — so the rendered surface reads the same as before .
         self.assertEqual(
             source_link("Poem: War Poems by Siegfried Sassoon"),
             "[Poem: War Poems by Siegfried Sassoon](vps://source/war-poems-by-siegfried-sassoon)",

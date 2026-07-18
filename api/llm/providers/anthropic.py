@@ -1,11 +1,10 @@
-"""Anthropic Claude API adapter — Track B (placeholder).
+"""Anthropic Claude API adapter (placeholder).
 
-Track B is VPS-hosted Claude access: the droplet holds an Anthropic API
-key, calls ``POST https://api.anthropic.com/v1/messages`` on the user's
-behalf, and bills the customer per report / per token. This is the
-enterprise-tier default; power users prefer Track A (Heartbeat + their
-own Claude subscription), and free-tier users default to Track C
-(Cloudflare Workers AI).
+VPS-hosted Claude access: the droplet holds an Anthropic API key, calls
+``POST https://api.anthropic.com/v1/messages`` on the user's behalf, and
+bills the customer per report / per token. This is the enterprise-tier
+default. Power users prefer the Heartbeat BYO-Claude adapter, and
+free-tier users default to the Cloudflare Workers AI adapter.
 
 **Not yet implemented.** The class exists so the registry can enumerate
 all three providers and so future integration is a straight file-swap.
@@ -16,8 +15,7 @@ When wiring the real implementation:
   ``anthropic-version: 2023-06-01`` (or whatever the current stable is).
 - Body shape: ``{"model": <id>, "max_tokens": N,
   "messages": [{"role": "user", "content": <prompt>}]}``.
-- Model hint mapping (see ``docs/vps-internal/Cloudflare Agents
-  Investigation 2026-07-10.md`` Section 7 for the tier positioning):
+- Model hint mapping:
 
     ================  ==================================
     model_hint        Claude model id
@@ -44,12 +42,12 @@ from ..adapter import LLMAdapter, LLMError, SynthesisResult
 
 
 class AnthropicAdapter(LLMAdapter):
-    """Placeholder for the Track B Anthropic Claude adapter.
+    """Placeholder for the Anthropic Claude adapter.
 
     :meth:`synthesize` currently raises :class:`LLMError`. The class
     still exists so :func:`api.llm.registry.get_llm_adapter` can select
     it and produce a helpful error, and so downstream code can import
-    it without ImportError once Track B ships.
+    it without ImportError once the real implementation ships.
     """
 
     @property

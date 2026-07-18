@@ -117,7 +117,7 @@ export interface OcrOptions {
  * callers can distinguish "Image Builder not running" (connection refused)
  * from "OCR failed for this file" (400/500 with detail). The pipeline uses
  * the shape to decide whether to fall back or emit a placeholder pattern
- * per the design doc.
+ * .
  */
 export async function ocrFile(
   file: File,

@@ -1,9 +1,8 @@
 # `api/reports/` — VPS Reports engine
 
-Foundation module for the 8 generic report types defined in
-`docs/vps-internal/Report Types Design 2026-07-10.md`. This package is
-the base every report subclasses; Wave-1b dispatches (extractors +
-Summary / Comparison / Entity Rollup / Change Log) land on top of it.
+Foundation module for the 8 generic report types. This package is the
+base every report subclasses; extractors + Summary / Comparison /
+Entity Rollup / Change Log modules dispatch on top of it.
 
 ## Wire-up: how a new report gets registered
 
@@ -38,7 +37,7 @@ class SummaryReport(Report):
 ```
 
 Register the module by importing it once in `api/reports/__init__.py`
-(add to the `from .modules_summary import *` block that Wave-1b will
+(add to the `from .modules_summary import *` block that a future version will
 introduce). Duplicate `name` values raise at import time.
 
 ## Slug naming (frontend ↔ backend contract)
@@ -57,7 +56,7 @@ entries. As of 2026-07-11 those are:
 | `change_log` | Change Log |
 | `tldr` | Executive TL;DR |
 
-Underscores, not hyphens. The Wave-1a dispatch brief hyphenated some
+Underscores, not hyphens. the current brief hyphenated some
 slugs (e.g. `entity-rollup`); the frontend uses underscores and that's
 the source of truth.
 
@@ -152,7 +151,7 @@ aliases = inputs.get_list("aliases")   # comma-split for string forms
 
 ## Testing pattern for report authors
 
-Wave-1b modules should ship a smoke test at
+Report modules should ship a smoke test at
 `api/reports/tests/test_<report>.py`:
 
 ```python
@@ -171,8 +170,6 @@ def test_summary_smoke():
 `CartHandle` opens files on the local filesystem so tests can be
 hermetic against small fixtures in `api/reports/tests/fixtures/`.
 
-## Points at design doc
+## References
 
-- Full report specs: `docs/vps-internal/Report Types Design 2026-07-10.md`
-- Cloudflare LLM story: `docs/vps-internal/Cloudflare Agents Investigation 2026-07-10.md`
 - Cart NPZ format: `docs/PATTERN-ANATOMY.md` (H-row), `api/cartbuilder/builder.py` (writer)

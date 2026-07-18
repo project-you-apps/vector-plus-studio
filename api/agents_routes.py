@@ -562,11 +562,9 @@ async def save_to_cart_route(
     """v1 STUB — logs the intended save + returns success.
 
     Real Membot cart write is v1.5 (when user-cart infrastructure is
-    fully wired). The wire shape here is the shape the real path will
-    return so the frontend doesn't need to change when the real save
-    lands. See ``docs/vps-internal/Agents Tab Design 2026-07-13.md``
-    "Save-to-cart provenance shape" for the eventual Membot pattern
-    structure.
+    fully wired). The wire shape mirrors the eventual Membot pattern
+    structure ("save-to-cart provenance shape"), so the frontend won't
+    change when the real save lands.
     """
     with _runs_lock:
         run = _RUNS.get(req.run_id)

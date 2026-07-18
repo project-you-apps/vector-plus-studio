@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 set_pattern_permissions.py — flip per-pattern RWX bits in a cart's
-hippocampus row 63 (Step 2b of the RWX roadmap, Andy 2026-05-06).
+hippocampus row 63 (Step 2b of the RWX roadmap).
 
 Companion to bin/set_cart_permissions.py:
   • set_cart_permissions.py    — cart-wide default via .permissions.json sidecar

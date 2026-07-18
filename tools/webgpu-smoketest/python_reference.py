@@ -13,7 +13,7 @@ Usage:
 The COPY_BLOCK at the end mirrors the browser page's COPY block format so
 the two outputs can be diffed visually.
 
-Parity criteria (Andy 2026-05-06 evening WebGPU smoke test):
+Parity criteria (WebGPU smoke test):
   - DIMS must match exactly (768 for Nomic v1.5)
   - L2 norm should match within ~1% (numerical drift from ONNX vs PyTorch)
   - First-10 values: signs must match, magnitudes within ~5%

@@ -1,11 +1,11 @@
-// SQL Editor operation templates (VPS wave-1 shell).
+// SQL Editor operation templates (v1 shell).
 //
-// Ten canonical operations mirror the CC_sql-over-lattice mapping — SQL keywords
-// map to lattice/substrate operations, not literal SQL execution. See
-// docs/vps-internal/SQL Editor Design 2026-07-10.md §3 for the design rationale
-// (why `similarity(text)` isn't a SQL function, why DELETE tombstones, etc.).
+// Ten canonical operations — SQL keywords map to lattice/substrate operations,
+// not literal SQL execution — e.g. `similarity(text)` is a semantic reranker
+// not a scalar function; DELETE tombstones rather than removes rows so the
+// substrate can replay history.
 //
-// Wave-1 is UI shell only; clicking an operation button appends the snippet to
+// v1 is UI shell only; clicking an operation button appends the snippet to
 // the editor. The interpreter that translates these into real lattice ops is
 // v1.5 work.
 

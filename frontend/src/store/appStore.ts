@@ -43,7 +43,7 @@ export interface LocalCartPattern0Meta {
 // per pattern in `passages`; parallel-indexed. Content-type-specific extras
 // (image_b64 for graphics, html for tables, bbox for both) are optional so
 // legacy carts with only text patterns don't have to populate them.
-// Andy 2026-07-05 PM: added to surface graphic PNG thumbnails throughout the
+// added to surface graphic PNG thumbnails throughout the
 // UI (Result cards, PassageModal, TOC drill-down).
 export interface LocalCartPatternMeta {
   v?: number
@@ -73,11 +73,10 @@ export interface LocalCart {
   embeddingsShape: number[]     // [N, 768]
   passages: string[]            // length N
   // Provenance v1 sidecar — source filename per pattern. Populated for
-  // browser-built carts 2026-06-15+ that include source_paths.npy in their
-  // .cart.npz. null for legacy server-built carts; cosineSearchLocal will
-  // skip populating SearchResult.source_path in that case, and ResultCard
-  // will hide the source line. See CC_cart-provenance-schema_2026-06-15
-  // for v2 schema upgrade plan (h-row source_idx + strings table).
+  // browser-built carts that include source_paths.npy in their .cart.npz.
+  // null for legacy server-built carts; cosineSearchLocal skips populating
+  // SearchResult.source_path in that case, and ResultCard hides the source
+  // line. A future schema will use an h-row source_idx + strings table.
   sourcePaths: string[] | null  // length N or null
   sizeBytes: number
   mountedAt: number             // performance.now() timestamp
@@ -97,9 +96,9 @@ export interface LocalCart {
   // tables). Populated for carts built by the 2026-07-05+ pipeline; null for
   // legacy carts (no thumbnails but everything else works).
   perPatternMeta: LocalCartPatternMeta[] | null
-  // In-memory tombstones for Edit Carts support on LocalCart (Andy 2026-06-16
-  // PM: the demo path requires editing browser-mounted carts on the public
-  // VPS where the droplet can't reach the user's local filesystem). Tombstoned
+  // In-memory tombstones for Edit Carts support on LocalCart. The demo
+  // path requires editing browser-mounted carts on the public VPS where
+  // the droplet can't reach the user's local filesystem. Tombstoned
   // idx are filtered out of cosineSearchLocal results so they stop appearing
   // in search; can be restored via localCartRestore. Persisted by writing the
   // mutated cart back via showSaveFilePicker (Save action) -- this in-memory
@@ -175,12 +174,11 @@ export interface PendingSourceFocus {
   displayName: string
 }
 
-// Desktop Cart Builder helper — detection + pairing state. The exe (Day 1)
+// Desktop Cart Builder helper — detection + pairing state. The exe
 // runs a local FastAPI on http://127.0.0.1:7878 wrapping the same
 // /api/cartbuilder/* router the VPS backend exposes. When paired, Cart
 // Builder API calls swap base to loopback + attach a Bearer token so builds
-// run natively on the user's GPU. See docs/vps-internal/Vector+ Desktop
-// Builder Day 1 Spec.md for the endpoint contract.
+// run natively on the user's GPU.
 export type DesktopHelperState =
   | 'unknown'
   | 'detecting'
@@ -258,9 +256,9 @@ interface AppState {
   setActiveScreen: (screen: ActiveScreen) => void
 
   // Reports — current report + cross-tab persistence + click-through
-  // handoff (2026-07-13 Phase A source-file links).
+  // handoff (2026-07-13 source-file links).
   //
-  // INVARIANT (2026-07-13 Phase A follow-up): `currentReport` is set
+  // INVARIANT (2026-07-13 a follow-up): `currentReport` is set
   // ONLY by a successful Generate (via `setCurrentReport`, which now
   // requires non-null so no caller can silently null it out) and
   // cleared ONLY by the × Close button in the results toolbar (via
@@ -343,7 +341,7 @@ interface AppState {
   mountLocalCart: (file: File) => Promise<{ success: boolean; message: string }>
   unmountLocalCart: () => void
   selectLocalCart: (name: string) => void
-  // LocalCart edit operations (Andy 2026-06-16 PM: Edit Carts must work on
+  // LocalCart edit operations (Edit Carts must work on
   // browser-mounted carts on the public droplet). Each operation mutates the
   // active LocalCart's in-memory state and replaces it in the localCarts Map
   // immutably so React re-renders. Save persists by re-downloading via
@@ -353,7 +351,7 @@ interface AppState {
   localCartTombstoneBySource: (sourcePath: string) => number[]
   localCartListSources: () => Array<{ sourcePath: string; count: number; activeCount: number }>
   // Windowed list of passages belonging to a single source file — powers the
-  // Edit Carts File→Passages drill-down (Andy 2026-06-28 spec). Walks the
+  // Edit Carts File→Passages drill-down. Walks the
   // cart's sourcePaths, slices a page's worth of matching idx, returns
   // enough per-row info for the drill-down UI to render preview + tombstone
   // status + reuse editorOriginalIdx for per-passage edits.
@@ -367,7 +365,7 @@ interface AppState {
   localCartSave: () => Promise<{ success: boolean; message: string }>
 
   // Per-pattern metadata for the SERVER-mounted cart (sandbox upload path).
-  // Andy 2026-07-06 AM: fetched via /api/cart/per-pattern-meta after mount.
+  // fetched via /api/cart/per-pattern-meta after mount.
   // Parallel-indexed to server's passages. Null when nothing is mounted
   // server-side, or when the mounted cart lacks per_pattern_meta.npy
   // (legacy cart). Rendered by ResultCard, PassageModal, Pattern0TocPanel
@@ -805,7 +803,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ localCartLoading: true })
     try {
       const cart = await parseCartFile(file)
-      // Rich Pattern-0 path (Andy 2026-07-02): when the NPZ lacks a
+      // Rich Pattern-0 path: when the NPZ lacks a
       // source_paths.npy entry — legacy server-built carts, or any cart built
       // before browser-side provenance landed — synthesize sourcePaths from
       // each passage's first line. Mirrors the backend's load_cart source
@@ -954,7 +952,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!activeLocalCart) return empty
     const cart = localCarts.get(activeLocalCart)
     if (!cart || !cart.sourcePaths) return empty
-    // Andy 2026-07-06 AM: hash-strip both sides so the match works whether
+    // hash-strip both sides so the match works whether
     // the caller passed a hashed pattern0-derived name or a stripped
     // synthesized-sourcePaths name. Cart Builder exe carts have hashed
     // sourcePaths.npy, browser-built carts have stripped ones.
@@ -1279,7 +1277,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // LocalCart branch — backend api.addPassage / api.deletePattern only
     // mutate server state, so LocalCart edits made from Edit Carts would
-    // silently no-op (Andy 2026-07-02). Route through localCart* actions
+    // silently no-op. Route through localCart* actions
     // so the in-memory cart updates + React re-renders + dirty flag flips.
     // Reuse the original passage's sourcePath so the new pattern stays
     // attached to the same file for TOC + drill-down groupings.
@@ -1526,7 +1524,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       await get().fetchCartridges()
       // Fetch per-pattern metadata sidecar so sandbox/server-mounted carts
       // can render graphics + tables the same way LocalCart mounts do
-      // (Andy 2026-07-06 AM sandbox-mount parity). Non-blocking on failure —
+      // (sandbox-mount parity). Non-blocking on failure —
       // legacy carts have no sidecar and the endpoint returns records=[].
       get().fetchSandboxPerPatternMeta()
       set({

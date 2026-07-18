@@ -302,7 +302,7 @@ class CartHandle:
         else falls back to per-pattern first-line parsing (via
         ``get_source``). Reports enumerating unique sources should
         dedup on the caller side; Summary + Financial Rollup are the
-        two Wave-1 consumers.
+        two downstream consumers.
         """
         if self._source_paths and len(self._source_paths) == self.count:
             return list(self._source_paths)

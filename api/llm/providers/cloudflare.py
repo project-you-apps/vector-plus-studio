@@ -1,9 +1,8 @@
-"""Cloudflare Workers AI adapter — Track C.
+"""Cloudflare Workers AI adapter.
 
 Implements :class:`~api.llm.adapter.LLMAdapter` against Cloudflare's
 hosted open-source LLMs (Llama family). This is the default provider for
-VPS free-tier customers: ~$0 for the first ~200 users, ~7-10x cheaper
-than Anthropic direct at scale.
+VPS free-tier customers.
 
 Two operating modes, selected by the ``CF_ENDPOINT_MODE`` env var:
 
@@ -13,12 +12,8 @@ Two operating modes, selected by the ``CF_ENDPOINT_MODE`` env var:
   of Workers AI (adds auth, rate-limiting, request tagging). Requires
   ``CF_WORKER_URL`` + ``WORKER_AUTH_TOKEN``.
 
-The Worker itself is being built in parallel by another agent; the code
-path here is just the client side.
-
-See ``docs/vps-internal/Cloudflare Agents Investigation 2026-07-10.md``
-Section 3 for model-pick rationale and Section 5 for the two integration
-patterns.
+Model pick: a mid-size Llama-3 variant on Workers AI — good enough
+quality for summary/rollup/rewrite tasks at the free-tier price point.
 """
 from __future__ import annotations
 
@@ -38,7 +33,7 @@ from ..adapter import LLMAdapter, LLMError, SynthesisResult
 # a CF model deprecation is a single-line edit (Section 6, Risk #3 in the
 # investigation doc).
 #
-# Rationale for each pick, from Section 3 of the investigation:
+# Rationale for each pick:
 #   default / large : Llama 3.3 70B fp8-fast — the workhorse for report
 #                     synthesis + function calling. Best quality-per-neuron
 #                     in CF's catalog as of 2026-07.
@@ -65,7 +60,7 @@ _MODEL_HINT_MAP: dict[str, str] = {
 _CF_API_BASE = "https://api.cloudflare.com/client/v4/accounts"
 
 # Timeouts differ by mode: direct calls hit CF's edge from our droplet
-# (~200-500ms typical per Section 6 of the investigation doc), so 30s is
+# (~200-500ms typical), so 30s is
 # generous. Worker calls go through our own edge Worker, which may do
 # extra work (caching, tool calls) — 60s buys headroom without being
 # forgiving to genuine hangs.

@@ -18,7 +18,7 @@ Design decisions (2026-07-13 v1)
   built on.
 
 - **Doesn't call Coverage Report.** We don't reuse ``CoverageReport``
-  directly — that report is a Wave-1 heavy build with a lot of sections
+  directly — that report is a heavy build with a lot of sections
   we don't need here. Instead we compute the two signals we care about
   (per-source counts, under-represented sources) inline. Cheap, focused,
   and doesn't create a runtime dependency between Agents and Reports

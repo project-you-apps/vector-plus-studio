@@ -13,8 +13,7 @@ import {
 } from '../api/client'
 import ReportBuilderStatusPill from './ReportBuilderStatusPill'
 
-// Reports screen — the UX shell for the 8 report types (see
-// docs/vps-internal/Report Types Design 2026-07-10.md).
+// Reports screen — the UX shell for the 8 report types.
 //
 // 2026-07-13 (Andy Stage-B follow-up):
 //   • Full-width results display (Option 3). Report replaces the reports
@@ -30,7 +29,7 @@ import ReportBuilderStatusPill from './ReportBuilderStatusPill'
 //     in the results toolbar re-opens the input pane pre-filled with the
 //     last submitted inputs.
 //
-// 2026-07-13 (Phase A source-file links):
+// 2026-07-13 (source-file links):
 //   • Report state (`currentReport`) is now stored in appStore, not
 //     local component state. Reports → Search (via a clicked source-file
 //     link) → Reports resumes exactly where the user left off. Only
@@ -240,10 +239,10 @@ export default function ReportsScreen() {
 
   // Full-width results — non-null hides the grid + hides the recent /
   // scheduled sections. When null, the grid is back. Store-backed so it
-  // survives tab switches (2026-07-13 Phase A). We resolve the report
+  // survives tab switches (2026-07-13 ). We resolve the report
   // definition by slug on read so the store payload stays serializable.
   //
-  // 2026-07-13 Phase A follow-up (persistence bug fix): the render gate
+  // 2026-07-13 a follow-up (persistence bug fix): the render gate
   // depends ONLY on `currentReport`. If the slug lookup ever fails to
   // resolve (dev HMR reload of report-definitions.ts, a mid-refactor
   // rename, an unknown-slug payload snuck into the store), we still
@@ -420,7 +419,7 @@ export default function ReportsScreen() {
             </section>
 
             {/* Scheduled briefings — empty state for now. Scheduling worker
-                lands in wave 3 (design doc §C.4) alongside delivery adapters. */}
+                lands in a future revision alongside delivery adapters. */}
             <section className="rounded-lg border border-slate-700 bg-slate-800/30">
               <div className="px-4 py-2 border-b border-slate-700 flex items-center gap-2">
                 <CalendarClock size={13} className="text-slate-500" />

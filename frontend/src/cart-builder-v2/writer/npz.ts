@@ -12,7 +12,7 @@ import {
 
 // Rich Pattern-0 metadata baked into the NPZ at build time. Mirrors the
 // cart-level fields set server-side by api/cartbuilder/builder.py so the
-// Pattern-0 TOC panel (Andy 2026-07-02) surfaces the same shape regardless
+// Pattern-0 TOC panel surfaces the same shape regardless
 // of whether the cart was built via the browser pipeline or the VPS /build
 // endpoint. Empty strings become generic-fallback text; empty tags stay
 // empty. `owner` propagates to the top-level pattern0 record.
@@ -99,10 +99,8 @@ export async function buildCart(
   const compressed_texts = passages // v1: no compression
   // Provenance v1 sidecar — per-pattern source filename so result cards can
   // display "this came from foo.py" without needing to reverse the FNV-1a
-  // source_hash in the hippocampus row. v2 will replace this with a proper
-  // strings table + source_idx field in h-row; tracked in
-  // CC_cart-provenance-schema_2026-06-15 as a v2 pilot blocker. See ALSO
-  // the "Provenance: v1 sidecar (alpha)" badge in the UI.
+  // source_hash in the hippocampus row. A future schema will replace this
+  // with a proper strings table + source_idx field in h-row.
   const source_paths = sections.map((s) => s.source)
   const hippocampus = packHippocampus(sections, options.hippocampus)
   const manifest = await buildManifest(embeddings, count, NOMIC_DIM)

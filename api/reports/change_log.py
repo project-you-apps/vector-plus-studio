@@ -1,11 +1,10 @@
 """Change Log report — diff two cart snapshots.
 
-Wave-1 (no LLM) implementation of the Change Log report described in
-``docs/vps-internal/Report Types Design 2026-07-10.md`` §7. Answers the
-"what changed between last week's cart and this week's cart?" question
-without hitting an LLM: two strategies (exact text match, or embedding
-cosine ≥ 0.92) categorize each pattern as added / removed / modified /
-unchanged and the output aggregates by source_path.
+Diff two cart snapshots without an LLM. Answers the "what changed
+between last week's cart and this week's cart?" question: two strategies
+(exact text match, or embedding cosine ≥ 0.92) categorize each pattern
+as added / removed / modified / unchanged and the output aggregates by
+source_path.
 
 Design notes worth calling out:
 
@@ -21,16 +20,15 @@ Design notes worth calling out:
   — the semantics differ (a tombstone means "I hid this", a removal
   means "I never had this").
 - The semantic strategy is O(N × M). For carts of a few hundred to a
-  couple thousand patterns this is well under a second, but Grant's
-  Sysco carts approach 10k and paired snapshots of a personal Heartbeat
-  cart could go much higher. We hard-cap the pairwise matrix at
-  ``_SEMANTIC_MAX_SIDE = 5000`` per side for Wave 1 and surface a
-  warning if we clipped; the design doc explicitly authorizes the cap
-  and defers a streaming / batched implementation to a later wave.
-- The cosine threshold ``0.92`` is copied verbatim from the design doc.
-  Do not tune it here — that choice is a spec question, not a code
-  question, and drifts in the threshold need to move in lockstep with
-  the "modified" definition (a matched-embedding + differing-text pair).
+  couple thousand patterns this is well under a second, but larger
+  carts (10k+) or paired snapshots of a long-lived personal cart can
+  go much higher. We hard-cap the pairwise matrix at
+  ``_SEMANTIC_MAX_SIDE = 5000`` per side and surface a warning if we
+  clipped; a streaming / batched implementation is deferred.
+- The cosine threshold ``0.92`` is a load-bearing constant. Do not
+  tune it here — the value defines "modified" (a matched-embedding +
+  differing-text pair) and drifts must move in lockstep with the
+  definition.
 """
 from __future__ import annotations
 
@@ -47,18 +45,18 @@ from .source_link import source_link
 
 
 # ---------------------------------------------------------------------------
-# Tuning constants (per §7 of the design doc)
+# Tuning constants
 # ---------------------------------------------------------------------------
 
 # Cosine threshold above which two embeddings are considered "the same
-# pattern" for the semantic diff strategy. Value comes from the design
-# doc; changing it changes the definition of "modified" so do not touch
-# without a spec update.
+# pattern" for the semantic diff strategy. Load-bearing — changing it
+# changes the definition of "modified" so do not touch without a spec
+# update.
 _SEMANTIC_COSINE_THRESHOLD = 0.92
 
 # Hard cap on the per-side count for the pairwise similarity matrix.
 # 5000 × 5000 float32 = ~100 MB — big but tolerable on the target dev
-# machine. Anything larger gets clipped with a warning; Wave-2 will
+# machine. Anything larger gets clipped with a warning; a future release will
 # replace this with a batched / ANN implementation.
 _SEMANTIC_MAX_SIDE = 5000
 
@@ -390,7 +388,7 @@ class ChangeLogReport(Report):
     supports_scheduling = False
 
     # Mirrors the ``change_log`` entry in
-    # ``frontend/src/reports/report-definitions.ts`` verbatim. Wave-2
+    # ``frontend/src/reports/report-definitions.ts`` verbatim. a future release
     # will auto-generate the frontend from the backend describe() call,
     # at which point this stays the source of truth.
     input_schema: list[dict[str, Any]] = [
@@ -534,7 +532,7 @@ class ChangeLogReport(Report):
                     warnings.append(
                         f"Semantic diff capped at {_SEMANTIC_MAX_SIDE}×{_SEMANTIC_MAX_SIDE}; "
                         f"patterns beyond the cap are reported as added/removed. "
-                        f"For carts this size a streaming diff is a Wave-2 upgrade."
+                        f"For carts this size a streaming diff is a future upgrade."
                     )
 
         # ---- Structural / rebuild-artifact heuristics ------------------
@@ -579,7 +577,7 @@ class ChangeLogReport(Report):
             + f"{new_cart.count - n_new} new)"
         ]
 
-        # Zero-changes short-circuit per the design doc.
+        # Zero-changes short-circuit .
         if not added and not removed and not modified:
             body = "These carts are functionally identical."
         else:

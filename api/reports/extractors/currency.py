@@ -1,6 +1,6 @@
 """Currency extraction from raw passage text.
 
-Wave-1 uses pure regex for the four most-common invoice shapes:
+Uses pure regex for the four most-common invoice shapes:
 
 - ``$`` prefix (``$12.34``, ``$1,234.56``, ``$12``)
 - Parenthesized refund/negative notation (``($12.34)``)
@@ -87,7 +87,7 @@ _CONTEXT_WINDOW = 20
 # against the extracted ``context_hint`` case-insensitively; a hit
 # means the amount belongs to that bucket. This is intentionally
 # lightweight in wave 1 — the canonical preset library ships in
-# ``presets/trend_presets.yaml`` in wave 2 (§3 design doc).
+# ``presets/trend_presets.yaml`` in a future revision.
 _PRESET_TOKENS: dict[str, tuple[str, ...]] = {
     "fuel_surcharge": ("fuel", "surcharge"),
     "invoice_total": ("total", "invoice"),
@@ -227,7 +227,7 @@ def extract_currency(
     # -- Sort by offset for stable downstream consumption -----------------
     hits.sort(key=lambda h: h.start)
 
-    # TODO(wave-2): LLM-fallback for ambiguous currency shapes ("twelve
+    # TODO(a future release): LLM-fallback for ambiguous currency shapes ("twelve
     # ninety-five", "USD twelve fifty", handwritten "8.95" without a
     # dollar sign in a context clearly about money). Design in §C.1 —
     # plug an optional callable that receives (text, prior_hits) and

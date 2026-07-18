@@ -12,16 +12,12 @@ can navigate this package by analogy. Key differences vs Reports:
 - Agents surface **cited patterns**. ``AgentOutput.cited_patterns`` is a
   first-class field carrying the pattern indices the LLM's answer draws
   from; the frontend renders them as ``vps://source/{slug}`` links (same
-  handler as Reports' Phase A source-file links).
+  handler as Reports' source-file links).
 
 - Agents are **saveable to cart**. ``AgentOutput`` carries enough
   provenance (the raw prompt + timestamp + citations) that the
   ``/api/agents/save_to_cart`` route can persist the run as a new
   pattern in the user's Membot cart — the "your own memory" loop.
-
-Cross-cutting design lives in
-``docs/vps-internal/Agents Tab Design 2026-07-13.md``. This file
-implements the "Backend architecture" section literally.
 
 Type dependencies:
 
@@ -53,7 +49,7 @@ class AgentInput:
     frontend form payload; typed accessors (``get_str`` / ``get_int`` /
     ``get_bool`` / ``get_list``) handle coercion and defaults.
 
-    ``pattern_filter`` is agent-specific: the design doc calls out a
+    ``pattern_filter`` is agent-specific: this a
     Hot Stack integration story where SUPERSEDED / ARCHIVED patterns
     should be filtered out server-side. In v1 (before Hot Stack lands)
     the metadata bit is absent, filter is a no-op, everything passes
@@ -63,7 +59,7 @@ class AgentInput:
 
     raw: dict[str, Any] = field(default_factory=dict)
 
-    # Hot Stack metadata filter — see design doc "Hot Stack integration".
+    # Hot Stack metadata filter.
     # 'active_only' is the safe default once Hot Stack lands; today it's
     # a no-op so v1 agents don't need to plumb the field through.
     pattern_filter: Literal["active_only", "include_superseded", "all"] = "active_only"

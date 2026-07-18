@@ -5,7 +5,7 @@
  *
  * The 4D→2D reshape (64,64,64,64) → (4096,4096) in C-order means each
  * embedding dim's "region" actually occupies one full 4096-wide row in 2D,
- * not a 64×64 block. (See CC_sdr-structured-is-row-fill-not-region-fill_2026-06-01.)
+ * not a 64×64 block.
  * For dim i (i in 0..n_dims-1), 2D row = i, all 4096 cols.
  */
 

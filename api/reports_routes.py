@@ -1,10 +1,10 @@
-"""FastAPI routes for the Reports engine (Wave-2 dispatch).
+"""FastAPI routes for the Reports engine.
 
 Wires ``POST /api/reports/generate`` to :func:`api.reports.run_report`.
-The engine itself (``api/reports/*.py``) stays untouched — this module is
-the composition layer: import the 5 Wave-1 report modules to trigger
-``@register_report``, resolve ``cart_ref`` to a filesystem path, dispatch,
-serialize.
+The engine itself (``api/reports/*.py``) stays untouched — this module
+is the composition layer: import the registered report modules to
+trigger ``@register_report``, resolve ``cart_ref`` to a filesystem
+path, dispatch, serialize.
 
 Route mapping
 -------------
@@ -21,17 +21,18 @@ Error codes:
 - ``422`` — schema validation error on the payload itself (Pydantic-level
   missing/wrong type). Also used when the report author's ``generate()``
   raised :class:`ValueError` for a missing required input.
-- ``501`` — slug exists in the frontend Wave-2 whitelist (Timeline, Trend,
-  Financial Rollup, Executive TL;DR) but hasn't been added to the backend
-  registry yet. Body carries a "future release" hint the UI renders as
-  a friendly note.
+- ``501`` — slug exists in the frontend "future release" whitelist
+  (Timeline, Trend, Financial Rollup, Executive TL;DR) but hasn't been
+  added to the backend registry yet. Body carries a "future release"
+  hint the UI renders as a friendly note.
 - ``500`` — any other runtime error; the traceback is logged server-side.
 
-The route is intentionally synchronous inside a threadpool — the 5 Wave-1
-reports are pure Python + numpy over already-loaded arrays and finish in
-well under a second for the cart sizes we care about; async doesn't buy
-us anything and complicates error propagation. If a Wave-2 report needs
-to stream, add a second route rather than making this one async.
+The route is intentionally synchronous inside a threadpool — the
+registered reports are pure Python + numpy over already-loaded arrays
+and finish in well under a second for the cart sizes we care about;
+async doesn't buy us anything and complicates error propagation. If a
+future streaming report lands, add a second route rather than making
+this one async.
 """
 from __future__ import annotations
 
@@ -75,13 +76,13 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Wave 2 whitelist — slugs the frontend knows about but the backend doesn't
+# "Future release" whitelist — slugs the frontend knows about but the backend doesn't
 # ---------------------------------------------------------------------------
 
 # These match ``frontend/src/reports/report-definitions.ts`` slugs that
 # have no registered backend Report class. When a user clicks Generate on
 # one of these, the route responds with 501 + a friendly "future release"
-# hint. Kept in sync manually — when a Wave-2 module lands and registers
+# hint. Kept in sync manually — when the module lands and registers
 # itself, drop its slug from this set.
 WAVE2_KNOWN_SLUGS: frozenset[str] = frozenset({
     "timeline",
@@ -98,20 +99,19 @@ WAVE2_KNOWN_SLUGS: frozenset[str] = frozenset({
 class GenerateReportRequest(BaseModel):
     """POST body for ``/api/reports/generate``.
 
-    Shape mirrors the brief:
+    Shape:
 
-    - ``report_slug`` — one of the registered report names (or a Wave-2
-      known slug → 501).
+    - ``report_slug`` — one of the registered report names (or a
+      known "future release" slug → 501).
     - ``cart_ref`` — server cart identifier. Resolved to a ``.cart.npz``
       via ``find_companion_file`` (see :func:`_resolve_cart_ref`).
     - ``cart_ref_b`` — optional secondary cart id. Reserved for a future
-      two-cart comparison mode; currently ignored by the Wave-1
-      ComparisonReport, which slices one cart via subset queries. Kept
-      in the surface so the frontend contract doesn't need to churn when
-      the two-cart mode lands. (Andy 2026-07-13 brief called this
-      required for comparison; the actual ComparisonReport takes one cart
-      + two subset queries via ``inputs``, so leaving as optional avoids
-      forcing users to send a value the engine won't use.)
+      two-cart comparison mode; currently ignored by the ComparisonReport,
+      which slices one cart via subset queries. Kept in the surface so
+      the frontend contract doesn't need to churn when the two-cart mode
+      lands. The current ComparisonReport takes one cart + two subset
+      queries via ``inputs``, so leaving this as optional avoids forcing
+      callers to send a value the engine won't use.
     - ``inputs`` — untyped dict passed straight into ``ReportInput.raw``.
     """
 
@@ -143,9 +143,9 @@ class GenerateReportResponse(BaseModel):
 # cart_ref resolution
 # ---------------------------------------------------------------------------
 #
-# 2026-07-13 (Wave-1 UX bug follow-up): the resolver now walks three
-# directories rather than two (canonical DATA_DIR + SAMPLE_DIR + the
-# sandbox-uploads subdir). Sandbox uploads land in
+# The resolver walks three directories rather than two (canonical
+# DATA_DIR + SAMPLE_DIR + the sandbox-uploads subdir). Sandbox uploads
+# land in
 # ``cartridges/_session_uploads/<uuid>_<name>.cart.npz`` and previously
 # 404'd here even though ``/api/reports/carts`` was starting to list them
 # (via the frontend's cartridges list, which is populated by a different
@@ -498,9 +498,9 @@ async def generate_report(req: GenerateReportRequest) -> GenerateReportResponse:
     """
     slug = (req.report_slug or "").strip()
 
-    # -- 1. Wave-2 known-slug shortcut (return 501 with a friendly hint) --
-    # Order matters: check Wave-2 BEFORE checking the registry, otherwise
-    # a Wave-2 slug that happens to also be in REGISTRY would be treated
+    # -- 1. Future-release known-slug shortcut (return 501 with a friendly hint) --
+    # Order matters: check the "future release" list BEFORE the registry,
+    # otherwise a slug that happens to also be in REGISTRY would be treated
     # as "not built" — which is only true if it isn't registered yet.
     if slug in WAVE2_KNOWN_SLUGS and slug not in REGISTRY:
         raise HTTPException(
@@ -563,8 +563,8 @@ async def generate_report(req: GenerateReportRequest) -> GenerateReportResponse:
     cart_location = resolution.location  # 'canonical' | 'sandbox'
 
     # -- 4. Dispatch --
-    # Options: Wave-1 reports are LLM-free, so max_llm_calls stays at 0.
-    # If ever we let this route dispatch TL;DR, the caller (or an
+    # Options: the registered reports are LLM-free, so max_llm_calls stays
+    # at 0. If ever this route dispatches TL;DR, the caller (or an
     # entitlement check here) will bump this — for now, leaving the guard
     # in place at 0 means an accidentally-registered LLM report would
     # short-circuit with a clear error rather than hitting Cloudflare.

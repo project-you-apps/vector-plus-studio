@@ -76,7 +76,7 @@ export interface PipelineOptions {
 export const DEFAULT_MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024 // 50 MB per file
 export const DEFAULT_MAX_CHUNKS_PER_BUILD = 10_000
 
-// Per-file route decision (Day 2). Mirrors the design doc Option C heuristic:
+// Per-file route decision (Day 2). Mirrors the classify Option C heuristic:
 // images always go to Image Builder, PDFs are text-checked, everything else
 // stays on the existing chunker fast path. The router is intentionally
 // separate from the parsers so UI code can call it too (per-file badges).

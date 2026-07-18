@@ -32,10 +32,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 # ---------------------------------------------------------------------------
-# Sentry error monitoring (Andy 2026-05-12).
+# Sentry error monitoring.
 # DSN comes from SENTRY_DSN env var; gracefully no-ops if unset (local dev).
-# send_default_pii is ON — we collect email/avatar/user UUID which Andy
-# explicitly accepts as low-risk. The before_send hook scrubs auth headers,
+# send_default_pii is ON — we collect email/avatar/user UUID as an
+# accepted low-risk trade. The before_send hook scrubs auth headers,
 # JWT-pattern strings, and Bearer tokens before transmission so we don't
 # accidentally leak credentials in error context.
 # ---------------------------------------------------------------------------
@@ -93,9 +93,9 @@ else:
 # Global read-only mode for public deploys (e.g. droplet demo).
 # Set VPS_READ_ONLY=1 in the environment to refuse all unlock + write
 # endpoints regardless of the per-cart engine.read_only state. This is
-# Step 1 of the RWX roadmap (Andy 2026-05-05): a coarse server-wide
-# lock for the public demo. Step 2 will replace it with cart-format
-# RWX bits in the hippocampus row + Pattern 0 manifest.
+# Step 1 of the RWX roadmap: a coarse server-wide lock for the public
+# demo. Step 2 replaces it with cart-format RWX bits in the hippocampus
+# row + Pattern 0 manifest.
 READ_ONLY_MODE = os.environ.get("VPS_READ_ONLY", "").lower() in ("1", "true", "yes", "on")
 if READ_ONLY_MODE:
     print("[VPS] READ_ONLY_MODE active (VPS_READ_ONLY env var set). All writes refused.")
@@ -277,8 +277,9 @@ app.include_router(cartbuilder.router)
 app.include_router(uploads_mod.router)
 
 # Reports engine dispatch — POST /api/reports/generate + GET /api/reports/list.
-# The 5 Wave-1 report modules (summary, entity_rollup, change_log, comparison,
-# coverage) self-register via @register_report when reports_routes imports them.
+# The registered report modules (summary, entity_rollup, change_log,
+# comparison, coverage) self-register via @register_report when
+# reports_routes imports them.
 app.include_router(reports_routes.router)
 app.include_router(llm_routes.router)
 
@@ -332,9 +333,9 @@ async def get_status():
 
 
 # ---------------------------------------------------------------------------
-# Pattern-0 TOC (v1) — 2026-07-01
+# Pattern-0 TOC (v1)
 #
-# Left-side TOC panel spec (Andy 2026-07-01 morning):
+# Left-side TOC panel spec:
 #   • Cart metadata: name, description (~200 words), creator, created_at, owner
 #   • Optional v2 agent_briefing block (surfaces BRIEFING button in UI)
 #   • Flat toc_items list: one per source file, with description + pattern_count
@@ -507,9 +508,9 @@ def _parse_per_pattern_meta_from_npz(cart_path: str) -> list[dict] | None:
     """Attempt to read `per_pattern_meta` from a .cart.npz and decode it.
 
     Returns a list of per-pattern records parallel to the passages array,
-    or None if the cart has no per_pattern_meta.npy sidecar. Andy 2026-07-06
-    AM: parses the same shape as pattern0 (unicode NPY with JSON string or
-    object array), reusing that decode strategy.
+    or None if the cart has no per_pattern_meta.npy sidecar. Parses the
+    same shape as pattern0 (unicode NPY with JSON string or object array),
+    reusing that decode strategy.
     """
     try:
         with np.load(cart_path, allow_pickle=True) as data:
@@ -535,10 +536,10 @@ def _parse_per_pattern_meta_from_npz(cart_path: str) -> list[dict] | None:
 async def get_cart_per_pattern_meta():
     """Return the per_pattern_meta.npy sidecar for the currently-mounted cart.
 
-    Andy 2026-07-06 AM: enables sandbox-mounted carts to reach parity with
-    LocalCart-mounted carts for image/table rendering. The frontend fetches
-    this on cart mount + carries a mirror-image data structure through the
-    same UI surfaces LocalCart uses.
+    Enables sandbox-mounted carts to reach parity with LocalCart-mounted
+    carts for image/table rendering. The frontend fetches this on cart
+    mount + carries a mirror-image data structure through the same UI
+    surfaces LocalCart uses.
 
     Returns records parallel to passages. Each record's shape mirrors the
     JSON baked by the writer. May contain large base64 image_b64 fields for
@@ -560,8 +561,7 @@ async def get_cart_per_pattern_meta():
 async def get_cart_pattern_0():
     """Return Pattern-0 metadata + TOC for the currently-mounted cart.
 
-    Read-only v1 (Andy 2026-07-01). See docs/RFC/pattern-0-v2-spec.md +
-    docs/membot-internal/mempack-agent-runtime-spec.md.
+    Read-only v1.
     """
     if not engine.mounted_name:
         return Pattern0Response(mounted=False)
@@ -1909,15 +1909,15 @@ async def list_patterns(
     users a click-to-populate IDX experience for the Update/Delete panels.
 
     Optional `q` is a case-insensitive substring filter on the passage text.
-    Optional `source` (Andy 2026-07-06 AM) filters to passages whose
-    source_paths sidecar entry matches — powers Pattern-0 TOC drill-down
-    on sandbox-mounted carts (parity with LocalCart drill-down).
+    Optional `source` filters to passages whose source_paths sidecar
+    entry matches — powers Pattern-0 TOC drill-down on sandbox-mounted
+    carts (parity with LocalCart drill-down).
 
     Returns total count of active+matching passages for client-side
     pagination math (page count = ceil(total / limit)).
 
-    Andy 2026-05-10. Tombstoned passages live in /api/patterns/deleted —
-    intentional separation so the browser doesn't have to filter them out.
+    Tombstoned passages live in /api/patterns/deleted — intentional
+    separation so the browser doesn't have to filter them out.
     """
     if limit < 1:
         limit = 25
@@ -1929,7 +1929,7 @@ async def list_patterns(
     needle = (q or "").strip().lower()
     source_needle = (source or "").strip()
     deleted = engine.deleted_ids
-    # Andy 2026-07-06 AM: engine doesn't expose source_paths as an attribute,
+    # engine doesn't expose source_paths as an attribute,
     # but the chunker prepends `<filename>` (optionally " (part N/M)") as the
     # first line of every chunk's text. Extract that to filter by source
     # without loading the cart file's source_paths.npy on every request.

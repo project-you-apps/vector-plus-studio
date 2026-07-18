@@ -5,12 +5,12 @@ pick a difficulty + question count + optional topic; agent samples
 passages from the cart, LLM synthesizes N questions with answers, output
 is a study-worthy quiz block.
 
-Design decisions (2026-07-13 v1)
---------------------------------
+Design decisions (v1)
+---------------------
 - **Question format.** Short-answer + explanation. NOT multiple choice —
   MC would require the LLM to generate plausible distractors, which is a
-  quality problem that hurts on Track C's Llama models. Short-answer +
-  explanation is a well-behaved LLM shape and reads like a good tutor.
+  quality problem that hurts on the free-tier Llama models. Short-answer
+  + explanation is a well-behaved LLM shape and reads like a good tutor.
 
 - **Difficulty maps to sample width AND prompt directive.** Easy = 3
   patterns sampled, questions ask about surface facts. Medium = 5

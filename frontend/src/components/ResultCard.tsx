@@ -247,7 +247,7 @@ export default function ResultCard({ result }: Props) {
 
   // Day 2 pattern metadata — raw record for THIS result's idx. Used for
   // both graphic-image rendering (when content_type='graphic') and
-  // edit-affordance gating on graphic/table patterns. Andy 2026-07-06 AM:
+  // edit-affordance gating on graphic/table patterns. AM:
   // when nothing is active as LocalCart, fall back to the SANDBOX-mounted
   // cart's per-pattern meta fetched from the server (parity with LocalCart).
   const sandboxPerPatternMeta = useAppStore((s) => s.sandboxPerPatternMeta)
@@ -301,7 +301,7 @@ export default function ResultCard({ result }: Props) {
     || !!status?.read_only
     || !!activeLocalCart  // local-disk carts are read-only in F1-A (RW writeback comes later)
   const patternLocked = !!(result.perms && !result.perms.w)
-  // Andy 2026-07-05 PM: graphic/table patterns can't be edited without
+  // graphic/table patterns can't be edited without
   // losing the link to their extracted image (which is a real design
   // issue we'll solve properly post-demo). For now: disable Edit on
   // graphic/table patterns; Delete stays available so users can still

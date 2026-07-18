@@ -1,12 +1,12 @@
 """Smoke tests for POST /api/reports/generate.
 
-Verifies the route contract landed 2026-07-13 (Wave-2 dispatch spine):
+Verifies the route contract landed 2026-07-13 (a future release dispatch spine):
 
-- All 5 Wave-1 slugs (summary, entity_rollup, change_log, comparison,
+- All 5 registered slugs (summary, entity_rollup, change_log, comparison,
   coverage) return HTTP 200 + non-empty markdown.
 - Comparison accepts cart_ref_b as advisory metadata (does not error
   either way given current subset-query behavior).
-- Wave-2 known slugs (timeline, trend, financial_rollup, tldr) return
+- a future release known slugs (timeline, trend, financial_rollup, tldr) return
   HTTP 501 with the "future release" hint body.
 - Unknown slugs return HTTP 404.
 - Missing cart_ref returns HTTP 422 (Pydantic).
@@ -105,7 +105,7 @@ def _make_synthetic_cart(
 class TestReportsGenerateRoute(unittest.TestCase):
     """End-to-end smoke tests through fastapi.testclient.TestClient."""
 
-    # A cart big enough to exercise every Wave-1 report:
+    # A cart big enough to exercise every report:
     #  - Sysco Portland mentions for entity_rollup
     #  - Multiple sources for summary
     #  - Currency + date content so extractors have signal for comparison

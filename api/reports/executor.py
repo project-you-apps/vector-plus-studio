@@ -1,6 +1,6 @@
 """Top-level runner for the Reports engine.
 
-This module is the composition point wired to the FastAPI route (Wave-2).
+This module is the composition point wired to the FastAPI route (a future release).
 Callers pass a report slug + raw form inputs + optional execution
 options and get back a fully-populated :class:`ReportOutput`.
 

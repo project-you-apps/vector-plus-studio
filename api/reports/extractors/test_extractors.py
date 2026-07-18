@@ -8,10 +8,9 @@ Or standalone::
 
     python api/reports/extractors/test_extractors.py
 
-Fixtures cover the four Wave-1 date formats, four currency shapes, and
+Fixtures cover the four supported date formats, four currency shapes, and
 entity-mention behavior (aliases + case-insensitivity + sentence-aware
-context). Sysco-shaped fixtures are called out explicitly because
-Grant's demo cart is the canonical Wave-1 target.
+context).
 """
 from __future__ import annotations
 
@@ -45,10 +44,10 @@ from api.reports.extractors import (  # noqa: E402
 # Fixture strings
 # ---------------------------------------------------------------------------
 
-# Sysco-shaped invoice filename embedded date — canonical demo case.
+# Invoice filename with embedded date — canonical shape.
 SYSCO_FILENAME = "752657234_20260517_034701258.pdf"
 
-# Sysco line-item shape from Grant's cart.
+# Vendor line-item shape.
 SYSCO_LINE = (
     "Invoice from Sysco Portland dated 2026-05-17. "
     "Total invoice: $234.56. Fuel surcharge: $8.95. "

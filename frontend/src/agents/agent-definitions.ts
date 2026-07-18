@@ -1,5 +1,4 @@
-// Agent definitions — the 4 v1 agents for VPS, sourced from
-// docs/vps-internal/Agents Tab Design 2026-07-13.md.
+// Agent definitions — the 4 v1 agents for VPS.
 //
 // Backend equivalent lives at api/agents/{auto_briefing,qa,professor,cart_curator}.py
 // with matching input_schema. Keep the two shapes in sync — the smoke test on
@@ -23,7 +22,7 @@ export interface AgentDefinition {
   inputSchema: FieldSchema[]
 }
 
-// Ordered to match the design doc's "Four v1 agents" table so the card
+// Ordered to match the "Four v1 agents" table so the card
 // grid reads left-to-right in the same order the doc lists them.
 export const AGENT_DEFINITIONS: AgentDefinition[] = [
   {

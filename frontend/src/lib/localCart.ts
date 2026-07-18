@@ -13,9 +13,8 @@ interface ParsedCart {
     embeddingsShape: number[];
     passages: string[];
     // Provenance v1 sidecar — present iff the cart's .npz contains
-    // source_paths.npy (browser-built carts 2026-06-15+). Null/undefined
-    // for legacy server-built carts; ResultCard renders the source line
-    // only when this is present. See CC_cart-provenance-schema_2026-06-15.
+    // source_paths.npy. Null/undefined for legacy server-built carts;
+    // ResultCard renders the source line only when this is present.
     sourcePaths?: string[] | null;
     figures?: Map<string, Uint8Array>;
     // Pattern-0 metadata parsed from pattern0.npy (single-element unicode
@@ -24,7 +23,7 @@ interface ParsedCart {
     pattern0?: LocalCartPattern0Meta | null;
     // Per-pattern metadata sidecar parsed from per_pattern_meta.npy.
     // One record per pattern in `passages` (parallel-indexed). Null for
-    // legacy carts. Andy 2026-07-05 PM: image_b64 for graphic patterns
+    // legacy carts. image_b64 for graphic patterns
     // flows through here to the UI thumbnail rendering.
     perPatternMeta?: LocalCartPatternMeta[] | null;
 }
@@ -89,7 +88,7 @@ function l2NormalizeInPlace(v: Float32Array, offset: number, len: number): numbe
  * Filters tombstoned passages, rebuilds embeddings + sourcePaths arrays
  * for the surviving entries, then re-bundles as a .cart.npz (+ manifest
  * + permissions) and triggers showDirectoryPicker for the user to pick
- * where to save. Andy 2026-06-16 PM: this is the persistence path for
+ * where to save. this is the persistence path for
  * Edit Carts working on browser-mounted LocalCarts on the public droplet.
  *
  * Saved cart is FUNCTIONALLY EQUIVALENT to the source (same embedding dim,

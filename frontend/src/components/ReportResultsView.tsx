@@ -43,7 +43,7 @@ function childrenToText(children: React.ReactNode): string {
 }
 
 // Full-width results view that REPLACES the reports grid when a report has
-// been generated (Andy 2026-07-13 design — Option 3). Lives inside the main
+// been generated (design — Option 3). Lives inside the main
 // content column so `max-w-6xl mx-auto` from ReportsScreen already caps its
 // width sensibly on ultra-wide monitors.
 //
@@ -311,7 +311,7 @@ export default function ReportResultsView({
               strong: ({ children }) => <strong className="font-semibold text-slate-100">{children}</strong>,
               em: ({ children }) => <em className="italic text-slate-200">{children}</em>,
               a: ({ href, children }) => {
-                // Phase A source-file links: intercept vps://source/{slug}
+                // source-file links: intercept vps://source/{slug}
                 // and hand off to the Search tab via the store. Never
                 // navigate — the href is a marker scheme, not a real URL.
                 // Non-vps:// links keep the old external-link behavior.

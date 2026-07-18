@@ -1,9 +1,8 @@
 """Public surface for the VPS Reports engine.
 
 Report modules and API routes should reach for the symbols re-exported
-here rather than importing from the internal submodules. Wave-1a
-foundation dispatch (Andy 2026-07-11): this package is the base every
-Wave-1b report subclasses.
+here rather than importing from the internal submodules. This package
+is the base every report subclasses.
 
 Usage — building a new report::
 
@@ -25,7 +24,7 @@ Usage — building a new report::
             ...
             return ReportOutput(markdown="...", metadata={...})
 
-Usage — dispatching a report from a FastAPI route (Wave-2)::
+Usage — dispatching a report from a FastAPI route::
 
     from api.reports import run_report, ReportOptions
 
@@ -36,8 +35,6 @@ Usage — dispatching a report from a FastAPI route (Wave-2)::
         options=ReportOptions(max_llm_calls=0),
     )
     return output.to_json_response()
-
-Full architecture: ``docs/vps-internal/Report Types Design 2026-07-10.md``.
 """
 from .base import Report, ReportInput, ReportOptions, ReportOutput
 from .cart_reader import CartHandle

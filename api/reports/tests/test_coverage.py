@@ -202,7 +202,7 @@ class TestCoverageSkipsTombstones(unittest.TestCase):
 
         # The tombstoned passage's unique tokens must NOT appear anywhere
         # in the rendered report — that would prove the skip failed.
-        # (Note: "deleted.pdf" — as of Phase A source-file links, source
+        # (Note: "deleted.pdf" — as of source-file links, source
         # names ship as vps://source/{slug} links in the markdown; the
         # display text "deleted.pdf" is what we're screening for either
         # way.)
@@ -315,7 +315,7 @@ class TestCoverageEndToEnd(unittest.TestCase):
         self.assertIn("2026-12-15", gaps_section)
 
         # Source coverage table exists and Acme (1 item) is flagged.
-        # (Phase A — source-file name is emitted as a markdown link;
+        # ( — source-file name is emitted as a markdown link;
         # the raw display text is still present.)
         self.assertIn("acme.pdf", md)
         self.assertIn("vps://source/acme-pdf", md)

@@ -58,5 +58,5 @@ In hosted mode, "server filesystem" = droplet disk. In local mode, "server files
 
 ## What's NOT in this doc
 
-- **Packaging as an .exe or installer.** That's a downstream scope; the [Looper-as-standalone-product CC](../../memory/concept-clusters/CC_looper-as-standalone-product_2026-05.md) sketch applies here too — open question whether to ship a single-file standalone or a personal-infra setup.
+- **Packaging as an .exe or installer.** Downstream scope — open question whether to ship a single-file standalone or a personal-infra setup.
 - **WebGPU vs CUDA tradeoffs.** WebGPU is the browser-build path (cart builder); CUDA is the physics path. Local mode uses CUDA if available, browser WebGPU otherwise.

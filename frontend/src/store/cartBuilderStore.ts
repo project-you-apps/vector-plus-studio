@@ -81,7 +81,7 @@ interface CartBuilderState {
   // Optional completion handler set by the caller of openFolderPicker.
   // When set, "Use this folder" calls this instead of the default
   // addBrowserFolder. Null = legacy behavior (add to saved cart folders).
-  // Andy 2026-05-10 — needed so the New Cart destination flow can reuse
+  // — needed so the New Cart destination flow can reuse
   // the same picker without permanently adding the destination to saved
   // folders.
   pickerOnConfirm: ((path: string) => void) | null

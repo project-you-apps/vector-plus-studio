@@ -5,7 +5,7 @@ in this template before hitting :func:`api.llm.get_llm_adapter`.
 
 Rationale
 ---------
-The Cloudflare Workers AI runtime (Track C, the default provider) hosts
+The Cloudflare Workers AI runtime, the default provider, hosts
 open-source Llama 3 instruct models. Those models were fine-tuned on
 the ChatML-like Llama 3 header format::
 
@@ -14,9 +14,8 @@ the ChatML-like Llama 3 header format::
     …user prompt…<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
 Feed the model a bare user string and it falls back to base-model
-completion — the "book review about environmental economics" failure
-Andy hit on 2026-07-13 where a Q&A prompt about a poetry cart produced
-a rambling non-sequitur completion instead of an answer.
+completion — a Q&A prompt about a poetry cart produced a rambling
+non-sequitur completion instead of an answer in that failure mode.
 
 Wrapping the prompt in the instruct headers puts the model firmly in
 chat-completion mode, and outputs read as actual answers to the
@@ -32,13 +31,12 @@ one wrap keeps agent code portable across providers without a
 per-provider conditional.
 
 If a future adapter proves the wrap actively hurts on its provider,
-extend the CF Worker to detect + strip (design doc, "Prompt
-engineering" section).
+extend the CF Worker to detect + strip.
 
 Historical note
 ---------------
-The initial dispatch tried raw prompts. Andy caught the completion-mode
-failure the same day. The wrap landed as the fix in the same commit as
+The initial dispatch tried raw prompts. The completion-mode failure
+surfaced quickly and the wrap landed as the fix in the same commit as
 the initial scaffold, so no test in this codebase exists showing the
 failure mode — it lives in the LLM's training-time behavior, not ours.
 """

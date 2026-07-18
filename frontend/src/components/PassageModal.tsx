@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import { useAppStore } from '../store/appStore'
 
-// Chunker overlap detection (Andy 2026-05-09 proposal). The browser-side
+// Chunker overlap detection. The browser-side
 // chunker produces 300-word chunks with 50-word overlap — consecutive chunks
 // share their boundary text. When user clicks Next/Prev to walk through
 // search results in source order, the overlap creates a "stitched-together"
@@ -21,7 +21,7 @@ import { useAppStore } from '../store/appStore'
 // graying. Random-access from search results clears the prevText state so
 // the first view is always full content, no false-positive graying.
 function findOverlap(suffixOf: string, prefixOf: string, maxChars = 300): number {
-  // Andy 2026-07-05 PM: reduced default cap from 600 → 300 chars. The
+  // reduced default cap from 600 → 300 chars. The
   // line-aware chunker landed 2026-07-05 preserves whole lines in overlap,
   // so a single long line at the boundary can drive the actual overlap
   // north of 500 chars. Capping the graying at 300 keeps the divider
@@ -90,7 +90,7 @@ export default function PassageModal() {
   const navigateModal = useAppStore((s) => s.navigateModal)
   const loadSource = useAppStore((s) => s.loadSourceForCurrentPassage)
   const mountedCart = useAppStore((s) => s.status?.mounted_cartridge)
-  // Andy 2026-07-06 AM: surface the query term in the modal so users don't
+  // surface the query term in the modal so users don't
   // lose the "why am I looking at this?" thread when navigating Prev/Next.
   const currentQuery = useAppStore((s) => s.query)
   const activeLocalCart = useAppStore((s) => s.activeLocalCart)
@@ -99,7 +99,7 @@ export default function PassageModal() {
 
   // Resolve the per-pattern-meta array to use: prefer the active LocalCart's
   // in-memory copy, otherwise fall back to the sandbox-mounted cart's
-  // server-fetched mirror. Andy 2026-07-06 AM: parity fix so droplet-uploaded
+  // server-fetched mirror. parity fix so droplet-uploaded
   // carts show images in the modal + inline-image replacement + drill-down.
   const perPatternMeta = useMemo(() => {
     if (activeLocalCart) {
@@ -110,7 +110,7 @@ export default function PassageModal() {
 
   // Day 2 graphic — if the current passage is a graphic-type pattern (Image
   // Builder extracted), pull the base64 PNG out of per_pattern_meta and hand
-  // back a data URL for inline rendering above the caption. Andy 2026-07-05
+  // back a data URL for inline rendering above the caption.
   // PM: this is the wow moment for the pitch deck demo — click a graphic
   // result, see the actual graphic.
   const graphicPatternMeta = useMemo(() => {
@@ -123,7 +123,7 @@ export default function PassageModal() {
     ? `data:image/png;base64,${graphicPatternMeta.image_b64}`
     : null
 
-  // Andy 2026-07-05 PM: click-to-zoom lightbox for graphic images. Any
+  // click-to-zoom lightbox for graphic images. Any
   // inline `<img>` in the passage viewer can be clicked to open a
   // full-viewport view. Escape or backdrop click closes.
   const [zoomedSrc, setZoomedSrc] = useState<{ src: string; alt: string } | null>(null)
@@ -139,7 +139,7 @@ export default function PassageModal() {
     return () => window.removeEventListener('keydown', handler, true)
   }, [zoomedSrc])
 
-  // Andy 2026-07-05 PM: inline-image replacement. Docling leaves
+  // inline-image replacement. Docling leaves
   // `<!-- image -->` markers wherever graphics live in the reading flow.
   // If the current passage's source has extracted graphics baked into
   // perPatternMeta, replace each marker with a markdown image referencing a
@@ -287,7 +287,7 @@ export default function PassageModal() {
               <X size={18} />
             </button>
           </div>
-          {/* Query-pill — surfaces the query that led here. Andy 2026-07-06
+          {/* Query-pill — surfaces the query that led here.
               AM: helps keep the "why am I looking at this" thread across
               Prev/Next navigation. Truncated to 47 chars + ellipsis. */}
           {currentQuery && currentQuery.trim().length > 0 && (
@@ -331,7 +331,7 @@ export default function PassageModal() {
                   />
                 </div>
               )}
-              {/* Overlap-graying (Andy 2026-05-09): when the user navigated
+              {/* Overlap-graying: when the user navigated
                   via Next from the previous chunk, the first ~50 words of
                   this chunk are usually the same as the last ~50 words of
                   the previous chunk (chunker's overlap window). Gray them
@@ -356,7 +356,7 @@ export default function PassageModal() {
               )}
               <ReactMarkdown
                 remarkPlugins={[remarkGfm, remarkBreaks]}
-                // Andy 2026-07-05 PM: pass-through URL transform so our
+                // pass-through URL transform so our
                 // `graphic:N` placeholder scheme survives ReactMarkdown's
                 // default sanitizer (which strips non-http/https/data schemes
                 // and rewrites src to empty). The img component override below
@@ -403,7 +403,7 @@ export default function PassageModal() {
                   hr: () => <hr className="my-4 border-slate-700/50" />,
                   strong: ({ children }) => <strong className="font-semibold text-slate-100">{children}</strong>,
                   em: ({ children }) => <em className="italic text-slate-200">{children}</em>,
-                  // Andy 2026-07-05 PM: inline-image resolver. Preprocessed
+                  // inline-image resolver. Preprocessed
                   // markdown carries `graphic:N` placeholders where Docling's
                   // `<!-- image -->` markers used to be. Look up the real
                   // base64 payload from sourceGraphics and render inline.
@@ -492,7 +492,7 @@ export default function PassageModal() {
         )}
 
         {/* Footer with navigation.
-            Andy 2026-07-03 boundary UX: at first/last passage of a drilled
+            UX: at first/last passage of a drilled
             file the disabled button was previously silent — the browser's
             not-allowed cursor read as a STOP glyph with no explanation.
             Now the disabled side shows an explicit "No previous" / "No next"
@@ -532,7 +532,7 @@ export default function PassageModal() {
         </div>
       </div>
       {/* Click-to-zoom lightbox — full-viewport overlay above the passage
-          modal. Escape or backdrop click closes. Andy 2026-07-05 PM: the
+          modal. Escape or backdrop click closes. the
           modal-from-modal we joked about earlier. */}
       {zoomedSrc && (
         <div

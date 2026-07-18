@@ -1,14 +1,13 @@
-// Report definitions — the 9 generic report types for VPS, sourced from
-// docs/vps-internal/Report Types Design 2026-07-10.md. Coverage Report
-// (Wave-1c, 2026-07-12) rounds the set out to 9 to match the pitch copy.
+// Report definitions — the 9 generic report types for VPS. The Coverage
+// Report rounds the set out to 9 to match the pitch copy.
 //
 // These are the FRONTEND shells only — the backend Report interface + registry
-// (see design doc §0.1) is future work. Each definition here mirrors the
-// design doc's per-report input schema so the auto-generated form matches
-// what the backend module will eventually expect.
+// is future work. Each definition here mirrors the eventual backend's
+// per-report input schema so the auto-generated form matches what the
+// backend module will eventually expect.
 //
-// LLM dependency is currently true only for Executive TL;DR; Wave-2 reports
-// (Timeline, Trend, Financial) will pick up optional LLM fallback later but
+// LLM dependency is currently true only for Executive TL;DR; other reports
+// (Timeline, Trend, Financial) may pick up optional LLM fallback later but
 // stay false for this shell so the sparkles badge stays honest.
 
 export type FieldType =
@@ -40,7 +39,7 @@ export interface ReportDefinition {
 }
 
 // Ordered per Report Types Design §1-8 so the card grid mirrors the doc.
-// Wave-1 (no LLM) first, TL;DR (LLM-dep) last.
+// non-LLM reports first, TL;DR (LLM-dep) last.
 export const REPORT_DEFINITIONS: ReportDefinition[] = [
   {
     name: 'summary',

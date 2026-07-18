@@ -1,7 +1,7 @@
-"""Source-file link helpers — Phase A of the report drill-down UX.
+"""Source-file link helpers —  of the report drill-down UX.
 
 Shared helpers for emitting ``vps://source/{slug}`` markdown links from
-every Wave-1 report module. Landed 2026-07-13 as part of the "live
+every report module. Landed 2026-07-13 as part of the "live
 source-file links" pass.
 
 Every place a report currently emits a source-file name in its markdown
@@ -21,7 +21,7 @@ Slug rule (kept in ONE place so every report agrees):
 - collapse consecutive ``-``
 - trim leading / trailing ``-``
 
-Phase B (passage-level ``vps://passage/{pattern-id}`` links) is out of
+passage-level linking is out of
 scope for this pass. If we add it, extend this module rather than
 introducing a second slug helper — one convention, one code path.
 """
@@ -86,7 +86,7 @@ def source_link(source_name: Optional[str], *, empty_label: str = "(no source)")
     Returns ``[{source_name}](vps://source/{slug})`` — a real markdown
     link the frontend intercepts. Display text preserves whatever prefix
     was in the caller-provided name (e.g. "Poem: ...") so the rendered
-    surface reads the same as it did before Phase A landed.
+    surface reads the same as it did before  landed.
 
     Empty / None inputs collapse to ``empty_label`` (default
     ``(no source)``) rather than an empty-link ``[](vps://source/)``, so

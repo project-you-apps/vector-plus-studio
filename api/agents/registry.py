@@ -15,7 +15,7 @@ decorator on their :class:`~api.agents.base.Agent` subclass:
 Naming discipline: ``Agent.name`` values MUST match the ``name`` field
 in ``frontend/src/agents/agent-definitions.ts`` for frontend → backend
 routing to work. Underscore convention for multi-word slugs (matches
-Reports engine convention set in Wave-1b, 2026-07-11):
+Reports engine convention set in ):
 
     auto_briefing        # NOT "auto-briefing"
     qa

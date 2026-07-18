@@ -214,7 +214,7 @@ def _build_cart(chunks: list[dict], cart_name: str, output_dir: str,
             # Cart-level metadata surfaced in the Pattern-0 TOC panel. Description
             # and agent_briefing get generic-fallback text from the /build handler
             # when the caller doesn't supply one, so these fields are always
-            # populated on user-built carts (Andy 2026-07-02 rich Pattern-0 path).
+            # populated on user-built carts (rich Pattern-0 path).
             "description": description or "",
             "agent_briefing": agent_briefing or "",
             "owner": owner or "",

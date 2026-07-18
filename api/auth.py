@@ -33,7 +33,7 @@ JWT_ALGORITHMS = ["HS256"]
 if not JWT_SECRET:
     log.warning(
         "SUPABASE_JWT_SECRET not set. All requests will be treated as anonymous. "
-        "Set this env var in production (see OAUTH-PRE-SCOPE.md)."
+        "Set this env var in production."
     )
 
 

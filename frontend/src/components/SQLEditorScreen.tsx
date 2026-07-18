@@ -10,8 +10,7 @@ import {
   type SQLOperation,
 } from '../sql/operation-templates'
 
-// SQL Editor screen — VPS wave-1 shell (see
-// docs/vps-internal/SQL Editor Design 2026-07-10.md).
+// SQL Editor screen — v1 shell.
 //
 // Scope of this pass:
 //   • Cart selector at top (defaults to the currently-mounted cart)
@@ -416,7 +415,7 @@ export default function SQLEditorScreen() {
           )}
         </section>
 
-        {/* Cross-mode handoff teaser (design doc §6) */}
+        {/* Cross-mode handoff teaser */}
         <p className="text-center text-[11px] text-slate-500 italic pt-2">
           Cross-mode: results referencing a SQL-backed source will show a{' '}
           <span className="font-mono text-slate-400">[Query source DB &rarr;]</span>{' '}

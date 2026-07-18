@@ -127,7 +127,7 @@ def load_cart_folders() -> list[str]:
     we don't re-inject a default folder when the user has removed everything.
     Operators of hosted instances can pre-seed SETTINGS_FILE with whatever
     curated-cart folder they want pinned (along with VPS_READ_ONLY=1 to
-    prevent visitors from removing it). Andy 2026-05-10.
+    prevent visitors from removing it)..
     """
     if SETTINGS_FILE.exists():
         try:
@@ -369,7 +369,7 @@ def _table_html_to_text(html: str) -> str:
     Docling emits <table><tr>[<th>|<td>]...</tr>...</table>. We emit standard
     GFM markdown table syntax (`| cell | cell |` with a separator row) so the
     passage viewer's react-markdown + remark-gfm renders it as an actual
-    table. Andy 2026-07-05: previous impl produced pipe-delimited flat text
+    table. previous impl produced pipe-delimited flat text
     with no separator row — remark-gfm parsed it as a paragraph, so tables
     from JFC-style OCR looked like a wall of piped characters.
     """
@@ -620,7 +620,7 @@ async def build_status():
 async def list_carts(path: str = ""):
     """List carts and subdirectories for a given path (or saved-folders root).
 
-    SECURITY (Andy 2026-05-06): the no-path variant returns carts from the
+    SECURITY: the no-path variant returns carts from the
     SAVED folders only — that's bounded to whatever the operator configured.
     The with-path variant walks the filesystem and is gated by read-only mode
     on public deploys, otherwise it leaks directory structure to anyone who
@@ -777,7 +777,7 @@ async def build_to_folder(
     locked off on the droplet via VPS_READ_ONLY=1; the New Cart flow is
     a writable-instance feature.
 
-    Andy 2026-05-10. Returns {cart_path, mounted_filename, folder} so the
+   . Returns {cart_path, mounted_filename, folder} so the
     caller can mount + switch to Open Cart mode.
     """
     _check_writable()
@@ -801,7 +801,7 @@ async def build_to_folder(
     manifest_path = target_dir / manifest_filename
     permissions_path = target_dir / permissions_filename
 
-    # Prevent silent clobber. Andy 2026-05-10 QA: built a cart with the same
+    # Prevent silent clobber. built a cart with the same
     # name as an existing one in the destination folder and the server
     # overwrote without warning. Frontend handles 409 by prompting the user
     # and retrying with replace=true if they confirm.
@@ -837,7 +837,7 @@ async def build_to_folder(
 async def browse_folders(path: str = ""):
     """List subdirectories at a path. Empty path → drive roots on Windows, / on Unix.
 
-    SECURITY (Andy 2026-05-06): always gated by read-only mode. There's no
+    SECURITY: always gated by read-only mode. There's no
     legitimate use for a public-demo user to walk the server's filesystem;
     the only purpose was the local-deploy folder picker. On the droplet this
     becomes a reconnaissance vector (list /etc/, /opt/, /root/, etc.). 403.

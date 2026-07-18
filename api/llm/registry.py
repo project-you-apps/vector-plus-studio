@@ -2,7 +2,7 @@
 
 Reads ``VECTOR_PLUS_LLM_PROVIDER`` from the environment and returns a
 constructed :class:`~api.llm.adapter.LLMAdapter`. Defaults to Cloudflare
-Workers AI (Track C), the free-tier default per the investigation doc.
+Workers AI, the free-tier default.
 
 Callers should hold onto the returned adapter for the lifetime of the
 request (or the process) rather than calling :func:`get_llm_adapter`

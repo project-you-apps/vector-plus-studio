@@ -23,7 +23,7 @@ import * as cb from '../api/cartbuilder'
 
 // CRUDScreen — first mockup for Andy to react to.
 //
-// Architecture (Andy 2026-05-04 spec, mockup 2026-05-05):
+// Architecture (spec, mockup 2026-05-05):
 //   • Two MODES at the top:
 //       1. "Open Cart"  — operate on an existing mounted cart (rwx)
 //       2. "New Cart"   — start with an empty cart and add passages
@@ -47,7 +47,7 @@ import * as cb from '../api/cartbuilder'
 //   • Activity log persistence (currently in-component only)
 
 type Mode = 'open' | 'new'
-// Activity log kinds. Andy 2026-05-06: mount / unmount / save / create
+// Activity log kinds. mount / unmount / save / create
 // belong in the log too — any cart-state-changing action gets a row.
 // 'open' is reserved for screens like Cart Builder where loading a cart
 // into a workspace (load_cart) isn't the same as mounting it for search.
@@ -73,7 +73,7 @@ export default function CRUDScreen() {
   const deleteResult = useAppStore((s) => s.deleteResult)
   const restoreResult = useAppStore((s) => s.restoreResult)
 
-  // LocalCart edit support (Andy 2026-06-16 PM): when a browser-mounted cart
+  // LocalCart edit support: when a browser-mounted cart
   // is active and the backend has no cart mounted, Edit Carts operates on the
   // LocalCart in-memory state. Operations route through new store actions
   // (localCartTombstone, localCartTombstoneBySource, localCartRestore,
@@ -105,9 +105,9 @@ export default function CRUDScreen() {
   const [addText, setAddText] = useState('')
   const [addSource, setAddSource] = useState('')
   const localCartAddPassage = useAppStore((s) => s.localCartAddPassage)
-  // File-picker Add (LocalCart only, Andy 2026-06-17 PM "and we're good to
-  // go"). Pick files → parse via cart-builder-v2 → chunk → embed each chunk
-  // → localCartAddPassage with source=file.name. Progress shown inline.
+  // File-picker Add (LocalCart only). Pick files → parse via
+  // cart-builder-v2 → chunk → embed each chunk → localCartAddPassage
+  // with source=file.name. Progress shown inline.
   const [addFilesProcessing, setAddFilesProcessing] = useState(false)
   const [addFilesStatus, setAddFilesStatus] = useState<string | null>(null)
   const addFilesInputRef = useRef<HTMLInputElement | null>(null)
@@ -119,7 +119,7 @@ export default function CRUDScreen() {
 
   // Delete-panel state
   const [deleteIdx, setDeleteIdx] = useState('')
-  // LocalCart delete-target mode (Andy 2026-06-17 PM): user picks whether the
+  // LocalCart delete-target mode: user picks whether the
   // typed IDX refers to a row in Source Files (delete a whole file) or a
   // passage IDX from search results (delete one passage). Defaults to 'file'
   // because file-level delete is the primary use case for user-built carts.
@@ -344,12 +344,12 @@ export default function CRUDScreen() {
   }
 
   // ── Delete ──
-  // Standard practice (Andy 2026-05-06): destructive actions get a
+  // Standard practice: destructive actions get a
   // confirmation modal. The modal does the actual call on confirm.
   // For LocalCart-mounted carts, routes through localCartTombstone for the
   // passage-idx variant, or resolves the file row to its sourcePath and
   // routes through handleDeleteSource for the file-idx variant.
-  // Andy 2026-06-17 PM: the file/passage distinction is the user's call —
+  // the file/passage distinction is the user's call —
   // deleteMode toggle in the panel says which kind of IDX they typed.
   const handleDelete = () => {
     const idx = parseInt(deleteIdx, 10)
@@ -578,7 +578,7 @@ export default function CRUDScreen() {
               {/* Update panel. Backend-mounted carts: full editable flow.
                   LocalCart: rendered as a disabled "COMING SOON" preview so
                   users can see the capability is on the roadmap without it
-                  being functional. Andy 2026-06-17 PM: file-level / passage-
+                  being functional. file-level / passage-
                   level update on LocalCart needs UX design (which IDX system
                   does the user mean? do file-level updates roundtrip back to
                   the source file on disk?). Add + Delete handle the
@@ -641,7 +641,7 @@ export default function CRUDScreen() {
                   file-level provenance on legacy server-built carts). LocalCart:
                   user picks File # (from Source Files list below) or Passage #
                   via a toggle so it's explicit which IDX system they're typing.
-                  Andy 2026-06-17 PM: re-enabled for LocalCart after the IDX
+                  re-enabled for LocalCart after the IDX
                   column on Source Files made file-level delete unambiguous. */}
               <OpPanel
                 icon={Trash2}
@@ -724,7 +724,7 @@ export default function CRUDScreen() {
                 sourcePath in the cart with its active+total passage counts and
                 a Delete-file button that tombstones every passage from that
                 source. Clicking a row drills into a per-file passages view
-                (Andy 2026-06-28) so individual passages can be edited or
+                so individual passages can be edited or
                 tombstoned without leaving Edit Carts. */}
             {isLocalMount && activeLocalCart && (
               <SourceFilesPanel
@@ -833,7 +833,7 @@ export default function CRUDScreen() {
             headerLabel="Carts available to edit"
             onCartClick={(cart) => {
               // Mount via the existing /api/cartridges/mount path (absolute path).
-              // Log as 'mount' (Andy 2026-05-06 — mount/unmount belong in the log).
+              // Log as 'mount' (— mount/unmount belong in the log).
               useAppStore.getState().mount(cart.path)
               log('mount', `Mounted ${cart.name} for editing`, true)
             }}
@@ -1110,7 +1110,7 @@ function ActivityLog({ entries }: { entries: ActivityEntry[] }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // SourceFilesPanel — for LocalCart-mounted carts only.
 //
-// Two view modes (Andy 2026-06-28 spec):
+// Two view modes:
 //   • list — every unique source file with active/total counts + Delete-file
 //   • drill — one file's passages, paginated 25/page with per-row Edit +
 //             Tombstone/Restore. Other files hide while drilled.
@@ -1457,9 +1457,7 @@ function NewCartPanel({
 
   // Pre-flight: when a destination folder is picked, list any existing
   // .cart.npz files there so the user sees collisions before committing
-  // the build. Andy 2026-05-10: "if there are carts already in there
-  // they can see if they chose a name that's already taken before even
-  // committing to the process."
+  // the build.
   useEffect(() => {
     if (!destFolder) {
       setDestFolderCarts([])
@@ -1500,7 +1498,7 @@ function NewCartPanel({
 
   // Prerequisite gating — cart name + destination folder must be set before
   // any passage editing. Without these, the user is adding passages to
-  // "the infinite void" (Andy 2026-05-10).
+  // "the infinite void".
   const prerequisiteIssue: string | null = (() => {
     if (!cartName.trim()) return 'Enter a cart name above before adding passages.'
     if (!destFolder) return 'Choose a destination folder before adding passages.'

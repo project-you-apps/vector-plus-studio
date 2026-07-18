@@ -1,24 +1,22 @@
 """Comparison Report — two subsets of a cart side-by-side.
 
 Answers "Q1 invoices vs Q2 invoices", "vendor A vs vendor B",
-"May mentions vs June mentions". Wave-1 has no LLM dependency.
+"May mentions vs June mentions". No LLM dependency.
 
-Spec: ``docs/vps-internal/Report Types Design 2026-07-10.md`` §4.
-
-Query strategy — wave-1 note
-----------------------------
-The design doc's Query Strategy calls for Membot ``memory_search`` on
-each subset's query string. **Semantic search is a Wave-2 concern** —
-Wave-1 lands without a hosted-Membot dependency so the reports engine
+Query strategy — note
+---------------------
+The eventual Query Strategy uses Membot ``memory_search`` on each
+subset's query string. **Semantic search is a later concern** — this
+version lands without a hosted-Membot dependency so the reports engine
 can be dispatched, wired, and demoed without waiting on the search
 service.
 
-For Wave-1 we implement subset membership as **plain substring
+We implement subset membership as **plain substring
 matching**: a passage belongs to a subset iff the query (lowercased)
 appears as a substring of the passage text or its source_path
 (lowercased). This is honest and functional — office managers doing
 "vendor A vs vendor B" invoice comparisons routinely have the vendor
-name as a literal in the passage. When Wave-2 wires Membot semantic
+name as a literal in the passage. When A future revision wires Membot semantic
 search, the swap point is ``_matches_subset`` below; the report body,
 overlap math, and aggregate metrics stay identical.
 
@@ -32,7 +30,7 @@ Extractor dependency
 --------------------
 Uses ``extract_dates`` for the date-span metric and ``extract_currency``
 for the total-currency metric. Both are imported **lazily** inside
-``generate()`` so import order between the parallel Wave-1a dispatches
+``generate()`` so import order between the parallel dispatches
 doesn't matter — if extractors haven't landed at import time we fail at
 call time with a clear message instead of on module load.
 """
@@ -116,7 +114,7 @@ class ComparisonReport(Report):
         options: ReportOptions,
     ) -> ReportOutput:
         # -- extractors (lazy import) -------------------------------------
-        # See module docstring: extractors ship as a parallel Wave-1a
+        # See module docstring: extractors ship as a parallel
         # dispatch. Import at call time so this report is loadable even
         # if extractors haven't landed yet — the failure surfaces as a
         # helpful runtime message rather than an ImportError on module
@@ -127,7 +125,7 @@ class ComparisonReport(Report):
         except ImportError as exc:  # pragma: no cover — soft-fail path
             raise ImportError(
                 "ComparisonReport requires api.reports.extractors "
-                "(dates + currency). Ensure the Wave-1a extractors "
+                "(dates + currency). Ensure the current extractors "
                 f"dispatch has landed. Underlying error: {exc}"
             ) from exc
 
@@ -306,7 +304,7 @@ class ComparisonReport(Report):
             },
             "overlap_count": len(overlap),
             "tombstoned_skipped": tombstone_count,
-            "match_strategy": "substring",  # swap to "membot_semantic" in Wave-2
+            "match_strategy": "substring",  # swap to "membot_semantic" in a future revision
         }
         if options.include_source_refs:
             metadata["subset_a"]["pattern_indices"] = sorted(set_a)
@@ -417,11 +415,11 @@ class ComparisonReport(Report):
 # ---------------------------------------------------------------------------
 
 def _matches_subset(query_lc: str, text_lc: str, source_lc: str) -> bool:
-    """Wave-1 subset membership: pure substring containment.
+    """Subset membership: pure substring containment.
 
     A passage is in the subset iff ``query_lc`` is a substring of the
     passage text OR its source_path. This is the honest-and-functional
-    wave-1 replacement for Membot semantic search; wave-2 swaps this out
+    The current replacement for Membot semantic search; a future revision swaps this out
     for real embedding-cosine search without touching the report body.
     """
     if not query_lc:
@@ -445,7 +443,7 @@ def _aggregate_metrics(
     - ``date_span``: human-readable string ("2026-05-01 → 2026-06-30")
       or "—" when no dates found
     - ``currency_total_usd``: :class:`Decimal` USD total across passages
-      (non-USD amounts are skipped — mixed-currency handling is a Wave-2
+      (non-USD amounts are skipped — mixed-currency handling is a future
       concern; matches Financial Rollup §6 edge case)
     - ``currency_display``: formatted "$X,XXX.YY" or "—"
     """
@@ -615,7 +613,7 @@ def _distinctive_bullets(cart: CartHandle, indices: list[int]) -> list[str]:
     bullets = []
     for idx in indices:
         raw_src = cart.get_source(idx)
-        # 2026-07-13 (Phase A): source names emit as vps://source/{slug}
+        # 2026-07-13 (): source names emit as vps://source/{slug}
         # links so the frontend can drill down. When the cart has no
         # source for a pattern, fall back to the bare "pattern #N" text
         # (no link — there's no source to focus on).

@@ -91,7 +91,7 @@ export async function getCartPattern0(): Promise<Pattern0Response> {
 
 // Per-pattern metadata sidecar for the currently-mounted cart. Payload can
 // be several MB for image-heavy carts (each graphic carries base64 PNG
-// bytes). Andy 2026-07-06 AM: called on mount so sandbox-mounted carts
+// bytes). called on mount so sandbox-mounted carts
 // can render graphics/tables just like LocalCart mounts do.
 export async function getCartPerPatternMeta(): Promise<PerPatternMetaResponse> {
   return fetchJSON('/cart/per-pattern-meta')
@@ -280,12 +280,12 @@ export async function memboxUnmount(cartId: string) {
   )
 }
 
-// --- Reports engine (Wave-2 dispatch, 2026-07-13) ---
+// --- Reports engine  ---
 //
 // generateReport POSTs form values plus the server cart identifier at
 // /api/reports/generate. The route returns a fully-rendered markdown
 // string plus metadata / warnings; the pane renders markdown via
-// react-markdown + remark-gfm. Wave-2 slugs (timeline / trend /
+// react-markdown + remark-gfm. a future release slugs (timeline / trend /
 // financial_rollup / tldr) come back as 501 — the caller surfaces that
 // as a friendly "future release" message, not an error.
 

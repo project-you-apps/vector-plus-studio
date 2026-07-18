@@ -1,21 +1,18 @@
 """Summary Report — "what's in this cart?" cart orientation.
 
-Wave-1 report (no LLM dependency). Implements Section 1 of
-``docs/vps-internal/Report Types Design 2026-07-10.md``.
-
 Answers the orientation question without a search: pattern count, unique
 source files, date span across passages, extracted-content counts
 (graphics + tables), a dumb-but-works bigram-clustered top-themes list,
 and a per-file table with first/last-seen dates.
 
-Design decisions worth flagging for later waves:
+Design decisions worth flagging:
 
 - **Slug**: ``"summary"`` (underscore convention). Matches
   ``frontend/src/reports/report-definitions.ts``.
-- **Themes**: this wave does NOT hit Membot — post-Wave-1a. Instead we
-  cluster by shared bigrams (first 200 chars per passage). If fewer than
-  3 distinct themes surface, we fall back to Pattern-0 description
-  tokens. Wave-2 replaces this with high-diversity Membot search.
+- **Themes**: Does NOT hit Membot. Instead we cluster by
+  shared bigrams (first 200 chars per passage). If fewer than 3 distinct
+  themes surface, we fall back to Pattern-0 description tokens. A future
+  version replaces this with high-diversity Membot search.
 - **Tombstones**: skipped from counts + coverage + themes via
   :py:meth:`CartHandle.is_tombstoned`. If any tombstones were skipped
   we surface a warning noting the count.
@@ -42,7 +39,7 @@ from .source_link import source_link
 
 
 # ---------------------------------------------------------------------------
-# Bigram theme extractor — the dumb-but-works Wave-1 approach
+# Bigram theme extractor — the dumb-but-works approach
 # ---------------------------------------------------------------------------
 
 # Very small English stopword set — enough to filter the worst bigram noise
@@ -113,7 +110,7 @@ def _coerce_date(value: Any) -> Optional[date]:
     """Best-effort convert whatever the extractor returned to a ``date``.
 
     Accepts datetime / date / ISO string / an object with ``.date``
-    attribute (the shape hinted at in the design doc). Returns ``None``
+    attribute (the module's public shape). Returns ``None``
     for anything we can't confidently parse — the caller drops it.
     """
     if value is None:
@@ -123,7 +120,7 @@ def _coerce_date(value: Any) -> Optional[date]:
     if isinstance(value, date):
         return value
     # DateExtraction-shaped object with a .date attribute — the extractors
-    # module's likely public shape per Section 0.3 of the design doc.
+    # module's likely public shape.
     if hasattr(value, "date"):
         inner = value.date  # type: ignore[attr-defined]
         # Some libs expose .date as a method; call if so.
@@ -147,7 +144,7 @@ def _coerce_date(value: Any) -> Optional[date]:
 def _try_extract_dates(text: str) -> list[date]:
     """Lazy-import the extractors module and pull dates from ``text``.
 
-    Returns ``[]`` if the module isn't importable yet (Wave-1 parallel
+    Returns ``[]`` if the module isn't importable yet (the parallel
     dispatch) or if extraction yields nothing usable. Never raises.
     """
     try:
@@ -187,7 +184,7 @@ class SummaryReport(Report):
     supports_scheduling = True
 
     # Mirror the frontend's summary FieldSchema entries verbatim. Keeping
-    # this in sync is the discipline the Wave-1b smoke test will assert.
+    # this in sync is the discipline the current will assert.
     input_schema: list[dict[str, Any]] = [
         {
             "name": "top_themes",

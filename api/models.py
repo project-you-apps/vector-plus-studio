@@ -138,7 +138,7 @@ class Pattern0Response(BaseModel):
 class PerPatternMetaResponse(BaseModel):
     """Per-pattern metadata sidecar (from per_pattern_meta.npy).
 
-    Andy 2026-07-06 AM: exists so sandbox-mounted carts on the droplet
+    exists so sandbox-mounted carts on the droplet
     reach parity with LocalCart-mounted carts for image/table rendering.
     The frontend fetches this on mount + carries a mirror-image data
     structure through ResultCard, PassageModal, Pattern0TocPanel drill-down,

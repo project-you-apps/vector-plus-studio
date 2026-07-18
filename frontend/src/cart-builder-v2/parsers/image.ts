@@ -19,7 +19,7 @@ import { ParseError, type Graphic, type ImageBuilderOcrResult, type Section, typ
 // from a receipt).
 //
 // We parse tags with regex — good enough for Docling's typically-clean
-// `<table>` output. Andy 2026-07-05: previous impl produced pipe-delimited
+// `<table>` output. previous impl produced pipe-delimited
 // flat text with no separator row, so remark-gfm parsed it as a paragraph.
 // Mirror of the backend `_table_html_to_text` in api/cartbuilder/__init__.py.
 const _ENT_MAP: Record<string, string> = {

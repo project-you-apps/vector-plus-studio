@@ -1,4 +1,4 @@
-"""FastAPI route wiring for the LLM adapter (Track C).
+"""FastAPI route wiring for the LLM adapter.
 
 Exposes ``POST /api/llm/synthesize`` on top of the provider-agnostic
 ``LLMAdapter`` interface (``api/llm/adapter.py``). The concrete provider
@@ -6,9 +6,9 @@ Exposes ``POST /api/llm/synthesize`` on top of the provider-agnostic
 at runtime by ``get_llm_adapter()`` based on the
 ``VECTOR_PLUS_LLM_PROVIDER`` environment variable.
 
-Wave 2 reports (Timeline, Trend, Financial Rollup, Executive TL;DR) call
-this endpoint from their generate() implementations for LLM-assisted
-extraction and synthesis. Wave 1 reports do not touch it.
+LLM-dependent reports (Timeline, Trend, Financial Rollup, Executive
+TL;DR) call this endpoint from their generate() implementations for
+LLM-assisted extraction and synthesis. Non-LLM reports do not touch it.
 """
 
 from __future__ import annotations

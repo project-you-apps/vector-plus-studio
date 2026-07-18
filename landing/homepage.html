@@ -5,20 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Project You — Neuromorphic Memory for Agents and Humans</title>
 <!--
-  Marketing homepage for project-you.app. Drafted 2026-05-12 by Claude from
-  Andy's six decisions (see docs/HOMEPAGE-REWRITE-SCOPE-2026-05-12.md):
-    1. Lead with VPS as flagship; suite list secondary; thesis lives in About + above-fold blurb.
-    2. VPS is the product face until Heartbeat ships.
-    3. Pricing kept (3-tier freemium per CC_pitch-strategy-2026-04.md).
-    4. Pitch Deck PDF moves to Investors footer; new VPS deck pending upload.
-    5. Hero CTA = "Try Vector+ Studio"; "Watch Demo" + "Read the docs" disabled until they exist.
-    6. Login wires to /vps/app/ (SignInModal triggers there).
-
-  Sections marked [ANDY VOICE] are placeholders for Andy to edit in his voice.
-  Structural prose elsewhere is Claude-drafted scaffolding (replaces freely).
+  Marketing homepage for project-you.app.
 
   Auth-router IIFE at top of <head> preserves the OAuth callback fan-out from
-  /?code=... → /vps/app/?code=... (Block G shipped 2026-05-11).
+  /?code=... → /vps/app/?code=... so a login-return URL lands the user in the
+  right app subdirectory.
 -->
 <script>
 (function() {

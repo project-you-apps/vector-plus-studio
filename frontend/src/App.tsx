@@ -23,7 +23,7 @@ import DesktopHelperPairModal from './components/DesktopHelperPairModal'
 import CookieBanner from './components/CookieBanner'
 import Toaster from './components/Toaster'
 
-// Search screen layout — Andy 2026-07-01, revised 2026-07-02.
+// Search screen layout —, revised 2026-07-02.
 // Old-flow restore (2026-07-02): TOC and results are MUTUALLY EXCLUSIVE.
 // TOC visible on fresh cart mount; a search hides it and results fill the
 // space; the Pattern-0 button in SearchToolbar brings the TOC back. Store

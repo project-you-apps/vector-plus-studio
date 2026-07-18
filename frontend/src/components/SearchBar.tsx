@@ -19,13 +19,13 @@ export default function SearchBar() {
     setInput('')
   }, [status?.mounted_cartridge, activeLocalCart])
 
-  // 2026-07-13 (Phase A source-file links): when the user clicks a
+  // 2026-07-13 (source-file links): when the user clicks a
   // vps://source/{slug} link inside a rendered report, the store flips
   // activeScreen to 'search' AND stashes a pendingSourceFocus payload.
   // Here we consume it: prefill the input box with the source display
   // name and fire a search. Fallback behavior — no per-source filter
   // exists yet on Search; we're doing a search-by-name so at least the
-  // relevant passages surface. Documented as Phase A+ polish opportunity
+  // relevant passages surface. Documented as + polish opportunity
   // in the AGENT-LOGBOOK.
   useEffect(() => {
     if (!pendingSourceFocus) return
@@ -124,10 +124,10 @@ export default function SearchBar() {
     </form>
 
     {/* Filter toggles — under the Search button, above the TOC/results.
-        Andy 2026-07-02: pre-existed here and got mis-routed into ResultsList
+        pre-existed here and got mis-routed into ResultsList
         during the 7-01 layout reshuffle; restored to the original slot so the
         UX location matches user expectation on first search.
-        Andy 2026-07-03: justify-end so the row aligns under the Search button
+        justify-end so the row aligns under the Search button
         on the right side of the input row (matches the original screenshot). */}
     <div className="flex items-center justify-end gap-4 pr-1 text-sm text-slate-500">
       <label

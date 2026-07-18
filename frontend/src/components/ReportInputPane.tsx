@@ -10,7 +10,7 @@ import {
 // Slide-in pane on the right when a card's Run button is clicked. Renders a
 // form auto-generated from the report's input_schema, POSTs to
 // /api/reports/generate on Generate, and renders the returned markdown via
-// react-markdown + remark-gfm. Wave-2 reports (backend returns 501) surface
+// react-markdown + remark-gfm. a future release reports (backend returns 501) surface
 // as a friendly "future release" message; other errors get a red-tinted
 // panel with a Try again button.
 
@@ -152,7 +152,7 @@ function FieldRow({
 // after it fails. Success is HOISTED to the parent via onSuccess() —
 // results render full-width in ReportResultsView, not inside the pane —
 // so 'success' is no longer a pane-local state. See ReportsScreen for the
-// hand-off wiring (Andy 2026-07-13 Option 3 design).
+// hand-off wiring (Option 3 design).
 type ResultState =
   | { kind: 'idle' }
   | { kind: 'loading' }
@@ -466,7 +466,7 @@ function LoadingPanel({ report }: { report: ReportDefinition }) {
 }
 
 // Error state. Special cases (softer color palettes, targeted CTAs):
-//   • 501 / not_yet_available    → purple "future release" panel (Wave-2)
+//   • 501 / not_yet_available    → purple "future release" panel (a future release)
 //   • cart_not_found             → amber "cart no longer available" panel
 //                                  with [Pick another cart]. Distinct from
 //                                  legacy-format — this means the resolver
@@ -526,7 +526,7 @@ function ErrorPanel({
             {message || `The ${report.displayName} report will be available in a future release.`}
           </p>
           <p className="text-[11px] text-slate-500 leading-snug mt-2">
-            The 5 Wave-1 reports (Summary, Entity Rollup, Change Log, Comparison,
+            The 5 reports (Summary, Entity Rollup, Change Log, Comparison,
             Coverage) are wired now; Timeline, Trend, Financial Rollup, and
             Executive TL;DR are up next.
           </p>

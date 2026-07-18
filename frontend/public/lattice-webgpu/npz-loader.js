@@ -409,7 +409,7 @@ export async function parseCartNpz(buffer) {
 
     // per_pattern_meta.npy — Day 2 sidecar carrying content_type + per-pattern
     // extras (image_b64 for graphics, html for tables, bbox, caption, ...).
-    // Same unicode-array-of-JSON-string shape as pattern0.npy. Andy 2026-07-05
+    // Same unicode-array-of-JSON-string shape as pattern0.npy.
     // PM: read this so LocalCart mounts can surface graphic thumbnails in the
     // UI (Result cards, PassageModal, TOC drill-down). Zero-cost passthrough
     // when the entry is absent (legacy carts).

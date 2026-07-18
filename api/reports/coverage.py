@@ -1,7 +1,7 @@
 """Coverage Report — "what did we miss?" gap diagnosis.
 
-Wave-1c report (no LLM dependency). The 9th report type — added after the
-Wave-1a foundation + Wave-1b's four reports to close the pitch
+report (no LLM dependency). The 9th report type — added after the
+foundation + the initial four reports to close the pitch
 discrepancy ("9 different built-in reports" vs 8 shipped) and deliver a
 substrate-composed diagnostic report with no LLM dependency.
 
@@ -34,7 +34,7 @@ Design decisions worth flagging:
   DISCOVER entities to find orphans; ``discover_entities`` (a companion
   in ``extractors/entities.py``) is the discovery-shaped counterpart.
 - **Themes**: bigram approach mirroring ``summary.py``. Duplicated
-  locally (matching the Wave-1b idiom — every report is self-contained
+  locally (matching the current idiom — every report is self-contained
   even when there is overlap) rather than importing the module-private
   ``_bigrams`` helper.
 - **Tombstones**: :py:meth:`CartHandle.is_tombstoned` on the shared
@@ -113,7 +113,7 @@ def _bigrams(text: str) -> list[str]:
     """Yield lowercase 2-word bigrams from ``text``, skipping stopwords.
 
     Mirrors ``summary.py::_bigrams`` — kept local rather than imported
-    because summary.py's helper is module-private and the Wave-1b idiom
+    because summary.py's helper is module-private and the current idiom
     is "each report is self-contained."
     """
     tokens = [t.lower() for t in _WORD_RE.findall(text or "")]
@@ -179,7 +179,7 @@ def _pct(numerator: int, denominator: int) -> str:
 class CoverageReport(Report):
     """Diagnose gaps in a cart — the 9th report type.
 
-    Composed entirely from Wave-1a foundation extractors + the shared
+    Composed entirely from foundation extractors + the shared
     ``CartHandle`` reader. No LLM dependency.
     """
 
@@ -248,7 +248,7 @@ class CoverageReport(Report):
         inputs: ReportInput,
         options: ReportOptions,
     ) -> ReportOutput:
-        # Lazy extractor imports — matches the Wave-1b constraint so
+        # Lazy extractor imports — matches the current constraint so
         # coverage.py stays loadable even if extractors were dispatched
         # in a different agent branch.
         try:
@@ -525,7 +525,7 @@ class CoverageReport(Report):
             for theme, items in capped_underrep:
                 sample_idx = items[0]
                 sample = live_items[sample_idx]
-                # 2026-07-13 (Phase A): source-file reference is now a
+                # 2026-07-13 (): source-file reference is now a
                 # markdown link the frontend intercepts. Prior code
                 # wrapped the source name in decorative [ ] brackets;
                 # source_link() emits its own [display](vps://…) syntax.
@@ -555,7 +555,7 @@ class CoverageReport(Report):
         else:
             for ent, item_idx in orphans:
                 item = live_items[item_idx]
-                # Phase A: source is now a real markdown link (see
+                # : source is now a real markdown link (see
                 # source_link.py). Decorative [ ] wrapper dropped —
                 # source_link() emits its own [display](vps://…) syntax.
                 lines.append(
@@ -639,7 +639,7 @@ class CoverageReport(Report):
             )
             lines.append("")
             for item in context_poor[:_CONTEXT_POOR_SAMPLE_CAP]:
-                # Phase A: source-file reference is now a markdown link.
+                # : source-file reference is now a markdown link.
                 # See source_link.py for the slug convention.
                 lines.append(
                     f"- pattern #{item['idx']} "
@@ -682,7 +682,7 @@ def _render_empty_report(cart_name: str, tombstoned: int) -> str:
 
     Called out explicitly by the design brief: "Empty cart doesn't
     crash — sections render 'No items found' gracefully." Keeping the
-    six section headers present so downstream tooling (Wave-2 table-of-
+    six section headers present so downstream tooling (a future release table-of-
     contents / anchor linking) doesn't need to special-case the empty
     shape.
     """

@@ -1,28 +1,27 @@
-"""Entity Rollup report — "show me all mentions of X" (Report Types Design §5).
+"""Entity Rollup report — "show me all mentions of X".
 
-Wave-1 report, no LLM dependency. Answers "show me every mention of Sysco
-Portland" (or any vendor / person / project / concept name) across a cart,
+No LLM dependency. Answers "show me every mention of Sysco Portland" (or
+any vendor / person / project / concept name) across a cart,
 chronologically, with per-mention source + optional context excerpt.
 
-Design source: ``docs/vps-internal/Report Types Design 2026-07-10.md``
-section 5. Frontend mirror: ``frontend/src/reports/report-definitions.ts``
+Frontend mirror: ``frontend/src/reports/report-definitions.ts``
 (``entity_rollup`` entry — slug uses underscore, not hyphen).
 
-Query strategy (per §5):
+Query strategy:
 
 1. Load the cart via :class:`~api.reports.cart_reader.CartHandle`.
 2. Walk every non-tombstoned passage via ``cart.iter_passages()``.
 3. Run ``extract_entity_mentions()`` (lazy imported from
    :mod:`api.reports.extractors` when available; local regex fallback
-   until the parallel Wave-1a dispatch lands) against each passage.
+   until the parallel dispatch lands) against each passage.
 4. For each mention, capture (pattern_idx, source_path, span, date).
    Date comes from ``extract_dates`` on the same passage (or on the
    source path, which for Cart Builder invoices tends to carry
    ``-YYYY-MM-DD.`` in the filename).
 5. Sort chronologically; undated mentions bucketed last.
 
-Wave-1 explicitly excludes the §5 co-occurrence aggregation (which
-vendors appear alongside this one). That's a Wave-2 add.
+This version excludes the co-occurrence aggregation (which vendors
+appear alongside this one). That's a future add.
 
 Slug discipline: ``name = "entity_rollup"`` matches the frontend
 underscore-slug in ``report-definitions.ts``. The registry rejects
@@ -51,7 +50,7 @@ from .source_link import source_link
 # city name that appears in many unrelated passages.
 GENERIC_MATCH_WARNING_THRESHOLD = 100
 
-# Context window per §5: "surrounding sentences" ~= ±100 chars unless a
+# Context window: "surrounding sentences" ~= ±100 chars unless a
 # sentence terminator is closer.
 CONTEXT_RADIUS = 100
 
@@ -85,14 +84,14 @@ class EntityRollupReport(Report):
     """All-mentions-of-X rollup, chronological.
 
     See module docstring for design source + query strategy. This class
-    is the Wave-1 implementation — regex-only entity + date extraction
+    is the current implementation — regex-only entity + date extraction
     with a graceful local fallback if the shared extractors module
     hasn't landed yet.
     """
 
     # Slug MUST match the frontend entry (underscore, not hyphen). The
     # registry decorator asserts this by refusing an empty ``name``, and
-    # a Wave-1b smoke test asserts backend+frontend equality.
+    # a smoke test asserts backend+frontend equality.
     name = "entity_rollup"
     display_name = "Entity Rollup"
     description = (
@@ -100,11 +99,10 @@ class EntityRollupReport(Report):
     )
 
     # Mirrors the frontend ``entity_rollup`` inputSchema
-    # (``report-definitions.ts``). ``include_context`` is authored on
-    # the backend per design doc §5 default = True; the frontend surface
-    # doesn't render a toggle for it yet, but the executor will pass it
-    # through untouched once the form gains the field. Wave-1a agent
-    # brief 2026-07-11 called this out.
+    # (``report-definitions.ts``). ``include_context`` defaults to True
+    # on the backend; the frontend surface doesn't render a toggle for
+    # it yet, but the executor passes it through untouched once the form
+    # gains the field.
     input_schema: list[dict[str, Any]] = [
         {
             "name": "entity_name",
@@ -139,8 +137,8 @@ class EntityRollupReport(Report):
     ]
 
     llm_dependency = False
-    # Entity rollups make sense as recurring briefs — "weekly Sysco
-    # summary" is the canonical Hot Stack composition example in §C.4.
+    # Entity rollups make sense as recurring briefs — "weekly vendor
+    # summary" is the canonical Hot Stack composition example.
     supports_scheduling = True
 
     # -- interface --------------------------------------------------------
@@ -303,7 +301,7 @@ def _render_markdown(
     generic_warning: Optional[str],
     include_context: bool,
 ) -> str:
-    """Render the report body per §5's output shape."""
+    """Render the report body per the spec's output shape."""
     lines: list[str] = []
     lines.append(f"# Entity: {entity_name} — {cart_name}")
     lines.append("")
@@ -339,7 +337,7 @@ def _render_markdown(
             lines.append(f"### {bucket}")
         if include_context:
             lines.append(f"> {m.context_excerpt}")
-        # 2026-07-13 (Phase A): source names emit as vps://source/{slug}
+        # 2026-07-13 (): source names emit as vps://source/{slug}
         # markdown links so the frontend can drill down to Search.
         source_label = source_link(m.source, empty_label="(unknown source)")
         lines.append(f"Source: {source_label} (pattern #{m.pattern_idx})")
@@ -356,7 +354,7 @@ def _load_extractors() -> tuple[Callable[..., list], Callable[..., list]]:
     """Try the shared ``api.reports.extractors`` module; fall back to the
     local regex impls if it hasn't landed yet.
 
-    The parallel Wave-1a dispatch may not have landed by the time this
+    The parallel dispatch may not have landed by the time this
     module is imported; the fallback keeps Entity Rollup shippable
     today. When the real extractors module lands, this call resolves to
     it automatically — no code change to this file.
@@ -411,7 +409,7 @@ def _fallback_extract_entity_mentions(
     return hits
 
 
-# Regex date extractors, wave-1 fallback. Order matters — ISO first so
+# Regex date extractors, no-LLM fallback. Order matters — ISO first so
 # "2026-05-16" doesn't get misread by the compact-US pattern.
 _DATE_REGEXES: list[tuple[re.Pattern[str], str]] = [
     # ISO YYYY-MM-DD or YYYY/MM/DD

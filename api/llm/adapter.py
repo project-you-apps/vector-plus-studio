@@ -4,15 +4,10 @@ Defines the pluggable provider surface that report modules (and, later,
 the SQL-interpreter and "Ask this cart" flows) call to get text out of
 whichever LLM backend is configured.
 
-See ``docs/vps-internal/Cloudflare Agents Investigation 2026-07-10.md``
-for the three-tier framing:
-
-- **Track A** (Heartbeat / BYO Claude): user brings their own Claude via
-  the Heartbeat browser extension. Free to us, best quality.
-- **Track B** (Anthropic API direct): VPS pays per token for Claude via
-  the Anthropic REST API. Enterprise-tier default.
-- **Track C** (Cloudflare Workers AI): hosted open-source Llama models.
-  Cheapest and default for the free tier.
+This adapter has three pluggable backends: browser-relayed (user brings
+their own LLM session through a browser extension), hosted-paid (VPS
+pays per token via a first-party LLM API), and hosted-free (open-source
+models on a hosted inference platform).
 
 Every provider implements :class:`LLMAdapter` and returns
 :class:`SynthesisResult`. Callers should NOT catch provider-specific

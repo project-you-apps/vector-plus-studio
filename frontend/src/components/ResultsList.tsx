@@ -21,7 +21,7 @@ const STOP_WORDS = new Set([
  * Stop-word stripping helps precision on multi-word queries (so "how can I
  * save the document" filters on "save"/"document" instead of noise). But
  * when the ENTIRE query strips down to zero keywords, we fall back to the
- * user's raw words — they typed them on purpose. Andy 2026-07-05: without
+ * user's raw words — they typed them on purpose. without
  * this fallback the keyword filter silently no-oped on stop-word-only
  * queries like "can", letting all top-K cosine hits through as if the
  * filter were engaged.
@@ -47,7 +47,7 @@ function textContainsExactPhrase(text: string, phrase: string): boolean {
 }
 
 export default function ResultsList() {
-  // Note: strictMode / exactMatch toggles moved to SearchBar (Andy 2026-07-02);
+  // Note: strictMode / exactMatch toggles moved to SearchBar;
   // ResultsList still reads them here to compute filteredResults + the
   // "N of M results" stat, but the checkboxes themselves live above the TOC now.
   const { results, searchModeLabel, searchElapsed, query, status, strictMode, exactMatch, searching, searchMode } = useAppStore()
@@ -56,8 +56,7 @@ export default function ResultsList() {
   const deletedPatterns = useAppStore((s) => s.deletedPatterns)
 
   const keywords = useMemo(() => extractKeywords(query), [query])
-
-  // Andy 2026-07-03 live tombstone filter: when a user edits a passage in
+  // live tombstone filter: when a user edits a passage in
   // Edit Carts, the old idx gets tombstoned but any results array computed
   // before the edit still carries it. Filter tombstoned idx out at render
   // time (LocalCart tombstones for browser mounts, deletedPatterns for
@@ -89,7 +88,7 @@ export default function ResultsList() {
         return textContainsKeyword(text, keywords)
       })
 
-      // Andy 2026-06-17 PM: rerank when strictMode is on. Pure cosine on
+      // rerank when strictMode is on. Pure cosine on
       // long-form text can put a slightly-denser-context result above a
       // verbatim phrase match by a 0.008 hair (e.g. "save to disk" → first
       // result at 0.573 beats literal "save to disk:" line at 0.565). The
@@ -170,7 +169,7 @@ export default function ResultsList() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      {/* Stats bar — checkboxes moved to SearchBar (Andy 2026-07-02). */}
+      {/* Stats bar — checkboxes moved to SearchBar. */}
       <div className="flex items-center gap-4 mb-4 pr-4 text-sm text-slate-500">
         <span className="font-medium text-slate-300">
           {filtered ? `${filteredResults.length} of ${results.length}` : filteredResults.length} results

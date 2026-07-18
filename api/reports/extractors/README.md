@@ -1,12 +1,9 @@
 # `api/reports/extractors/` — shared extraction primitives
 
-Wave-1a foundation module for the VPS Reports engine. Provides pure
-regex extraction of **dates**, **currency amounts**, and **entity
-mentions** from raw passage text. Timeline (§2), Trend (§3), Entity
-Rollup (§5), and Financial Rollup (§6) all consume this.
-
-Design source-of-truth: `docs/vps-internal/Report Types Design
-2026-07-10.md` §0.3.
+Foundation module for the VPS Reports engine. Provides pure regex
+extraction of **dates**, **currency amounts**, and **entity mentions**
+from raw passage text. Timeline, Trend, Entity Rollup, and Financial
+Rollup all consume this.
 
 ## What ships in Wave 1
 
@@ -17,15 +14,15 @@ extractors on each passage's text.
 
 Confidence per extractor:
 
-| Extractor | Wave-1 confidence range | Notes |
+| Extractor | Confidence range | Notes |
 |---|---|---|
 | `extract_dates` | 0.9-1.0 | ISO = 1.0; slash = 0.9; long/compact = 0.95 |
 | `extract_currency` | 0.9-1.0 | `$` prefix = 1.0; `EUR/GBP` = 0.9-0.95 |
 | `extract_entity_mentions` | n/a | Boolean match, no confidence field |
 
-## Wave-2 hooks (deferred)
+## a future hook (deferred)
 
-Each extractor has a `TODO(wave-2)` marker documenting where the LLM
+Each extractor has a `TODO(a future release)` marker documenting where the LLM
 fallback plugs in without changing the return shape:
 
 - **Dates**: relative-date resolution ("yesterday", "last Tuesday",
@@ -57,7 +54,7 @@ from api.reports.extractors import (
 
 ### `extract_dates(text: str) -> list[DateExtraction]`
 
-Wave-1 formats:
+Supported formats:
 
 - **ISO**: `YYYY-MM-DD` — unambiguous, highest confidence
 - **US slash**: `MM/DD/YYYY`, `M/D/YY`, `M/D/YYYY` (2-digit year
@@ -80,7 +77,7 @@ by longer span.
 
 ### `extract_currency(text, patterns=None) -> list[MoneyExtraction]`
 
-Wave-1 shapes:
+Supported shapes:
 
 - `$` prefix: `$12.34`, `$1,234.56`, `$12`
 - Parenthesized refunds: `($12.34)` — `is_negative=True`
@@ -96,7 +93,7 @@ match (left-preferred). Populated on every hit; downstream reports
 use it to route amounts to the right bucket without a second pass.
 
 **Preset filtering**: if `patterns=` is provided, hits are filtered
-against a preset library. Wave-1 presets (defined in
+against a preset library. Preset library (defined in
 `currency.py::_PRESET_TOKENS`):
 
 | Preset | Matches context_hint containing |
@@ -108,8 +105,8 @@ against a preset library. Wave-1 presets (defined in
 | `delivery` | `delivery` |
 | `tip` | `tip`, `gratuity` |
 
-Unknown preset names are treated as literal token filters. Wave-2 will
-move this to `presets/trend_presets.yaml` per §3 of the design doc.
+Unknown preset names are treated as literal token filters. a future release will
+move this to `presets/trend_presets.yaml`.
 
 ```python
 >>> extract_currency("Fuel surcharge $8.95 and total $234.56", patterns=["fuel_surcharge"])
@@ -173,7 +170,7 @@ class FuelSurchargeTrendReport(Report):
 
 ## Adding a new extraction pattern
 
-When adding a Wave-2 report or new preset:
+When adding a future report or new preset:
 
 1. Prefer extending the existing `_PRESET_TOKENS` map over adding a
    new extractor function. New tokens should describe the invoice /
@@ -205,11 +202,11 @@ The standalone runner prints sample outputs on the Sysco fixtures
 before running the unittest suite — handy when triaging a regression
 against the demo cart.
 
-## Points at design doc
+## References
 
 - §0.3 — the shared-extractor contract (this module)
 - §2 (Timeline) — primary consumer of `extract_dates`
 - §3 (Trend) — primary consumer of `extract_currency` + preset library
 - §5 (Entity Rollup) — primary consumer of `extract_entity_mentions`
 - §6 (Financial Rollup) — cross-consumer of currency + entity + dates
-- §C.1 — wave-1/wave-2 extraction-quality strategy
+- §C.1 — Current + future extraction-quality strategy

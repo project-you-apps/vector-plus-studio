@@ -1,4 +1,4 @@
-// Pattern-0 TOC Panel — v1 (Andy 2026-07-01).
+// Pattern-0 TOC Panel — v1.
 //
 // Left-side panel on the Search tab that shows metadata + table-of-contents
 // summary of the currently-mounted cart. Read-only v1. Users see what's in a
@@ -34,7 +34,7 @@ const TOC_PAGE_SIZE = 25
 // grow past its ~45vh cap set by the parent container.
 const DRILL_PAGE_SIZE = 25
 
-// Andy 2026-07-06 AM: Cart Builder prefixes disk uploads with an 8-hex hash +
+// Cart Builder prefixes disk uploads with an 8-hex hash +
 // underscore. The passage-first-line label prepend strips this prefix as of
 // 2026-07-05 PM, so LocalCart's synthesized sourcePaths carry the stripped
 // name — but pattern0's files[].name and source_paths.npy (both baked at
@@ -130,9 +130,9 @@ export default function Pattern0TocPanel() {
   const [pageJump, setPageJump] = useState('')
   const [briefingOpen, setBriefingOpen] = useState(false)
 
-  // Drill-down state (Andy 2026-07-02) — click a file row to expand its
+  // Drill-down state — click a file row to expand its
   // passages inline. Read-only preview; editing lives in Edit Carts.
-  // Andy 2026-07-06 AM: sandbox-mounted carts drill too, via the new
+  // sandbox-mounted carts drill too, via the new
   // `?source=` filter on /api/patterns.
   const [drillPath, setDrillPath] = useState<string | null>(null)
   const [drillOffset, setDrillOffset] = useState(0)
@@ -223,7 +223,7 @@ export default function Pattern0TocPanel() {
 
     if (activeLocalCart) {
       // Browser-mounted cart — synthesize response client-side. Prefer the
-      // pattern0.npy sidecar baked at build time (Andy 2026-07-02 bug 3);
+      // pattern0.npy sidecar baked at build time (bug 3);
       // fall back to derived-only stats when the cart predates the sidecar.
       const cart = localCarts.get(activeLocalCart)
       if (!cart) {
@@ -315,7 +315,7 @@ export default function Pattern0TocPanel() {
     api.getCartPattern0()
       .then((resp) => {
         if (cancelled) return
-        // Andy 2026-07-06 AM: strip hash prefix from toc item names so
+        // strip hash prefix from toc item names so
         // sandbox drill-down's drillPath matches the label-line source
         // extraction in /api/patterns?source= (which also returns
         // stripped names).
@@ -400,7 +400,7 @@ export default function Pattern0TocPanel() {
   // mounted_cartridge string. Spec says "<filename> TOC".
   const cartName = data.name || mountedCartridge || activeLocalCart || 'Cart'
   const hasBriefing = !!(data.agent_briefing && data.agent_briefing.trim().length > 0)
-  // Andy 2026-07-06 AM: sandbox-mounted carts can drill down too. Uses the
+  // sandbox-mounted carts can drill down too. Uses the
   // new `?source=` filter on /api/patterns for server-fetched passages.
   const drillEnabled = !!activeLocalCart || !!mountedCartridge
 
@@ -432,7 +432,7 @@ export default function Pattern0TocPanel() {
       setDrillPageJump('')
     }
 
-    // Andy 2026-07-02: clicking a drilled passage opens the standard
+    // clicking a drilled passage opens the standard
     // PassageModal (same MORE + PREV|NEXT UX as search results). PREV|NEXT
     // stays inside this file because the modal's navigator uses the cart's
     // sourcePaths sidecar to clip to same-source neighbors. NO edit affordance
@@ -456,7 +456,7 @@ export default function Pattern0TocPanel() {
         openModal(result)
         return
       }
-      // Sandbox path (Andy 2026-07-06 AM): open with a stub result, then
+      // Sandbox path: open with a stub result, then
       // fire navigateModal to hydrate full_text from /api/patterns/{idx}.
       const result: SearchResult = {
         rank: 0, idx: p.idx, score: 0,
@@ -499,7 +499,7 @@ export default function Pattern0TocPanel() {
 
         {/* Passage rows — idx + truncated preview. Click opens the standard
             PassageModal (MORE + PREV|NEXT scoped to this file). Read-only —
-            no edit affordance per spec (Andy 2026-07-02). */}
+            no edit affordance per spec. */}
         <ul className="flex-1 overflow-y-auto divide-y divide-slate-800/60 list-none">
           {total === 0 ? (
             <li className="py-6 text-xs text-slate-500 italic text-center list-none">
@@ -509,9 +509,9 @@ export default function Pattern0TocPanel() {
             window.passages.map((p) => {
               // Day 2 thumbnail — if this passage is a graphic pattern with
               // baked-in image bytes, show a tiny preview to the left of the
-              // idx column. Andy 2026-07-05 PM: makes the drill-down scan
+              // idx column. makes the drill-down scan
               // meaningful for image-heavy carts (invoices, pitch decks).
-              // Andy 2026-07-06 AM: fall back to sandbox per-pattern-meta so
+              // fall back to sandbox per-pattern-meta so
               // droplet-uploaded carts also get thumbnails in the drill-down.
               const cart = activeLocalCart ? localCarts.get(activeLocalCart) : null
               const rec = cart?.perPatternMeta?.[p.idx]
