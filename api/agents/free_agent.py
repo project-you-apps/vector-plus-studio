@@ -103,6 +103,7 @@ class FreeAgent(Agent):
 
         patterns = retrieve_top_patterns(
             cart, user_input, options.max_context_patterns,
+            pattern_filter=inputs.pattern_filter,
         )
         if not patterns:
             warnings.append(
@@ -113,6 +114,7 @@ class FreeAgent(Agent):
             # than a completely empty context (which triggers hallucination).
             patterns = retrieve_top_patterns(
                 cart, "", options.max_context_patterns,
+                pattern_filter=inputs.pattern_filter,
             )
 
         context_block = format_context_block(patterns)

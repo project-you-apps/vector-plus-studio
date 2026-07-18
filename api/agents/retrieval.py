@@ -33,17 +33,19 @@ from __future__ import annotations
 import re
 from collections import Counter
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, Literal
 
+from api.cartridge_io import (
+    TRUTH_STATUS_ACTIVE,
+    TRUTH_STATUS_SUPERSEDED,
+)
 from api.reports.cart_reader import CartHandle
 
 
 # ---------------------------------------------------------------------------
-# Tombstone / tokenizer constants — mirror api/reports/summary.py
+# Tokenizer constants — mirror api/reports/summary.py.
+# (Tombstone check lives on CartHandle.is_tombstoned; kept single-sourced.)
 # ---------------------------------------------------------------------------
-
-_HIPPO_FLAGS_OFFSET = 28
-_FLAG_TOMBSTONE = 0x01
 
 # Same stopword set as summary.py; kept local to avoid a cross-module
 # import of a module-private helper (matches the Reports Wave 1b idiom
@@ -92,6 +94,13 @@ class RetrievedPattern:
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Pattern-filter mode strings — mirror ``AgentInput.pattern_filter``. Defined
+# here (rather than imported from base) so retrieval.py has no dep back into
+# the agent runtime; base.py's Literal type is the source of truth for the
+# API surface, this string tuple is just the value space.
+PatternFilterMode = Literal["active_only", "include_superseded", "all"]
+
+
 def _tokenize(text: str) -> list[str]:
     return [t.lower() for t in _WORD_RE.findall(text or "")]
 
@@ -100,11 +109,34 @@ def _tokens_no_stop(text: str) -> list[str]:
     return [t for t in _tokenize(text) if t not in _STOPWORDS and len(t) > 2]
 
 
-def _is_tombstoned(cart: CartHandle, idx: int) -> bool:
-    row = cart.get_hippocampus_row(idx)
-    if row is None or len(row) <= _HIPPO_FLAGS_OFFSET:
+def _should_include(
+    cart: CartHandle,
+    idx: int,
+    pattern_filter: PatternFilterMode,
+) -> bool:
+    """Return True if pattern ``idx`` passes the given ``pattern_filter``.
+
+    Tombstoned patterns are ALWAYS excluded — tombstone is a delete flag,
+    orthogonal to lifecycle. Everything else is filtered per mode:
+
+    * ``"active_only"`` — only truth_status == ACTIVE (the default; matches
+      the "current relevant patterns" semantics agents want by default).
+    * ``"include_superseded"`` — ACTIVE + SUPERSEDED (useful for
+      diff-style questions where superseded history is relevant).
+    * ``"all"`` — every non-tombstoned pattern, regardless of lifecycle.
+
+    Unknown ``pattern_filter`` values fall through to ``"active_only"``,
+    matching the safest possible default.
+    """
+    if cart.is_tombstoned(idx):
         return False
-    return bool(int(row[_HIPPO_FLAGS_OFFSET]) & _FLAG_TOMBSTONE)
+    if pattern_filter == "all":
+        return True
+    status = cart.truth_status(idx)
+    if pattern_filter == "include_superseded":
+        return status in (TRUTH_STATUS_ACTIVE, TRUTH_STATUS_SUPERSEDED)
+    # Safe default: active_only.
+    return status == TRUTH_STATUS_ACTIVE
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +149,7 @@ def retrieve_top_patterns(
     top_n: int,
     *,
     prefix_chars: int = CANDIDATE_PREFIX_CHARS,
+    pattern_filter: PatternFilterMode = "active_only",
 ) -> list[RetrievedPattern]:
     """Return the ``top_n`` most query-relevant live patterns.
 
@@ -126,6 +159,16 @@ def retrieve_top_patterns(
     hasn't supplied a specific ask).
 
     Empty cart → empty list. Tombstoned patterns are always skipped.
+    Lifecycle filtering follows ``pattern_filter``:
+
+    * ``"active_only"`` (default) — truth_status ACTIVE only. Matches
+      the "current relevant patterns" semantics agents want by default.
+    * ``"include_superseded"`` — ACTIVE + SUPERSEDED. Useful for
+      diff / history queries.
+    * ``"all"`` — every non-tombstoned pattern.
+
+    Existing carts (byte 30 == 0) read as ACTIVE, so behavior is
+    unchanged from the pre-2026-07-17 tombstone-only version.
     """
     if top_n <= 0:
         return []
@@ -137,7 +180,7 @@ def retrieve_top_patterns(
     if not q_tokens:
         out: list[RetrievedPattern] = []
         for idx in range(cart.count):
-            if _is_tombstoned(cart, idx):
+            if not _should_include(cart, idx, pattern_filter):
                 continue
             passage = cart.get_passage(idx)
             source = cart.get_source(idx) or ""
@@ -161,7 +204,7 @@ def retrieve_top_patterns(
     # for cart sizes we care about (< 10k patterns typical).
     scored: list[tuple[float, int, str, str]] = []
     for idx in range(cart.count):
-        if _is_tombstoned(cart, idx):
+        if not _should_include(cart, idx, pattern_filter):
             continue
         passage = cart.get_passage(idx)
         prefix = passage[:prefix_chars]

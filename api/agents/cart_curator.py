@@ -40,9 +40,6 @@ from .prompt import wrap_llama3_instruct
 from .registry import register_agent
 
 
-_HIPPO_FLAGS_OFFSET = 28
-_FLAG_TOMBSTONE = 0x01
-
 # Sources with fewer than this many patterns are flagged as
 # "under-represented" — worth deepening or removing. Matches the default
 # on Coverage Report's source_coverage_min.
@@ -52,13 +49,6 @@ _UNDERREPRESENTED_SOURCE_THRESHOLD = 5
 # and the prompt drifts into a list-dump; a bounded set keeps the
 # recommendations focused.
 _MAX_UNDERREP_TO_CITE = 8
-
-
-def _is_tombstoned(cart: CartHandle, idx: int) -> bool:
-    row = cart.get_hippocampus_row(idx)
-    if row is None or len(row) <= _HIPPO_FLAGS_OFFSET:
-        return False
-    return bool(int(row[_HIPPO_FLAGS_OFFSET]) & _FLAG_TOMBSTONE)
 
 
 @register_agent
@@ -126,7 +116,7 @@ class CartCuratorAgent(Agent):
         live_count = 0
         tombstoned = 0
         for idx in range(cart.count):
-            if _is_tombstoned(cart, idx):
+            if cart.is_tombstoned(idx):
                 tombstoned += 1
                 continue
             live_count += 1

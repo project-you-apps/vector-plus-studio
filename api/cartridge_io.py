@@ -51,6 +51,96 @@ PERM_X = 0x04  # reserved for future executable / lambda-passage feature
 PERM_DEFAULT_LEGACY = PERM_R | PERM_W
 
 
+# Lifecycle byte — per-pattern truth_status + behavioral flags (offset 30).
+#
+# Sits in the 34-byte reserved block right after perms_byte. Every existing
+# cart (canonical AND legacy) writes bytes 30-63 as zeros, so byte 30 == 0
+# reads back as truth_status=ACTIVE with no flags set — the safe default.
+# That gives us the hybrid backward-compat model: no forced cart rebuild,
+# new writers default to ACTIVE, older readers ignore the byte entirely.
+#
+# Locked 2026-07-17 in docs/_canon/MEMORY-TAXONOMY-REFERENCE.md §2/§2.5/§10 and
+# docs/vps-internal/hot-stack-preliminary-2026-07-17-recap.md.
+LIFECYCLE_BYTE_OFFSET = 30
+
+# Bits 0-2 — truth_status enum (5 values used, 3 reserved for enum growth).
+TRUTH_STATUS_MASK       = 0x07
+TRUTH_STATUS_ACTIVE     = 0
+TRUTH_STATUS_SUPERSEDED = 1
+TRUTH_STATUS_INCORRECT  = 2
+TRUTH_STATUS_DEFERRED   = 3
+TRUTH_STATUS_ONGOING    = 4
+# Values 5-7 are reserved.
+
+# Bits 3-5 — behavioral flags (independent booleans, coexist with any status).
+LIFECYCLE_FLAG_URGENT         = 0x08  # bit 3
+LIFECYCLE_FLAG_IMPORTANT      = 0x10  # bit 4
+LIFECYCLE_FLAG_TO_CONSOLIDATE = 0x20  # bit 5
+# Bits 6-7 are reserved.
+
+# Human-readable name lookup for the enum values, used at API surfaces that
+# want to render the state (Agents filter chip, cart-integrity report, etc.).
+TRUTH_STATUS_NAMES: dict[int, str] = {
+    TRUTH_STATUS_ACTIVE:     "ACTIVE",
+    TRUTH_STATUS_SUPERSEDED: "SUPERSEDED",
+    TRUTH_STATUS_INCORRECT:  "INCORRECT",
+    TRUTH_STATUS_DEFERRED:   "DEFERRED",
+    TRUTH_STATUS_ONGOING:    "ONGOING",
+}
+
+
+def parse_lifecycle_byte(byte_val: int) -> dict:
+    """Decode the byte-30 lifecycle byte into a per-pattern status dict.
+
+    Returns:
+        {"truth_status": int (0-4 for known values), "truth_status_name": str,
+         "urgent": bool, "important": bool, "to_consolidate": bool,
+         "raw": int}.
+
+    Unknown truth_status values (5-7, reserved) map to "UNKNOWN"; downstream
+    filters should treat unknown as "not ACTIVE" (i.e., excluded from
+    only_active queries) so a future writer emitting a new enum value on an
+    old reader fails safe rather than silently accepting the pattern.
+    """
+    b = int(byte_val) & 0xFF
+    status_int = b & TRUTH_STATUS_MASK
+    status_name = TRUTH_STATUS_NAMES.get(status_int, "UNKNOWN")
+    return {
+        "truth_status": status_int,
+        "truth_status_name": status_name,
+        "urgent": bool(b & LIFECYCLE_FLAG_URGENT),
+        "important": bool(b & LIFECYCLE_FLAG_IMPORTANT),
+        "to_consolidate": bool(b & LIFECYCLE_FLAG_TO_CONSOLIDATE),
+        "raw": b,
+    }
+
+
+def pack_lifecycle_byte(
+    *,
+    truth_status: int = TRUTH_STATUS_ACTIVE,
+    urgent: bool = False,
+    important: bool = False,
+    to_consolidate: bool = False,
+) -> int:
+    """Encode a per-pattern lifecycle state into the byte-30 representation.
+
+    Companion to :func:`parse_lifecycle_byte`. Used by writers (and by the
+    eventual set_pattern_status retrofit tool, mirroring set_pattern_permissions).
+    """
+    if truth_status < 0 or truth_status > TRUTH_STATUS_MASK:
+        raise ValueError(
+            f"truth_status must be 0-{TRUTH_STATUS_MASK} (3 bits); got {truth_status}"
+        )
+    b = truth_status & TRUTH_STATUS_MASK
+    if urgent:
+        b |= LIFECYCLE_FLAG_URGENT
+    if important:
+        b |= LIFECYCLE_FLAG_IMPORTANT
+    if to_consolidate:
+        b |= LIFECYCLE_FLAG_TO_CONSOLIDATE
+    return b
+
+
 def _flags_to_perms(flags: int) -> dict:
     """Translate a flags byte into a perms dict for the API surface."""
     if flags == 0:
@@ -94,6 +184,12 @@ def parse_hippocampus(npz_data) -> list[dict] | None:
         nxt = (vals[4] - 1) if vals[4] > 0 else None
         # vals[9] = membot's flags (tombstone/pinned/has_parent/has_child/has_sibling/perish)
         # vals[10] = our Step 2b perms_byte (R/W/X)
+        # byte 30 = lifecycle byte (truth_status + URGENT/IMPORTANT/TO-CONSOLIDATE).
+        # Read via direct index on the numpy row so we don't have to touch the
+        # HIPPO_FORMAT struct string or coordinate a writer update — every
+        # existing cart already has byte 30 == 0, which decodes as ACTIVE with
+        # no flags set (the safe default).
+        lifecycle = parse_lifecycle_byte(int(row[LIFECYCLE_BYTE_OFFSET])) if len(row) > LIFECYCLE_BYTE_OFFSET else parse_lifecycle_byte(0)
         result.append({
             "prev": prev,
             "next": nxt,
@@ -101,6 +197,7 @@ def parse_hippocampus(npz_data) -> list[dict] | None:
             "sequence_num": vals[7],
             "flags": vals[9],
             "perms": _flags_to_perms(vals[10]),
+            "lifecycle": lifecycle,
         })
     return result
 

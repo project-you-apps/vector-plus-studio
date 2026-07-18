@@ -143,13 +143,13 @@ class ProfessorAgent(Agent):
         # thin. Bounded by max_context_patterns to respect the caller's
         # neuron budget.
         sample_n = min(max(sample_n, num_q), options.max_context_patterns)
-        patterns = retrieve_top_patterns(cart, topic, sample_n)
+        patterns = retrieve_top_patterns(cart, topic, sample_n, pattern_filter=inputs.pattern_filter)
         if not patterns:
             warnings.append(
                 "No passages matched the topic filter — quiz will draw from "
                 "an unfocused sample of the cart."
             )
-            patterns = retrieve_top_patterns(cart, "", sample_n)
+            patterns = retrieve_top_patterns(cart, "", sample_n, pattern_filter=inputs.pattern_filter)
 
         context_block = format_context_block(patterns)
 

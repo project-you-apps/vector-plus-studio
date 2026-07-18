@@ -104,13 +104,13 @@ class AutoBriefingAgent(Agent):
             options.max_context_patterns * _BRIEFING_SAMPLE_CAP_MULTIPLIER,
         )
         # Empty query = first-N sample path. Focus query = ranked retrieval.
-        patterns = retrieve_top_patterns(cart, focus, sample_n)
+        patterns = retrieve_top_patterns(cart, focus, sample_n, pattern_filter=inputs.pattern_filter)
         if not patterns:
             warnings.append(
                 "No live patterns matched the focus query — falling back to "
                 "an unfocused sample of the first patterns."
             )
-            patterns = retrieve_top_patterns(cart, "", sample_n)
+            patterns = retrieve_top_patterns(cart, "", sample_n, pattern_filter=inputs.pattern_filter)
 
         context_block = format_context_block(patterns)
         cart_name = cart.cart_name

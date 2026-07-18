@@ -49,6 +49,19 @@ import numpy as np
 _HIPPO_FLAGS_OFFSET = 28
 _FLAG_TOMBSTONE = 0x01
 
+# Byte 30 = lifecycle byte (truth_status + URGENT/IMPORTANT/TO-CONSOLIDATE).
+# Imported from cartridge_io so the layout stays single-sourced.
+from api.cartridge_io import (
+    LIFECYCLE_BYTE_OFFSET as _LIFECYCLE_BYTE_OFFSET,
+    TRUTH_STATUS_MASK as _TRUTH_STATUS_MASK,
+    TRUTH_STATUS_ACTIVE as _TRUTH_STATUS_ACTIVE,
+    LIFECYCLE_FLAG_URGENT as _LIFECYCLE_FLAG_URGENT,
+    LIFECYCLE_FLAG_IMPORTANT as _LIFECYCLE_FLAG_IMPORTANT,
+    LIFECYCLE_FLAG_TO_CONSOLIDATE as _LIFECYCLE_FLAG_TO_CONSOLIDATE,
+    TRUTH_STATUS_NAMES as _TRUTH_STATUS_NAMES,
+    parse_lifecycle_byte as _parse_lifecycle_byte,
+)
+
 
 # ---------------------------------------------------------------------------
 # CartHandle
@@ -278,6 +291,77 @@ class CartHandle:
             return bool(int(row[_HIPPO_FLAGS_OFFSET]) & _FLAG_TOMBSTONE)
         except (IndexError, TypeError, ValueError):
             return False
+
+    # -- lifecycle byte (byte 30) — truth_status + behavioral flags ------
+    # Hot Stack preliminary — 2026-07-17. See
+    # ``docs/vps-internal/hot-stack-preliminary-2026-07-17-recap.md``.
+    # Every accessor here returns the "default / safe" value when the cart's
+    # hippocampus row is absent or shorter than 31 bytes, matching the
+    # tombstone idiom: legacy carts read as ACTIVE with no flags set, so
+    # existing behavior is completely preserved.
+
+    def _lifecycle_byte(self, idx: int) -> int:
+        """Return the raw byte at offset 30 for pattern ``idx``, or 0 if
+        the cart has no hippocampus / the row is too short. Used by every
+        higher-level lifecycle accessor below."""
+        row = self.get_hippocampus_row(idx)
+        if row is None or len(row) <= _LIFECYCLE_BYTE_OFFSET:
+            return 0
+        try:
+            return int(row[_LIFECYCLE_BYTE_OFFSET]) & 0xFF
+        except (IndexError, TypeError, ValueError):
+            return 0
+
+    def truth_status(self, idx: int) -> int:
+        """Return the 3-bit truth_status enum value for pattern ``idx``.
+
+        Values: 0=ACTIVE, 1=SUPERSEDED, 2=INCORRECT, 3=DEFERRED, 4=ONGOING.
+        Values 5-7 are reserved. Missing byte → ACTIVE (the safe default).
+        """
+        return self._lifecycle_byte(idx) & _TRUTH_STATUS_MASK
+
+    def truth_status_name(self, idx: int) -> str:
+        """Return the canonical uppercase name of pattern ``idx``'s
+        truth_status ("ACTIVE" / "SUPERSEDED" / ...). Reserved enum
+        values 5-7 render as "UNKNOWN"."""
+        return _TRUTH_STATUS_NAMES.get(self.truth_status(idx), "UNKNOWN")
+
+    def is_urgent(self, idx: int) -> bool:
+        """True iff pattern ``idx`` has the URGENT behavioral flag set."""
+        return bool(self._lifecycle_byte(idx) & _LIFECYCLE_FLAG_URGENT)
+
+    def is_important(self, idx: int) -> bool:
+        """True iff pattern ``idx`` has the IMPORTANT behavioral flag set."""
+        return bool(self._lifecycle_byte(idx) & _LIFECYCLE_FLAG_IMPORTANT)
+
+    def is_to_consolidate(self, idx: int) -> bool:
+        """True iff pattern ``idx`` has the TO-CONSOLIDATE flag set."""
+        return bool(self._lifecycle_byte(idx) & _LIFECYCLE_FLAG_TO_CONSOLIDATE)
+
+    def is_active(self, idx: int) -> bool:
+        """Convenience: True iff pattern ``idx`` is safe to surface in
+        the default "current relevant patterns" retrieval — not
+        tombstoned AND truth_status == ACTIVE.
+
+        This is the check the ``pattern_filter="active_only"`` mode in
+        AgentsEngine uses. Consumers who need finer-grained filtering
+        (e.g. "include DEFERRED but exclude SUPERSEDED") should compose
+        ``is_tombstoned`` + ``truth_status`` themselves.
+        """
+        return (
+            not self.is_tombstoned(idx)
+            and self.truth_status(idx) == _TRUTH_STATUS_ACTIVE
+        )
+
+    def lifecycle(self, idx: int) -> dict:
+        """Return the full parsed lifecycle byte for pattern ``idx`` as
+        a dict (see :func:`api.cartridge_io.parse_lifecycle_byte`).
+
+        Shape: ``{"truth_status": int, "truth_status_name": str,
+        "urgent": bool, "important": bool, "to_consolidate": bool,
+        "raw": int}``. Missing byte → all defaults (ACTIVE, no flags).
+        """
+        return _parse_lifecycle_byte(self._lifecycle_byte(idx))
 
     def get_hippocampus_row(self, idx: int) -> Optional[np.ndarray]:
         """Return the raw 64-byte hippocampus row for ``idx`` (uint8

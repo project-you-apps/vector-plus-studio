@@ -96,6 +96,7 @@ class QAAgent(Agent):
 
         patterns = retrieve_top_patterns(
             cart, question, options.max_context_patterns,
+            pattern_filter=inputs.pattern_filter,
         )
         if not patterns:
             warnings.append(
@@ -104,7 +105,10 @@ class QAAgent(Agent):
             )
             # Fall back to first-N so the LLM still gets substrate rather
             # than a completely empty context (which triggers hallucination).
-            patterns = retrieve_top_patterns(cart, "", options.max_context_patterns)
+            patterns = retrieve_top_patterns(
+                cart, "", options.max_context_patterns,
+                pattern_filter=inputs.pattern_filter,
+            )
 
         context_block = format_context_block(patterns)
 
