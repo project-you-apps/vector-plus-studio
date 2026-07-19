@@ -563,6 +563,23 @@ def save_cartridge(output_dir: str, name: str, embeddings: np.ndarray, texts: li
     )
     if has_source_strings:
         save_kwargs["source_strings"] = np.array(source_strings, dtype=object)
+        # ALSO emit the v1 ``source_paths`` sidecar (per-pattern denormalized
+        # array). Retrieval-time consumers (api/reports/cart_reader.py + the
+        # search filter in api/main.py) still read this sidecar as of the v3
+        # ship; keeping it in-.npz until those consumers become v3-native
+        # avoids a broken result-card provenance surface on Python-built
+        # v3 carts. Matches the TS writer's behavior. Retire when
+        # cart_reader.py + main.py are v3-native (tracked TODO).
+        if metadata is not None:
+            derived_paths: list[str] = []
+            for row_bytes in metadata:
+                # v3 h-row: uint16 source_idx at bytes 18-19 (little-endian).
+                src_idx = int.from_bytes(row_bytes[18:20], byteorder="little")
+                if 0 <= src_idx < len(source_strings):
+                    derived_paths.append(source_strings[src_idx])
+                else:
+                    derived_paths.append("")
+            save_kwargs["source_paths"] = np.array(derived_paths, dtype=object)
 
     np.savez_compressed(cart_path, **save_kwargs)
 
