@@ -38,8 +38,27 @@ from .engine import engine, TextRegionEncoder
 # NOTE (2026-05-13): membot/cartridge_builder.py is still on the LEGACY 11-field
 # format ('<I B B I I I I H I B 35s', no perms_byte). Format-version field at
 # offset 4 discriminates. Migration to canonical pending across legacy paths.
-HIPPO_FORMAT = '<I B B I I I I H I B B 34s'
-HIPPO_SIZE = 64
+# Struct format variants — dispatch on the format_version byte at offset 4.
+# v3 provenance (2026-07-18) replaces the byte-18 uint32 source_hash with
+# uint16 source_idx + uint16 reserved, indexing into a top-level
+# ``source_strings.npy`` deduplicated unicode table shipped in the same .npz.
+# See CC_cart-provenance-schema_2026-06-15 and cartridge_builder.py for the
+# writer side.
+HIPPO_FORMAT_V1_V2 = '<I B B I I I I H I B B 34s'   # source_hash uint32 at 18-21
+HIPPO_FORMAT_V3    = '<I B B I I I H H H I B B 34s'  # source_idx + reserved uint16s
+HIPPO_FORMAT = HIPPO_FORMAT_V1_V2  # unversioned default — keeps legacy callers reading v1/v2 cleanly
+HIPPO_SIZE = 64                     # calcsize identical across all variants
+
+FORMAT_VERSION_LEGACY     = 1
+FORMAT_VERSION_CANONICAL  = 2
+FORMAT_VERSION_PROVENANCE = 3
+
+
+def hippo_format_for(format_version: int) -> str:
+    """Return the struct format string matching this row's format_version byte."""
+    if format_version == FORMAT_VERSION_PROVENANCE:
+        return HIPPO_FORMAT_V3
+    return HIPPO_FORMAT_V1_V2
 
 # Step 2b — perms_byte bit layout (offset 29 in the hippo row).
 #
@@ -200,35 +219,67 @@ def parse_hippocampus(npz_data) -> list[dict] | None:
 
     Returns list of dicts with 'prev' and 'next' as 0-based passage indices,
     or None if no hippocampus data exists.
+
+    v3 provenance rows carry ``source_idx`` (uint16 index into the
+    top-level ``source_strings`` table) and, when the strings table is
+    present, a resolved ``source_path`` string. v1/v2 rows carry
+    ``source_hash`` (uint32 FNV/md5) with no strings table.
     """
     if "hippocampus" not in npz_data:
         return None
 
     raw = npz_data["hippocampus"]  # shape: (n, 64) uint8
+
+    # Resolve the v3 source-strings table once if present. v1/v2 carts
+    # simply don't ship it, and callers will find ``source_hash`` on each
+    # entry instead of ``source_idx`` / ``source_path``.
+    source_strings: list[str] | None = None
+    if "source_strings" in getattr(npz_data, "files", []) or (
+        hasattr(npz_data, "__contains__") and "source_strings" in npz_data
+    ):
+        try:
+            source_strings = [str(x) for x in npz_data["source_strings"].tolist()]
+        except Exception:
+            source_strings = None
+
     result = []
     for row in raw:
-        vals = struct.unpack(HIPPO_FORMAT, row.tobytes())
+        row_bytes = row.tobytes()
+        format_version = int(row_bytes[4])
+        vals = struct.unpack(hippo_format_for(format_version), row_bytes)
         # vals[3] = parent_ptr (PREV), vals[4] = child_ptr (NEXT)
         # These are 1-based pattern_ids (0 = no link). Convert to 0-based passage index.
         prev = (vals[3] - 1) if vals[3] > 0 else None
         nxt = (vals[4] - 1) if vals[4] > 0 else None
-        # vals[9] = membot's flags (tombstone/pinned/has_parent/has_child/has_sibling/perish)
-        # vals[10] = our Step 2b perms_byte (R/W/X)
         # byte 30 = lifecycle byte (truth_status + URGENT/IMPORTANT/TO-CONSOLIDATE).
         # Read via direct index on the numpy row so we don't have to touch the
-        # HIPPO_FORMAT struct string or coordinate a writer update — every
-        # existing cart already has byte 30 == 0, which decodes as ACTIVE with
-        # no flags set (the safe default).
+        # struct string — every existing cart has byte 30 == 0, which decodes
+        # as ACTIVE with no flags set (the safe default).
         lifecycle = parse_lifecycle_byte(int(row[LIFECYCLE_BYTE_OFFSET])) if len(row) > LIFECYCLE_BYTE_OFFSET else parse_lifecycle_byte(0)
-        result.append({
+
+        entry = {
             "prev": prev,
             "next": nxt,
-            "source_hash": vals[6],
-            "sequence_num": vals[7],
-            "flags": vals[9],
-            "perms": _flags_to_perms(vals[10]),
             "lifecycle": lifecycle,
-        })
+        }
+        if format_version == FORMAT_VERSION_PROVENANCE:
+            src_idx = vals[6]
+            entry["source_idx"]   = src_idx
+            entry["source_path"]  = (
+                source_strings[src_idx]
+                if source_strings and 0 <= src_idx < len(source_strings)
+                else None
+            )
+            # vals[7] is the reserved uint16; vals[8] is sequence_num.
+            entry["sequence_num"] = vals[8]
+            entry["flags"]        = vals[10]
+            entry["perms"]        = _flags_to_perms(vals[11])
+        else:
+            entry["source_hash"]  = vals[6]
+            entry["sequence_num"] = vals[7]
+            entry["flags"]        = vals[9]
+            entry["perms"]        = _flags_to_perms(vals[10])
+        result.append(entry)
     return result
 
 

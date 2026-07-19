@@ -97,12 +97,15 @@ export async function buildCart(
 
   const passages = sections.map((s) => s.text)
   const compressed_texts = passages // v1: no compression
-  // Provenance v1 sidecar — per-pattern source filename so result cards can
-  // display "this came from foo.py" without needing to reverse the FNV-1a
-  // source_hash in the hippocampus row. A future schema will replace this
-  // with a proper strings table + source_idx field in h-row.
+  // v1 sidecar preserved for backward compat with pre-v3 loaders. The
+  // canonical provenance store is the deduplicated ``source_strings.npy``
+  // emitted below (v3 h-row source_idx indexes it). Once every loader in
+  // the fleet reads source_strings, this sidecar can be dropped.
   const source_paths = sections.map((s) => s.source)
-  const hippocampus = packHippocampus(sections, options.hippocampus)
+  const { rows: hippocampus, sourceStrings } = packHippocampus(
+    sections,
+    options.hippocampus,
+  )
   const manifest = await buildManifest(embeddings, count, NOMIC_DIM)
   const permissions = buildPermissions(options.permissions)
 
@@ -214,6 +217,16 @@ export async function buildCart(
   zip.file('passages.npy', dumpUnicode(passages, [count]))
   zip.file('compressed_texts.npy', dumpUnicode(compressed_texts, [count]))
   zip.file('source_paths.npy', dumpUnicode(source_paths, [count]))
+  // v3 provenance — deduplicated source-strings table indexed by
+  // per-row source_idx at hippocampus byte 18. Kept in the same .npz
+  // so it can't drift out of sync with the h-row (the v1 sidecar's
+  // load-bearing weakness). Emitted only when the writer targets v3.
+  if (sourceStrings !== null) {
+    zip.file(
+      'source_strings.npy',
+      dumpUnicode(sourceStrings, [sourceStrings.length]),
+    )
+  }
   // pattern0.npy — single-element unicode array of the JSON payload. Matches
   // the Cart Builder GUI schema so api/cart/pattern-0 reads it uniformly.
   zip.file('pattern0.npy', dumpUnicode([pattern0Json], [1]))

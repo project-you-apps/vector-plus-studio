@@ -323,19 +323,62 @@ export async function parseCartNpz(buffer) {
         passages = parsePickledStrings(pickleBytes);
     }
 
-    // Provenance v1 sidecar — present iff the cart was browser-built with
-    // source_paths.npy. Older carts (server-built or pre-2026-06-15) won't
-    // have it; sourcePaths will be null and result cards just won't render
-    // a source line. v2 replaces this with a proper strings table indexed
-    // by the hippocampus source_idx field.
+    // Provenance resolution — two paths, both produce a per-pattern
+    // ``sourcePaths`` array:
+    //
+    //   v3 (2026-07-18+): source_strings.npy (deduplicated unicode array)
+    //   is indexed by each pattern's h-row source_idx uint16 at byte 18.
+    //   Preferred — canonical because it can't drift out of sync with h-row.
+    //
+    //   v1 sidecar (2026-06-15+): source_paths.npy (per-pattern unicode
+    //   array). Fallback for pre-v3 carts and safety net during transition.
+    //
+    // Older carts (server-built or pre-2026-06-15) have neither; sourcePaths
+    // stays null and result cards just don't render a source line.
     let sourcePaths = null;
-    const sourcePathsEntry = npzEntries['source_paths'];
-    if (sourcePathsEntry && sourcePathsEntry.data) {
-        const spDtype = sourcePathsEntry.dtype || '';
-        const spMatch = spDtype.match(/^<U(\d+)$/);
-        if (spMatch) {
-            const spMaxLen = parseInt(spMatch[1], 10);
-            sourcePaths = parseUnicodeStrings(sourcePathsEntry.data, spMaxLen, sourcePathsEntry.shape);
+
+    // Try v3 provenance first — needs source_strings + h-row source_idx.
+    const sourceStringsEntry = npzEntries['source_strings'];
+    const hippocampusEntry = npzEntries['hippocampus'];
+    if (
+        sourceStringsEntry && sourceStringsEntry.data &&
+        hippocampusEntry && hippocampusEntry.data
+    ) {
+        const ssDtype = sourceStringsEntry.dtype || '';
+        const ssMatch = ssDtype.match(/^<U(\d+)$/);
+        if (ssMatch) {
+            const ssMaxLen = parseInt(ssMatch[1], 10);
+            const sourceStrings = parseUnicodeStrings(
+                sourceStringsEntry.data, ssMaxLen, sourceStringsEntry.shape,
+            );
+            // hippocampus is a [N, 64] uint8 array. Peek row 0 byte 4 to
+            // confirm format_version = 3; then resolve each pattern's
+            // source_idx (uint16 LE at bytes 18-19) into the strings table.
+            const hippoBytes = new Uint8Array(hippocampusEntry.data);
+            const nRows = Math.floor(hippoBytes.length / 64);
+            if (nRows > 0 && hippoBytes[4] === 3) {  // FORMAT_VERSION_PROVENANCE
+                sourcePaths = new Array(nRows);
+                const hippoView = new DataView(hippoBytes.buffer, hippoBytes.byteOffset, hippoBytes.byteLength);
+                for (let i = 0; i < nRows; i++) {
+                    const idx = hippoView.getUint16(i * 64 + 18, true);
+                    sourcePaths[i] = (idx >= 0 && idx < sourceStrings.length)
+                        ? sourceStrings[idx]
+                        : '';
+                }
+            }
+        }
+    }
+
+    // Fall back to v1 sidecar if v3 resolution didn't produce a table.
+    if (sourcePaths === null) {
+        const sourcePathsEntry = npzEntries['source_paths'];
+        if (sourcePathsEntry && sourcePathsEntry.data) {
+            const spDtype = sourcePathsEntry.dtype || '';
+            const spMatch = spDtype.match(/^<U(\d+)$/);
+            if (spMatch) {
+                const spMaxLen = parseInt(spMatch[1], 10);
+                sourcePaths = parseUnicodeStrings(sourcePathsEntry.data, spMaxLen, sourcePathsEntry.shape);
+            }
         }
     }
 

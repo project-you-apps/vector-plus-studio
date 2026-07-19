@@ -688,13 +688,14 @@ export default function BrowserCartBuilder() {
             >
               cloud · v1.2
             </span>
-            {/* Forcing function: visible alpha-state banner for the v1 provenance
-                sidecar (source_paths.npy). Retire this badge once the v2 schema ships. */}
+            {/* Provenance v3 shipped 2026-07-18 — h-row source_idx + deduplicated
+                source_strings.npy table. Sidecar preserved during transition for
+                pre-v3 loaders. Regulated-industry pilots are now unblocked. */}
             <span
-              className="text-[10px] uppercase tracking-wider text-amber-300 bg-amber-500/15 border border-amber-500/40 px-2 py-0.5 rounded font-mono cursor-help"
-              title="Provenance v1 sidecar — source_paths.npy carries filename per pattern alongside h-row. ALPHA. A future v2 schema (h-row source_idx + strings table) will replace it."
+              className="text-[10px] uppercase tracking-wider text-emerald-300 bg-emerald-500/15 border border-emerald-500/40 px-2 py-0.5 rounded font-mono cursor-help"
+              title="Provenance v3 — h-row source_idx (uint16 at byte 18) indexes into deduplicated source_strings.npy. Auditable per-result provenance for legal/clinical/CPA/government pilots."
             >
-              provenance: v1 (alpha)
+              provenance: v3
             </span>
           </h2>
           <p className="text-xs text-slate-400 mt-1 leading-relaxed">

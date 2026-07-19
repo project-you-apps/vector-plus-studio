@@ -192,12 +192,49 @@ import struct
 # backward-compat path in cartridge_io.py (perms_byte == 0 interpreted as
 # PERM_DEFAULT_LEGACY = R+W). format_version (offset 4) discriminates if mixed
 # carts are ever encountered.
-HIPPO_FORMAT = '<I B B I I I I H I B B 34s'
-HIPPO_SIZE = 64  # struct.calcsize(HIPPO_FORMAT)
+# Struct format variants — dispatch on the format_version byte at offset 4.
+#
+# v1 (legacy) + v2 (canonical, perms_byte) share the SAME 12-field wire
+# format; the difference is semantic (whether the perms_byte at offset 29
+# is meaningful). v3 (provenance) is a real struct-layout change: replaces
+# the byte-18 uint32 `source_hash` with uint16 `source_idx` + uint16
+# reserved, indexing into a top-level `source_strings.npy` deduplicated
+# unicode table. See CC_cart-provenance-schema_2026-06-15 for rationale.
+HIPPO_FORMAT_V1_V2 = '<I B B I I I I H I B B 34s'  # source_hash uint32 at bytes 18-21
+HIPPO_FORMAT_V3    = '<I B B I I I H H H I B B 34s'  # source_idx uint16 + reserved uint16 at 18-21
+
+# ``HIPPO_FORMAT`` (unversioned) intentionally still points at the v1/v2
+# struct so any external code that imported it before v3 landed keeps
+# reading legacy carts correctly. NEW code should reach for the versioned
+# constants + the dispatch helper below. Writers default to v3.
+HIPPO_FORMAT = HIPPO_FORMAT_V1_V2
+HIPPO_SIZE = 64  # struct.calcsize is identical across all variants
 
 # format_version values
-FORMAT_VERSION_LEGACY    = 1  # pre-2026-06-23 11-field carts, no perms_byte
-FORMAT_VERSION_CANONICAL = 2  # canonical 12-field carts with perms_byte
+FORMAT_VERSION_LEGACY     = 1  # pre-2026-06-23 11-field carts, no perms_byte
+FORMAT_VERSION_CANONICAL  = 2  # 12-field with perms_byte (source_hash still at byte 18)
+FORMAT_VERSION_PROVENANCE = 3  # source_idx at byte 18 + source_strings.npy table
+
+# The default writer output as of 2026-07-18.
+FORMAT_VERSION_DEFAULT = FORMAT_VERSION_PROVENANCE
+
+# NOTE on the constant name ``CANONICAL``: it dates from the pre-provenance
+# era when v2 was the newest format. As of v3 shipping (2026-07-18), the
+# name is a slight misnomer — the "canonical" (current default) format is
+# now v3. Renaming CANONICAL → PERMS is a future cleanup pass; the constant
+# is preserved to avoid a cross-repo rename of ~50 references in membot,
+# desktop-builder vendored copies, and Restaurateur pilot snapshots.
+
+
+def hippo_format_for(format_version: int) -> str:
+    """Return the struct format string for the given format_version byte.
+
+    Callers unpacking a hippocampus row should peek byte 4 (format_version)
+    of the first row + dispatch here, rather than assuming a single layout.
+    """
+    if format_version == FORMAT_VERSION_PROVENANCE:
+        return HIPPO_FORMAT_V3
+    return HIPPO_FORMAT_V1_V2  # covers legacy + canonical + unknown-as-legacy
 
 # Flag bits (byte at offset 28)
 FLAG_TOMBSTONE  = 0x01
@@ -228,7 +265,9 @@ def _source_hash(filename: str) -> int:
 
 
 def build_metadata(entries: list[str], doc_map: list[tuple[str, int, int]],
-                   cart_name: str = "", creator: str = "") -> tuple[list[bytes], bytes]:
+                   cart_name: str = "", creator: str = "",
+                   *, format_version: int = FORMAT_VERSION_DEFAULT
+                   ) -> tuple[list[bytes], bytes, list[str] | None]:
     """Build hippocampus metadata for all entries plus a Pattern 0 header.
 
     Args:
@@ -237,25 +276,58 @@ def build_metadata(entries: list[str], doc_map: list[tuple[str, int, int]],
                  tracking which document each entry came from
         cart_name: Cartridge name for Pattern 0
         creator: Creator identifier for Pattern 0
+        format_version: Which struct layout to write (default v3 provenance).
+            Pass FORMAT_VERSION_CANONICAL for legacy interop.
 
     Returns:
-        (metadata_list, pattern0_bytes):
+        (metadata_list, pattern0_bytes, source_strings):
             metadata_list: List of 64-byte packed structs, one per entry
             pattern0_bytes: 4096-byte Pattern 0 header (if available) or None
+            source_strings: Deduplicated source filenames (v3 only, None for
+                v1/v2). Save alongside the cart as ``source_strings.npy``;
+                h-row source_idx points into this array.
+
+    v3 provenance mode (default) — replaces v2's uint32 source_hash with a
+    uint16 source_idx into a deduplicated strings table. Cheaper (one string
+    per unique filename, not per pattern) and enforces provenance at the
+    cart-format contract level. See CC_cart-provenance-schema_2026-06-15.
     """
     n = len(entries)
     now_ts = int(time.time())
     meta = []
+
+    hippo_fmt = hippo_format_for(format_version)
+    emit_provenance = format_version == FORMAT_VERSION_PROVENANCE
 
     # --- Group entries by source document ---
     doc_groups: dict[str, list[int]] = {}
     for i, (filename, chunk_idx, total_chunks) in enumerate(doc_map):
         doc_groups.setdefault(filename, []).append(i)
 
+    # --- Build deduplicated source strings table (v3 only) ---
+    # Order of first appearance is preserved so source_idx is stable and
+    # human-readable when debugging. index 0 is reserved for "no source"
+    # (Pattern 0 header + any future headerless entry).
+    source_strings: list[str] | None = None
+    source_idx_by_name: dict[str, int] = {}
+    if emit_provenance:
+        source_strings = [""]  # index 0 = no source
+        for filename, _, _ in doc_map:
+            if filename not in source_idx_by_name:
+                source_idx_by_name[filename] = len(source_strings)
+                source_strings.append(filename)
+        # uint16 cap check — 65535 unique paths is fine for personal / team /
+        # prosumer scale. Industrial-scale future work bumps to uint24.
+        if len(source_strings) > 0xFFFF:
+            raise ValueError(
+                f"source_strings table has {len(source_strings)} entries; "
+                f"exceeds uint16 source_idx cap (65535). Consider splitting "
+                f"the cart or bumping to a uint24 layout in a future format."
+            )
+
     # --- Build per-entry metadata ---
     for i in range(n):
         filename, chunk_idx, total_chunks = doc_map[i]
-        src_hash = _source_hash(filename)
 
         # Find prev/next within same document
         group = doc_groups[filename]
@@ -269,21 +341,41 @@ def build_metadata(entries: list[str], doc_map: list[tuple[str, int, int]],
         if next_ptr > 0:
             flags |= FLAG_HAS_CHILD
 
-        packed = struct.pack(
-            HIPPO_FORMAT,
-            i + 1,                       # pattern_id (1-based, 0 = header)
-            FORMAT_VERSION_CANONICAL,    # format_version
-            0,                           # cartridge_type = knowledge
-            prev_ptr,                    # parent_ptr (PREV)
-            next_ptr,                    # child_ptr (NEXT)
-            0,                           # sibling_ptr
-            src_hash,                    # source_hash
-            chunk_idx,                   # sequence_num (0-based chunk position)
-            now_ts,                      # timestamp
-            flags,                       # flags
-            PERM_DEFAULT,                # perms_byte (R+W default)
-            b'\x00' * 34,                # reserved
-        )
+        if emit_provenance:
+            src_idx = source_idx_by_name.get(filename, 0)
+            packed = struct.pack(
+                hippo_fmt,
+                i + 1,                       # pattern_id (1-based, 0 = header)
+                format_version,              # format_version (=3)
+                0,                           # cartridge_type = knowledge
+                prev_ptr,                    # parent_ptr (PREV)
+                next_ptr,                    # child_ptr (NEXT)
+                0,                           # sibling_ptr
+                src_idx,                     # source_idx uint16 (byte 18-19)
+                0,                           # reserved uint16 (byte 20-21)
+                chunk_idx,                   # sequence_num uint16 (byte 22-23)
+                now_ts,                      # timestamp
+                flags,                       # flags
+                PERM_DEFAULT,                # perms_byte (R+W default)
+                b'\x00' * 34,                # reserved
+            )
+        else:
+            src_hash = _source_hash(filename)
+            packed = struct.pack(
+                hippo_fmt,
+                i + 1,                       # pattern_id (1-based, 0 = header)
+                format_version,              # format_version (=1 or =2)
+                0,                           # cartridge_type = knowledge
+                prev_ptr,                    # parent_ptr (PREV)
+                next_ptr,                    # child_ptr (NEXT)
+                0,                           # sibling_ptr
+                src_hash,                    # source_hash uint32
+                chunk_idx,                   # sequence_num (0-based chunk position)
+                now_ts,                      # timestamp
+                flags,                       # flags
+                PERM_DEFAULT,                # perms_byte (R+W default)
+                b'\x00' * 34,                # reserved
+            )
         meta.append(packed)
 
     # --- Pattern 0 header (simplified — just pack into metadata format) ---
@@ -291,23 +383,41 @@ def build_metadata(entries: list[str], doc_map: list[tuple[str, int, int]],
     # Here we store a lightweight 64-byte version in the metadata array
     # so the hippocampus struct is consistent. The full Pattern 0 header
     # is a separate concern for GPU-trained cartridges.
-    pattern0 = struct.pack(
-        HIPPO_FORMAT,
-        0,                           # pattern_id = 0 (header)
-        FORMAT_VERSION_CANONICAL,    # format_version
-        0,                           # cartridge_type = knowledge
-        0,                           # parent_ptr (none)
-        1 if n > 0 else 0,           # child_ptr → first real pattern
-        0,                           # sibling_ptr
-        0,                           # source_hash (N/A for header)
-        0,                           # sequence_num
-        now_ts,                      # timestamp
-        FLAG_PINNED,                 # flags: pinned (never evict)
-        PERM_R,                      # perms_byte (R only — header is system-managed)
-        b'\x00' * 34,                # reserved
-    )
+    if emit_provenance:
+        pattern0 = struct.pack(
+            hippo_fmt,
+            0,                           # pattern_id = 0 (header)
+            format_version,              # format_version (=3)
+            0,                           # cartridge_type = knowledge
+            0,                           # parent_ptr (none)
+            1 if n > 0 else 0,           # child_ptr → first real pattern
+            0,                           # sibling_ptr
+            0,                           # source_idx uint16 = 0 ("no source")
+            0,                           # reserved uint16
+            0,                           # sequence_num
+            now_ts,                      # timestamp
+            FLAG_PINNED,                 # flags: pinned (never evict)
+            PERM_R,                      # perms_byte (R only — header is system-managed)
+            b'\x00' * 34,                # reserved
+        )
+    else:
+        pattern0 = struct.pack(
+            hippo_fmt,
+            0,                           # pattern_id = 0 (header)
+            format_version,              # format_version (=1 or =2)
+            0,                           # cartridge_type = knowledge
+            0,                           # parent_ptr (none)
+            1 if n > 0 else 0,           # child_ptr → first real pattern
+            0,                           # sibling_ptr
+            0,                           # source_hash (N/A for header)
+            0,                           # sequence_num
+            now_ts,                      # timestamp
+            FLAG_PINNED,                 # flags: pinned (never evict)
+            PERM_R,                      # perms_byte (R only — header is system-managed)
+            b'\x00' * 34,                # reserved
+        )
 
-    return meta, pattern0
+    return meta, pattern0, source_strings
 
 
 # ============================================================
@@ -409,8 +519,17 @@ def embed_texts(texts: list[str], batch_size: int = 32,
 # ============================================================
 
 def save_cartridge(output_dir: str, name: str, embeddings: np.ndarray, texts: list[str],
-                   metadata: list[bytes] = None, pattern0: bytes = None):
-    """Save cartridge as secure NPZ with integrity manifest and hippocampus metadata."""
+                   metadata: list[bytes] = None, pattern0: bytes = None,
+                   source_strings: list[str] | None = None,
+                   format_version: int = FORMAT_VERSION_DEFAULT):
+    """Save cartridge as secure NPZ with integrity manifest and hippocampus metadata.
+
+    v3 provenance mode: pass ``source_strings`` (returned by ``build_metadata``
+    when ``format_version=FORMAT_VERSION_PROVENANCE``) to emit a
+    deduplicated ``source_strings.npy`` array indexed by the per-row
+    ``source_idx`` at hippocampus byte 18. The manifest records both the
+    cart-format version and whether the strings table shipped.
+    """
     os.makedirs(output_dir, exist_ok=True)
     cart_path = os.path.join(output_dir, f"{name}.cart.npz")
 
@@ -434,6 +553,17 @@ def save_cartridge(output_dir: str, name: str, embeddings: np.ndarray, texts: li
     if pattern0 is not None:
         save_kwargs["pattern0"] = np.frombuffer(pattern0, dtype=np.uint8)
 
+    # v3 provenance — deduplicated source-strings table indexed by
+    # per-row source_idx at hippocampus byte 18. Kept in the same .npz
+    # so it can't drift out of sync with the h-row (the v1 sidecar's
+    # load-bearing weakness).
+    has_source_strings = (
+        source_strings is not None
+        and format_version == FORMAT_VERSION_PROVENANCE
+    )
+    if has_source_strings:
+        save_kwargs["source_strings"] = np.array(source_strings, dtype=object)
+
     np.savez_compressed(cart_path, **save_kwargs)
 
     # Integrity manifest
@@ -450,6 +580,10 @@ def save_cartridge(output_dir: str, name: str, embeddings: np.ndarray, texts: li
         "has_hippocampus": metadata is not None,
         "fingerprint": fingerprint,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        # v3 provenance additions — regulated-industry-pilot readable.
+        "hippo_format_version": format_version,
+        "has_source_strings":  has_source_strings,
+        "n_source_strings":    len(source_strings) if has_source_strings else 0,
     }
     manifest_path = os.path.join(output_dir, f"{name}.cart_manifest.json")
     with open(manifest_path, "w") as f:
@@ -471,28 +605,62 @@ def read_metadata(cart_data: dict) -> list[dict]:
 
     Returns:
         List of metadata dicts (one per passage), or empty list if no metadata.
-        Each dict has: pattern_id, format_version, cartridge_type, prev, next,
-        sibling, source_hash, sequence_num, timestamp, flags
+        For v1/v2 rows each dict has: pattern_id, format_version,
+        cartridge_type, prev, next, sibling, source_hash, sequence_num,
+        timestamp, flags.
+        For v3 rows the ``source_hash`` key is replaced by ``source_idx``
+        (uint16 index into the top-level ``source_strings.npy`` array) and
+        the resolved ``source_path`` string is populated when the strings
+        table is present in the cart.
     """
     if "hippocampus" not in cart_data:
         return []
 
     raw = cart_data["hippocampus"]  # shape: (n, 64) uint8
+
+    # Resolve the v3 source-strings table once, if the cart carries it.
+    # v1/v2 carts won't have this key; source_hash stays as-is.
+    source_strings: list[str] | None = None
+    if "source_strings" in cart_data:
+        try:
+            source_strings = [str(x) for x in cart_data["source_strings"].tolist()]
+        except Exception:
+            source_strings = None
+
     result = []
     for row in raw:
-        vals = struct.unpack(HIPPO_FORMAT, row.tobytes())
-        result.append({
+        row_bytes = row.tobytes()
+        # Peek format_version at byte 4 to choose the struct layout.
+        format_version = int(row_bytes[4])
+        fmt = hippo_format_for(format_version)
+        vals = struct.unpack(fmt, row_bytes)
+
+        entry = {
             "pattern_id":     vals[0],
             "format_version": vals[1],
             "cartridge_type": vals[2],
             "prev":           vals[3] if vals[3] > 0 else None,
             "next":           vals[4] if vals[4] > 0 else None,
             "sibling":        vals[5] if vals[5] > 0 else None,
-            "source_hash":    vals[6],
-            "sequence_num":   vals[7],
-            "timestamp":      vals[8],
-            "flags":          vals[9],
-        })
+        }
+        if format_version == FORMAT_VERSION_PROVENANCE:
+            src_idx = vals[6]
+            entry["source_idx"]    = src_idx
+            entry["source_path"]   = (
+                source_strings[src_idx]
+                if source_strings and 0 <= src_idx < len(source_strings)
+                else None
+            )
+            # vals[7] is the reserved uint16 at byte 20-21; skip
+            entry["sequence_num"]  = vals[8]
+            entry["timestamp"]     = vals[9]
+            entry["flags"]         = vals[10]
+        else:
+            entry["source_hash"]   = vals[6]
+            entry["sequence_num"]  = vals[7]
+            entry["timestamp"]     = vals[8]
+            entry["flags"]         = vals[9]
+        result.append(entry)
     return result
 
 
@@ -661,18 +829,25 @@ Examples:
     embed_time = time.time() - t0
     print(f"  Embedded in {embed_time:.1f}s ({len(entries)/embed_time:.1f} entries/sec)")
 
-    # 4. Build hippocampus metadata
+    # 4. Build hippocampus metadata (v3 provenance by default — emits a
+    # deduplicated source_strings table for the source_idx byte-18 field)
     print(f"\nBuilding hippocampus metadata...")
-    metadata, pattern0 = build_metadata(entries, doc_map, cart_name=args.name)
+    metadata, pattern0, source_strings = build_metadata(
+        entries, doc_map, cart_name=args.name,
+    )
     n_docs = len(set(fn for fn, _, _ in doc_map))
     n_linked = sum(1 for m in metadata if struct.unpack_from('<I', m, 6)[0] > 0 or struct.unpack_from('<I', m, 10)[0] > 0)
     print(f"  {len(metadata)} entries from {n_docs} documents, {n_linked} with PREV/NEXT links")
+    if source_strings is not None:
+        # Subtract the sentinel empty string at index 0 for the human count.
+        print(f"  Provenance: v3 (source_strings table, {len(source_strings) - 1} unique paths)")
 
     # 5. Save cartridge
     print(f"\nSaving cartridge...")
     cart_path, size_mb, fingerprint = save_cartridge(
         args.output_dir, args.name, embeddings, entries,
         metadata=metadata, pattern0=pattern0,
+        source_strings=source_strings,
     )
     print(f"  {cart_path} ({size_mb:.1f} MB, {fingerprint})")
 
