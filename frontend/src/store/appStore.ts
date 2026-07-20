@@ -815,6 +815,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ localCartLoading: true })
     try {
       const cart = await parseCartFile(file)
+      // 2026-07-20 debug: log the FIRST 3 sourcePaths + timestamps to answer
+      // "did the parser get the v3 provenance out of the .npz?" — remove
+      // after the full-path storage path is verified visible in Andy's UI.
+      // If sourcePaths shows basenames here, npz-loader is at fault; if it
+      // shows full paths here but the UI still shows basenames, downstream
+      // in cosineSearchLocal or the ResultCard.
+      console.log('[mountLocalCart] parsed sourcePaths sample:', cart.sourcePaths?.slice(0, 3))
+      console.log('[mountLocalCart] parsed timestamps sample:', cart.timestamps?.slice(0, 3))
       // Rich Pattern-0 path: when the NPZ lacks a
       // source_paths.npy entry — legacy server-built carts, or any cart built
       // before browser-side provenance landed — synthesize sourcePaths from

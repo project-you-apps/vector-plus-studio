@@ -38,7 +38,14 @@ let parseCartNpz: ((buffer: ArrayBuffer) => Promise<ParsedCart>) | null = null;
 async function loadParser(): Promise<typeof parseCartNpz extends null ? never : NonNullable<typeof parseCartNpz>> {
     if (parseCartNpz) return parseCartNpz;
     const base = import.meta.env.BASE_URL || '/';
-    const mod = await import(/* @vite-ignore */ `${base}lattice-webgpu/npz-loader.js`);
+    // Cachebuster on the dynamic-import URL — browser dynamic imports are
+    // aggressively cached and hard-refresh does NOT always bust them
+    // (dynamic-import module cache is separate from the HTTP disk cache).
+    // Bump this string whenever npz-loader.js gets a substantive change so
+    // Andy's browser (and every customer's browser) refetches on next mount.
+    // 2026-07-20-full-path-provenance: full-path storage + h-row timestamps.
+    const cacheBuster = '2026-07-20-full-path';
+    const mod = await import(/* @vite-ignore */ `${base}lattice-webgpu/npz-loader.js?v=${cacheBuster}`);
     parseCartNpz = mod.parseCartNpz;
     return parseCartNpz!;
 }
