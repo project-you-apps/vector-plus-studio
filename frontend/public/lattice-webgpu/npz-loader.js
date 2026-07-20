@@ -382,6 +382,26 @@ export async function parseCartNpz(buffer) {
         }
     }
 
+    // v3 provenance — per-pattern ingestion timestamp (h-row bytes 24-27,
+    // uint32 LE Unix epoch). Present in ALL format versions (v1/v2/v3)
+    // because the timestamp field predates v3; every writer populates it
+    // at cart-build time. Empty when there's no hippocampus.
+    // PassageModal renders as "INGESTED YYYY-MM-DD HH:MM" via the
+    // ingested_at ISO string derived in appStore.
+    let timestamps = null;
+    if (hippocampusEntry && hippocampusEntry.data) {
+        const hippoBytes = new Uint8Array(hippocampusEntry.data);
+        const nRows = Math.floor(hippoBytes.length / 64);
+        if (nRows > 0) {
+            const hippoView = new DataView(hippoBytes.buffer, hippoBytes.byteOffset, hippoBytes.byteLength);
+            timestamps = new Array(nRows);
+            for (let i = 0; i < nRows; i++) {
+                // uint32 LE at byte 24 of each 64-byte row
+                timestamps[i] = hippoView.getUint32(i * 64 + 24, true);
+            }
+        }
+    }
+
     // Pattern-0 metadata — single-element unicode NPY of a JSON payload
     // (see cart-builder-v2/writer/npz.ts:pattern0_data). Only present for
     // browser-built carts 2026-07-02+ (and for server-built carts that ran
@@ -490,6 +510,7 @@ export async function parseCartNpz(buffer) {
         embeddingsShape: embEntry.shape,
         passages,
         sourcePaths,
+        timestamps,
         figures,
         pattern0,
         perPatternMeta,

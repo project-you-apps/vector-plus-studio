@@ -78,6 +78,12 @@ export interface LocalCart {
   // SearchResult.source_path in that case, and ResultCard hides the source
   // line. A future schema will use an h-row source_idx + strings table.
   sourcePaths: string[] | null  // length N or null
+  // v3 provenance — per-pattern h-row ingestion timestamp (uint32 Unix
+  // epoch). Present in all format versions (v1/v2/v3) since the timestamp
+  // field predates v3. null when the cart has no hippocampus. openModal +
+  // navigateModal local branches format-to-ISO before setting the modal's
+  // ingested_at field so PassageModal renders "INGESTED YYYY-MM-DD HH:MM".
+  timestamps: number[] | null    // length N or null
   sizeBytes: number
   mountedAt: number             // performance.now() timestamp
   // Figures embedded in the .cart.npz under 'figures/<hash>.<ext>'. Keyed by
@@ -1340,6 +1346,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (prev_idx != null && sourcePaths[prev_idx] !== currentSource) prev_idx = null
       if (next_idx != null && sourcePaths[next_idx] !== currentSource) next_idx = null
     }
+    // v3 provenance timestamp — prefer the search result's field, fall back to
+    // the local cart's parallel timestamps array (populated by npz-loader.js
+    // from h-row bytes 24-27). Format as ISO 8601 UTC so PassageModal can
+    // render it the same way as server-mount responses.
+    let ingestedAt: string | null = result.ingested_at ?? null
+    if (!ingestedAt && cart?.timestamps) {
+      const ts = cart.timestamps[result.idx]
+      if (ts && ts > 0) {
+        try {
+          ingestedAt = new Date(ts * 1000).toISOString()
+        } catch {
+          ingestedAt = null
+        }
+      }
+    }
     set({
       modalOpen: true,
       modalPassage: {
@@ -1354,7 +1375,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         source_db: result.source_db ?? null,
         paper_id: result.paper_id ?? null,
         source_path: currentSource,
-        ingested_at: result.ingested_at ?? null,
+        ingested_at: ingestedAt,
       },
     })
   },
@@ -1385,6 +1406,20 @@ export const useAppStore = create<AppState>((set, get) => ({
           const next_idx = sourcePaths && currentSource != null && rawNext != null && sourcePaths[rawNext] !== currentSource
             ? null
             : rawNext
+          // v3 timestamp for the local-cart Prev/Next navigation path.
+          // cart.timestamps is parallel-indexed to passages — parsed from
+          // h-row bytes 24-27 by npz-loader.js. Format to ISO before setting.
+          let navIngestedAt: string | null = null
+          if (cart.timestamps) {
+            const ts = cart.timestamps[idx]
+            if (ts && ts > 0) {
+              try {
+                navIngestedAt = new Date(ts * 1000).toISOString()
+              } catch {
+                navIngestedAt = null
+              }
+            }
+          }
           set({
             modalPassage: {
               idx,
@@ -1395,10 +1430,7 @@ export const useAppStore = create<AppState>((set, get) => ({
               source_db: null,
               paper_id: null,
               source_path: currentSource,
-              // Local carts don't currently carry per-pattern timestamps
-              // in the frontend cart representation. Preserved as null until
-              // localCart parsing pulls h-row bytes 24-27.
-              ingested_at: null,
+              ingested_at: navIngestedAt,
             },
           })
           return

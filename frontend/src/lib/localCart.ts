@@ -16,6 +16,11 @@ interface ParsedCart {
     // source_paths.npy. Null/undefined for legacy server-built carts;
     // ResultCard renders the source line only when this is present.
     sourcePaths?: string[] | null;
+    // v3 provenance — per-pattern ingestion timestamp (uint32 Unix epoch)
+    // parsed from h-row bytes 24-27. Present in all format versions; null
+    // only when the cart has no hippocampus. openModal / navigateModal
+    // format-to-ISO for the modal's INGESTED line.
+    timestamps?: number[] | null;
     figures?: Map<string, Uint8Array>;
     // Pattern-0 metadata parsed from pattern0.npy (single-element unicode
     // NPY holding the same JSON payload as api/cartbuilder/builder.py). Null
@@ -61,6 +66,7 @@ export async function parseCartFile(file: File): Promise<LocalCart> {
         embeddingsShape: cart.embeddingsShape,
         passages: cart.passages,
         sourcePaths: cart.sourcePaths ?? null,
+        timestamps: cart.timestamps ?? null,
         sizeBytes: file.size,
         mountedAt: performance.now(),
         figures: cart.figures ?? new Map(),
