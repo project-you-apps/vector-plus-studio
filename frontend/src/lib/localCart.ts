@@ -239,6 +239,16 @@ export function cosineSearchLocal(
             // 2026-06-15+ have this; legacy server-built carts won't, and
             // source_path will be undefined (ResultCard hides the source line).
             source_path: cart.sourcePaths?.[idx] ?? undefined,
+            // v3 provenance — h-row ingestion timestamp (uint32 epoch parsed
+            // by npz-loader.js into cart.timestamps). Formatted to ISO 8601
+            // UTC here so ResultCard + PassageModal both render it the same
+            // way as server-mount responses. undefined when the cart has no
+            // hippocampus or timestamp is zero.
+            ingested_at: (() => {
+                const ts = cart.timestamps?.[idx];
+                if (!ts || ts <= 0) return undefined;
+                try { return new Date(ts * 1000).toISOString(); } catch { return undefined; }
+            })(),
             // Sequential PREV/NEXT — clamped to cart bounds. The fancier
             // hippocampus-aware navigation (which respects document boundaries)
             // would require parsing hippocampus.npy from the cart; sequential

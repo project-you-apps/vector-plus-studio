@@ -350,9 +350,9 @@ export default function ResultCard({ result }: Props) {
               2026-06-15+). Quiet slate-500 caption above the title so it
               doesn't fight the title for visual attention but is always
               available for traceability. Hover to see the full path. */}
-          {result.source_path && (
-            <div className="text-[10px] text-slate-500 font-mono truncate mb-0.5 flex items-center gap-1.5" title={result.source_path}>
-              <span className="shrink-0">from</span>
+          {(result.source_path || result.ingested_at) && (
+            <div className="text-[10px] text-slate-500 font-mono truncate mb-0.5 flex items-center gap-1.5 flex-wrap" title={result.source_path ?? undefined}>
+              {result.source_path && <span className="shrink-0">from</span>}
               {/* Click to copy filename to clipboard. Browser sandbox prevents
                   launching the file in a native app directly (no file:// from
                   https://, no native binary launch); copy-to-clipboard is the
@@ -393,6 +393,29 @@ export default function ResultCard({ result }: Props) {
               </button>
               {copiedSource && (
                 <span className="text-cyan-300 text-[9px] uppercase tracking-wider shrink-0">copied</span>
+              )}
+              {/* v3 provenance — ingestion timestamp. Appears right of the
+                  source filename with a subtle mid-dot separator. Local time
+                  display (YYYY-MM-DD HH:MM); hover reveals raw ISO UTC. */}
+              {result.source_path && result.ingested_at && (
+                <span className="text-slate-600 shrink-0">·</span>
+              )}
+              {result.ingested_at && (
+                <span
+                  className="text-slate-400 shrink-0"
+                  title={`Ingested (UTC): ${result.ingested_at}`}
+                >
+                  ingested {(() => {
+                    try {
+                      const d = new Date(result.ingested_at)
+                      if (isNaN(d.getTime())) return result.ingested_at
+                      const pad = (n: number) => String(n).padStart(2, '0')
+                      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+                    } catch {
+                      return result.ingested_at
+                    }
+                  })()}
+                </span>
               )}
             </div>
           )}
