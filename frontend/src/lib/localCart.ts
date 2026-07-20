@@ -44,7 +44,7 @@ async function loadParser(): Promise<typeof parseCartNpz extends null ? never : 
     // Bump this string whenever npz-loader.js gets a substantive change so
     // Andy's browser (and every customer's browser) refetches on next mount.
     // 2026-07-20-full-path-provenance: full-path storage + h-row timestamps.
-    const cacheBuster = '2026-07-20-full-path';
+    const cacheBuster = '2026-07-20-pickle-strings';
     const mod = await import(/* @vite-ignore */ `${base}lattice-webgpu/npz-loader.js?v=${cacheBuster}`);
     parseCartNpz = mod.parseCartNpz;
     return parseCartNpz!;

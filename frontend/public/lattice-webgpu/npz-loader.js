@@ -337,6 +337,39 @@ export async function parseCartNpz(buffer) {
     // stays null and result cards just don't render a source line.
     let sourcePaths = null;
 
+    // Helper: decode a string-array NPY entry into a JS string[]. Handles
+    // BOTH numpy dtypes we've seen in the wild:
+    //   - '<U<N>' fixed-width unicode (what the TS writer produces)
+    //   - 'O' object-pickled (what the Python writer produces via
+    //     np.array(strings, dtype=object))
+    // The pickle path was needed 2026-07-20 when Andy's demo cart — built by
+    // the CLI Python writer — was returning null sourcePaths because the
+    // dtype regex only matched '<U<N>'. Same shape as the pattern0 dual-
+    // path handling further down.
+    function decodeStringArrayEntry(entry) {
+        if (!entry || !entry.data) return null;
+        const dtype = entry.dtype || '';
+        const unicodeMatch = dtype.match(/^<U(\d+)$/);
+        if (unicodeMatch) {
+            try {
+                const maxLen = parseInt(unicodeMatch[1], 10);
+                return parseUnicodeStrings(entry.data, maxLen, entry.shape);
+            } catch (e) {
+                console.warn('[npz-loader] unicode string-array decode failed:', e);
+                return null;
+            }
+        }
+        // Pickle fallback — Python np.array(..., dtype=object) shape.
+        try {
+            const pickleBytes = new Uint8Array(entry.data);
+            const strings = parsePickledStrings(pickleBytes);
+            return strings.length > 0 ? strings : null;
+        } catch (e) {
+            console.warn('[npz-loader] pickle string-array decode failed:', e);
+            return null;
+        }
+    }
+
     // Try v3 provenance first — needs source_strings + h-row source_idx.
     const sourceStringsEntry = npzEntries['source_strings'];
     const hippocampusEntry = npzEntries['hippocampus'];
@@ -344,13 +377,8 @@ export async function parseCartNpz(buffer) {
         sourceStringsEntry && sourceStringsEntry.data &&
         hippocampusEntry && hippocampusEntry.data
     ) {
-        const ssDtype = sourceStringsEntry.dtype || '';
-        const ssMatch = ssDtype.match(/^<U(\d+)$/);
-        if (ssMatch) {
-            const ssMaxLen = parseInt(ssMatch[1], 10);
-            const sourceStrings = parseUnicodeStrings(
-                sourceStringsEntry.data, ssMaxLen, sourceStringsEntry.shape,
-            );
+        const sourceStrings = decodeStringArrayEntry(sourceStringsEntry);
+        if (sourceStrings) {
             // hippocampus is a [N, 64] uint8 array. Peek row 0 byte 4 to
             // confirm format_version = 3; then resolve each pattern's
             // source_idx (uint16 LE at bytes 18-19) into the strings table.
@@ -372,13 +400,9 @@ export async function parseCartNpz(buffer) {
     // Fall back to v1 sidecar if v3 resolution didn't produce a table.
     if (sourcePaths === null) {
         const sourcePathsEntry = npzEntries['source_paths'];
-        if (sourcePathsEntry && sourcePathsEntry.data) {
-            const spDtype = sourcePathsEntry.dtype || '';
-            const spMatch = spDtype.match(/^<U(\d+)$/);
-            if (spMatch) {
-                const spMaxLen = parseInt(spMatch[1], 10);
-                sourcePaths = parseUnicodeStrings(sourcePathsEntry.data, spMaxLen, sourcePathsEntry.shape);
-            }
+        const sidecarPaths = decodeStringArrayEntry(sourcePathsEntry);
+        if (sidecarPaths) {
+            sourcePaths = sidecarPaths;
         }
     }
 
