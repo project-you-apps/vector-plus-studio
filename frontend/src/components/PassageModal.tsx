@@ -298,8 +298,17 @@ export default function PassageModal() {
               {passage.source_path && (
                 <>
                   <span className="uppercase tracking-wider">Source</span>
-                  <span className="text-slate-300" title={passage.source_path}>
-                    {passage.source_path}
+                  <span
+                    className="text-slate-300 truncate max-w-[42ch]"
+                    title={passage.source_path}
+                  >
+                    {/* Display basename to keep the header line compact; full
+                        path lives on hover. Handles both '/' and '\'. */}
+                    {(() => {
+                      const p = passage.source_path ?? ''
+                      const sep = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+                      return sep >= 0 ? p.slice(sep + 1) : p
+                    })()}
                   </span>
                 </>
               )}

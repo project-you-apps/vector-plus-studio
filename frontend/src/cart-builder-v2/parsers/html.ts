@@ -1,4 +1,5 @@
 import type { Parser, Section } from '../types'
+import { sourcePathForFile } from '../sourcePath'
 
 /**
  * HTML parser using browser-native DOMParser to strip tags and extract
@@ -28,6 +29,6 @@ export const htmlParser: Parser = {
     // retrieval — cosine similarity is token-bag at this scale anyway.
     const text = (root?.textContent || '').replace(/\s+/g, ' ').trim()
     if (!text) return []
-    return [{ text, page: null, source: file.name }]
+    return [{ text, page: null, source: sourcePathForFile(file) }]
   },
 }

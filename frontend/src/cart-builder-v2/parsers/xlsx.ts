@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx'
 import type { Parser, Section } from '../types'
 import { ParseError } from '../types'
+import { sourcePathForFile } from '../sourcePath'
 
 // CSV is included here (SheetJS handles it natively) — small deviation from
 // Python parsers.py, which omits CSV. Worth it: zero extra code, common format.
@@ -45,7 +46,7 @@ export const xlsxParser: Parser = {
         sections.push({
           text,
           page: null,
-          source: `${file.name}:${sheetName}`,
+          source: `${sourcePathForFile(file)}:${sheetName}`,
         })
       }
     }

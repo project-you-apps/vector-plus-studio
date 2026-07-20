@@ -387,9 +387,16 @@ export default function ResultCard({ result }: Props) {
                     onCopied()
                   }
                 }}
-                title={copiedSource ? `Copied: ${result.source_path}` : `Click to copy: ${result.source_path}`}
+                title={copiedSource ? `Copied: ${result.source_path}` : `Click to copy full path: ${result.source_path}`}
               >
-                {result.source_path}
+                {/* Display just the basename to keep the caption scannable;
+                    the full path lives on hover (title attribute) and in the
+                    clipboard on click. Works for both '/' and '\' separators. */}
+                {(() => {
+                  const p = result.source_path ?? ''
+                  const sep = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+                  return sep >= 0 ? p.slice(sep + 1) : p
+                })()}
               </button>
               {copiedSource && (
                 <span className="text-cyan-300 text-[9px] uppercase tracking-wider shrink-0">copied</span>

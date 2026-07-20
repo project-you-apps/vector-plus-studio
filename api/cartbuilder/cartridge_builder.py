@@ -127,8 +127,14 @@ def read_folder(folder: str, recursive: bool = False) -> list[tuple[str, str]]:
                     path = os.path.join(root, f)
                     text = read_file(path)
                     if text.strip():
-                        rel_path = os.path.relpath(path, folder)
-                        results.append((rel_path, text))
+                        # Preserve absolute path — same disambiguation
+                        # rationale as the non-recursive branch (v3
+                        # provenance surface). Used to store the folder-
+                        # relative path (e.g. 'subdir/foo.md') which
+                        # handled within-cart subdirectory dedup but lost
+                        # the ingestion-root context. Absolute path is
+                        # the honest surface for local-mode audit.
+                        results.append((os.path.abspath(path), text))
     else:
         for f in sorted(os.listdir(folder)):
             if os.path.splitext(f)[1].lower() in supported:
@@ -136,7 +142,15 @@ def read_folder(folder: str, recursive: bool = False) -> list[tuple[str, str]]:
                 if os.path.isfile(path):
                     text = read_file(path)
                     if text.strip():
-                        results.append((f, text))
+                        # Preserve the absolute path in the source-strings
+                        # tuple (v3 provenance authoritative surface).
+                        # Non-recursive folder scan used to store just the
+                        # basename — that lost disambiguation info for the
+                        # "/archive/foo.md vs /drafts/foo.md" case Andy
+                        # flagged 2026-07-20. Chunker prefix still uses
+                        # basename via os.path.basename() at build-metadata
+                        # time; only the provenance surface widens.
+                        results.append((os.path.abspath(path), text))
 
     return results
 
@@ -801,7 +815,9 @@ Examples:
         if not text.strip():
             print("Error: File is empty or unsupported.")
             return
-        docs = [(os.path.basename(source), text)]
+        # Preserve absolute path in the source-strings tuple; basename is
+        # derived at chunker-prefix time for the display-side header.
+        docs = [(os.path.abspath(source), text)]
     elif os.path.isdir(source):
         print(f"Reading folder: {source}")
         docs = read_folder(source, recursive=args.recursive)
@@ -815,14 +831,19 @@ Examples:
     print(f"  Found {len(docs)} documents")
 
     # 2. Chunk (tracking document origins for hippocampus linking)
+    # doc_map preserves the FULL source path (absolute for local / relative
+    # for other pipelines) for v3 provenance. Chunker prefixes use the
+    # BASENAME for scannable passage titles — full path would dominate the
+    # header. Split-of-concerns: display uses basename, provenance uses full.
     entries = []
-    doc_map = []  # (filename, chunk_index, total_chunks) per entry
+    doc_map = []  # (source_path, chunk_index, total_chunks) per entry
     for filename, text in docs:
+        display_name = os.path.basename(filename) or filename
         if args.no_chunk:
             if args.no_prefix:
                 entries.append(text)
             else:
-                entries.append(f"{filename}\n{text}")
+                entries.append(f"{display_name}\n{text}")
             doc_map.append((filename, 0, 1))
         else:
             chunks = chunk_text(text, chunk_size=args.chunk_size, overlap=args.overlap)
@@ -830,9 +851,9 @@ Examples:
                 if args.no_prefix:
                     entries.append(chunk)
                 elif len(chunks) > 1:
-                    entries.append(f"{filename} (part {i+1}/{len(chunks)})\n{chunk}")
+                    entries.append(f"{display_name} (part {i+1}/{len(chunks)})\n{chunk}")
                 else:
-                    entries.append(f"{filename}\n{chunk}")
+                    entries.append(f"{display_name}\n{chunk}")
                 doc_map.append((filename, i, len(chunks)))
 
     print(f"  Chunked into {len(entries)} entries ({args.chunk_size} words/chunk)")

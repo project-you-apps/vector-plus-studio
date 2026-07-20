@@ -1,6 +1,7 @@
 import mammoth from 'mammoth'
 import type { Parser, Section } from '../types'
 import { ParseError } from '../types'
+import { sourcePathForFile } from '../sourcePath'
 
 // mammoth handles .docx (zipped XML). Legacy .doc (binary) is NOT supported —
 // the accept() lets the extension through but parse() will throw. Mirrors
@@ -26,6 +27,6 @@ export const docxParser: Parser = {
     }
     const text = result.value.trim()
     if (!text) return []
-    return [{ text, page: null, source: file.name }]
+    return [{ text, page: null, source: sourcePathForFile(file) }]
   },
 }

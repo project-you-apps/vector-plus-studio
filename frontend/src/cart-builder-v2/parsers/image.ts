@@ -11,6 +11,7 @@
 
 import { ocrFile, type OcrOptions } from '../../api/imageBuilder'
 import { ParseError, type Graphic, type ImageBuilderOcrResult, type Section, type Table } from '../types'
+import { sourcePathForFile } from '../sourcePath'
 
 // Convert a Docling-returned HTML table into a GFM markdown table so the
 // passage viewer's react-markdown + remark-gfm renders it as an actual
@@ -157,7 +158,7 @@ export async function parseViaImageBuilder(
 
   const markdown = (result.markdown || '').trim()
   const textSections: Section[] = markdown
-    ? [{ text: markdown, page: 1, source: file.name }]
+    ? [{ text: markdown, page: 1, source: sourcePathForFile(file) }]
     : []
 
   return {

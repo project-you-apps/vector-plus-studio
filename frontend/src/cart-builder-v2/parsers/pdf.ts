@@ -4,6 +4,7 @@ import * as pdfjsLib from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import type { Parser, Section } from '../types'
 import { ParseError } from '../types'
+import { sourcePathForFile } from '../sourcePath'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
 
@@ -32,7 +33,7 @@ export const pdfParser: Parser = {
         .join(' ')
         .trim()
       if (text) {
-        sections.push({ text, page: i, source: file.name })
+        sections.push({ text, page: i, source: sourcePathForFile(file) })
       }
     }
     return sections
