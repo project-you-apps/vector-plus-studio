@@ -69,6 +69,13 @@ class SearchResult(BaseModel):
     paper_id: str | None = None
     # Step 2b: per-pattern RWX from the hippocampus row's flags byte.
     perms: dict | None = None
+    # v3 provenance — per-pattern source filename. Populated by the search
+    # endpoint from the mounted cart's source_paths cache (which reads the
+    # v3 source_strings table + h-row source_idx natively, falling back to
+    # the v1 source_paths.npy sidecar for older carts). ResultCard renders
+    # this as a "from <filename>" caption above the title when populated.
+    # None when the cart carries no provenance surface at all.
+    source_path: str | None = None
 
 class SearchResponse(BaseModel):
     query: str

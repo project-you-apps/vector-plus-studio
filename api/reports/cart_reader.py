@@ -62,7 +62,16 @@ from api.cartridge_io import (
     parse_lifecycle_byte as _parse_lifecycle_byte,
     PERMS_BYTE_OFFSET_READ as _PERMS_BYTE_OFFSET,
     PERM_R as _PERM_R,
+    FORMAT_VERSION_PROVENANCE as _FORMAT_VERSION_PROVENANCE,
 )
+
+# H-row byte offsets shared across v1/v2/v3 (see HIPPO_FORMAT_V* in
+# api/cartridge_io.py). format_version at byte 4 discriminates the layout;
+# timestamp lives at bytes 24-27 (uint32 LE) in all versions.
+_HROW_FORMAT_VERSION_OFFSET = 4
+_HROW_TIMESTAMP_OFFSET = 24
+# v3 h-row: bytes 18-19 = source_idx uint16 LE (byte 20-21 reserved).
+_HROW_V3_SOURCE_IDX_OFFSET = 18
 
 
 # ---------------------------------------------------------------------------
@@ -146,18 +155,70 @@ class CartHandle:
                 # and warn the user gracefully.
                 self._passages = ["" for _ in range(len(self._embeddings))]
 
-            # Source paths — per-pattern source filename. Not always present
-            # (Cart Builder GUI carts embed source name in the first line of
-            # each passage; membot carts store it separately).
-            self._source_paths: list[str] = []
-            if "source_paths" in files:
-                self._source_paths = [str(x) for x in data["source_paths"].tolist()]
-
             # Hippocampus (H-block per pattern) — optional. Only decode if
             # present; otherwise every ``get_meta`` call falls back to {}.
+            # Loaded BEFORE source_paths so the v3 resolution below can peek
+            # at the format_version byte + source_idx per row.
             self._hippocampus_raw: Optional[np.ndarray] = None
             if "hippocampus" in files:
                 self._hippocampus_raw = np.asarray(data["hippocampus"]).copy()
+
+            # Source paths — per-pattern source filename. Resolution order:
+            #   1. v3-native: ``source_strings`` (dedup table) + h-row
+            #      ``source_idx`` (bytes 18-19 uint16 LE). Preferred when the
+            #      cart's h-row format_version = FORMAT_VERSION_PROVENANCE.
+            #      Retires the sidecar dependency for v3 carts.
+            #   2. v1/v2 sidecar: ``source_paths.npy`` unicode array.
+            #      Backward-compat for older browser-built carts + carts that
+            #      were re-emitted with both surfaces during the v3 transition.
+            #   3. Empty — falls back to first-line parsing at ``get_source``
+            #      call time (Cart Builder GUI carts embed source name as
+            #      line 0 of each passage).
+            self._source_paths: list[str] = []
+            v3_resolved = False
+            if ("source_strings" in files
+                    and self._hippocampus_raw is not None
+                    and self._hippocampus_raw.shape[0] > 0
+                    and self._hippocampus_raw.shape[1] > _HROW_V3_SOURCE_IDX_OFFSET + 1):
+                try:
+                    fmt_ver = int(self._hippocampus_raw[0, _HROW_FORMAT_VERSION_OFFSET])
+                    if fmt_ver == _FORMAT_VERSION_PROVENANCE:
+                        strings_table = [str(x) for x in data["source_strings"].tolist()]
+                        lo = self._hippocampus_raw[:, _HROW_V3_SOURCE_IDX_OFFSET].astype(np.uint32)
+                        hi = self._hippocampus_raw[:, _HROW_V3_SOURCE_IDX_OFFSET + 1].astype(np.uint32)
+                        source_idx = (lo | (hi << 8)).tolist()
+                        derived: list[str] = []
+                        for idx in source_idx:
+                            if 0 <= idx < len(strings_table):
+                                derived.append(strings_table[idx])
+                            else:
+                                derived.append("")
+                        self._source_paths = derived
+                        v3_resolved = True
+                except Exception:
+                    # Fall through to sidecar path on any parse failure.
+                    v3_resolved = False
+            if not v3_resolved and "source_paths" in files:
+                self._source_paths = [str(x) for x in data["source_paths"].tolist()]
+
+            # Per-pattern ingestion timestamp (uint32 Unix epoch) — h-row
+            # bytes 24-27 in all format versions (v1/v2/v3). Populated at
+            # cart-build time; represents when the pattern was embedded,
+            # not necessarily when its source file was created. Surface
+            # via ``get_timestamp`` / ``all_timestamps``. Empty list when
+            # no hippocampus present (older carts).
+            self._timestamps: list[int] = []
+            if (self._hippocampus_raw is not None
+                    and self._hippocampus_raw.shape[0] > 0
+                    and self._hippocampus_raw.shape[1] > _HROW_TIMESTAMP_OFFSET + 3):
+                try:
+                    b0 = self._hippocampus_raw[:, _HROW_TIMESTAMP_OFFSET + 0].astype(np.uint32)
+                    b1 = self._hippocampus_raw[:, _HROW_TIMESTAMP_OFFSET + 1].astype(np.uint32)
+                    b2 = self._hippocampus_raw[:, _HROW_TIMESTAMP_OFFSET + 2].astype(np.uint32)
+                    b3 = self._hippocampus_raw[:, _HROW_TIMESTAMP_OFFSET + 3].astype(np.uint32)
+                    self._timestamps = (b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)).tolist()
+                except Exception:
+                    self._timestamps = []
 
             # pattern0 — JSON cart-level metadata. Two live shapes:
             #   1. Unicode NPY (Cart Builder GUI) — JSON string, load via json.loads
@@ -258,6 +319,24 @@ class CartHandle:
         if " (part " in first_line:
             first_line = first_line.split(" (part ", 1)[0].strip()
         return first_line
+
+    def get_timestamp(self, idx: int) -> int:
+        """Return the h-row ingestion timestamp (uint32 Unix epoch) for
+        pattern ``idx``, or ``0`` if unavailable (no hippocampus, or the
+        h-row was never populated with a timestamp).
+
+        Populated by the writer at cart-build time; represents when the
+        pattern was embedded, not necessarily when the source file was
+        created or last modified. For batch-built carts (CLI
+        ``cartridge_builder.py``), every pattern in one build shares the
+        same timestamp (batch-scope). Incremental writers may populate
+        per-pattern granular timestamps.
+        """
+        if idx < 0 or idx >= self.count:
+            raise IndexError(f"Pattern idx {idx} out of range [0, {self.count})")
+        if not self._timestamps or idx >= len(self._timestamps):
+            return 0
+        return int(self._timestamps[idx])
 
     def get_meta(self, idx: int) -> dict[str, Any]:
         """Return the per-pattern metadata record for ``idx``, or ``{}``

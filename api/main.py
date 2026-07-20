@@ -1785,6 +1785,67 @@ def _save_cartridge_sync() -> MessageResponse:
 
 
 # ---------------------------------------------------------------------------
+# Source-paths cache — populates SearchResult.source_path for the frontend
+# "from <filename>" caption. Lazy per-mount: first search after mount pays
+# the .npz-parse cost, subsequent searches read from the cache.
+# ---------------------------------------------------------------------------
+
+_source_paths_cache: dict[str, list[str]] = {}
+
+
+def _load_source_paths_for_cart(cart_path: str) -> list[str]:
+    """Return per-pattern source-path list for the cart at ``cart_path``.
+
+    Resolution order matches api/reports/cart_reader.py:
+      1. v3-native: ``source_strings`` (dedup table) + h-row ``source_idx``
+         (bytes 18-19 uint16 LE) when h-row format_version = 3.
+      2. v1/v2 sidecar: ``source_paths.npy`` unicode array.
+      3. Empty list — search falls back to nothing rendered on the card.
+
+    Returns an empty list on any parse failure (fail-open — no crash).
+    """
+    try:
+        with np.load(cart_path, allow_pickle=True) as z:
+            files = list(z.files)
+            hippo = z["hippocampus"] if "hippocampus" in files else None
+
+            # v3-native path
+            if (hippo is not None
+                    and hippo.shape[0] > 0
+                    and hippo.shape[1] >= 20
+                    and "source_strings" in files):
+                fmt_ver = int(hippo[0, 4])
+                if fmt_ver == 3:
+                    strings_table = [str(x) for x in z["source_strings"].tolist()]
+                    lo = hippo[:, 18].astype(np.uint32)
+                    hi = hippo[:, 19].astype(np.uint32)
+                    src_idx = (lo | (hi << 8)).tolist()
+                    return [
+                        strings_table[i] if 0 <= i < len(strings_table) else ""
+                        for i in src_idx
+                    ]
+
+            # v1/v2 sidecar path
+            if "source_paths" in files:
+                return [str(x) for x in z["source_paths"].tolist()]
+    except Exception:
+        return []
+    return []
+
+
+def _get_mounted_source_paths() -> list[str]:
+    """Cached wrapper — resolves per-mount, invalidated when mounted_path
+    changes. Callers get [] when nothing is mounted or no provenance data
+    is available; downstream just skips the caption in that case."""
+    mp = engine.mounted_path
+    if not mp or not os.path.exists(mp):
+        return []
+    if mp not in _source_paths_cache:
+        _source_paths_cache[mp] = _load_source_paths_for_cart(mp)
+    return _source_paths_cache[mp]
+
+
+# ---------------------------------------------------------------------------
 # Search
 # ---------------------------------------------------------------------------
 
@@ -1814,11 +1875,19 @@ async def search_endpoint(req: SearchRequest):
 
     search_results = []
     hippo = engine.hippocampus
+    # v3 provenance — resolve per-pattern source filename from the mounted
+    # cart's source_paths cache. Populates the "from <filename>" caption
+    # in ResultCard.tsx. Empty list when the cart has no provenance surface.
+    source_paths = _get_mounted_source_paths()
     for rank, r in enumerate(results):
         idx = r['idx']
         perms = None
         if hippo is not None and 0 <= idx < len(hippo):
             perms = hippo[idx].get('perms')
+        source_path = None
+        if source_paths and 0 <= idx < len(source_paths):
+            sp = source_paths[idx]
+            source_path = sp if sp else None
         search_results.append(SearchResult(
             rank=rank + 1,
             idx=idx,
@@ -1832,6 +1901,7 @@ async def search_endpoint(req: SearchRequest):
             full_text=r['full_text'],
             from_lattice=r.get('from_lattice', False),
             source_db=source_db_label,
+            source_path=source_path,
             prev_idx=r.get('prev_idx'),
             next_idx=r.get('next_idx'),
             perms=perms,
