@@ -287,6 +287,48 @@ export default function PassageModal() {
               <X size={18} />
             </button>
           </div>
+          {/* v3 provenance line — filename + ingestion timestamp, always
+              rendered when either field is populated. Regulated-industry
+              auditors (legal / clinical / CPA / government) can trust that
+              a result traces back to a real source + a real ingestion
+              moment. slate-500 muted so it doesn't fight the title for
+              attention; hover on the timestamp reveals the raw ISO. */}
+          {(passage.source_path || passage.ingested_at) && (
+            <div className="flex items-center gap-2 text-[11px] pl-8 text-slate-500 font-mono flex-wrap">
+              {passage.source_path && (
+                <>
+                  <span className="uppercase tracking-wider">Source</span>
+                  <span className="text-slate-300" title={passage.source_path}>
+                    {passage.source_path}
+                  </span>
+                </>
+              )}
+              {passage.source_path && passage.ingested_at && (
+                <span className="text-slate-600">·</span>
+              )}
+              {passage.ingested_at && (
+                <>
+                  <span className="uppercase tracking-wider">Ingested</span>
+                  <span
+                    className="text-slate-300"
+                    title={passage.ingested_at}
+                  >
+                    {/* Show YYYY-MM-DD HH:MM in local time; hover for raw ISO UTC. */}
+                    {(() => {
+                      try {
+                        const d = new Date(passage.ingested_at)
+                        if (isNaN(d.getTime())) return passage.ingested_at
+                        const pad = (n: number) => String(n).padStart(2, '0')
+                        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+                      } catch {
+                        return passage.ingested_at
+                      }
+                    })()}
+                  </span>
+                </>
+              )}
+            </div>
+          )}
           {/* Query-pill — surfaces the query that led here.
               AM: helps keep the "why am I looking at this" thread across
               Prev/Next navigation. Truncated to 47 chars + ellipsis. */}

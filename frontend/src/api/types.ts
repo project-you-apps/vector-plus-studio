@@ -40,6 +40,10 @@ export interface SearchResult {
   // entry. undefined for legacy carts; ResultCard hides the source line
   // when undefined.
   source_path?: string | null
+  // v3 provenance — h-row ingestion timestamp (ISO 8601 UTC). PassageModal
+  // renders as "Ingested" alongside source_path when the modal opens from
+  // a search result.
+  ingested_at?: string | null
   // Step 2b: per-pattern RWX from the hippocampus row's perms_byte.
   // null when the cart has no hippocampus data; otherwise an object with
   // r/w/x bools and the raw byte value.
@@ -59,6 +63,14 @@ export interface PatternResponse {
   paper_id?: string | null
   // Step 2b: per-pattern RWX bits from hippocampus row's perms_byte.
   perms?: PatternPerms | null
+  // v3 provenance — per-pattern source filename resolved from the mounted
+  // cart's source_strings + h-row source_idx (or v1 sidecar fallback).
+  // PassageModal renders as a "Source: <filename>" line under the title.
+  source_path?: string | null
+  // v3 provenance — h-row ingestion timestamp (uint32 Unix epoch) formatted
+  // as ISO 8601 UTC. PassageModal renders as "ingested <date>" alongside
+  // source_path. undefined/null for legacy carts.
+  ingested_at?: string | null
 }
 
 export interface SearchResponse {

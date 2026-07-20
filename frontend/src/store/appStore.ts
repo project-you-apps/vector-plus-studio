@@ -438,6 +438,12 @@ interface AppState {
     // or server-mounted carts (no client-side per-pattern source info),
     // which fall back to unconstrained neighbor walking.
     source_path?: string | null
+    // v3 provenance — ingestion timestamp as ISO 8601 UTC. Populated by
+    // /api/patterns/{idx} from the h-row's uint32 timestamp field (bytes
+    // 24-27). Rendered as a "Ingested YYYY-MM-DD HH:MM" line in the modal
+    // header alongside source_path. Null when h-row timestamp is zero or
+    // no hippocampus is present.
+    ingested_at?: string | null
   } | null
   modalLoading: boolean
   openModal: (result: SearchResult) => void
@@ -1348,6 +1354,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         source_db: result.source_db ?? null,
         paper_id: result.paper_id ?? null,
         source_path: currentSource,
+        ingested_at: result.ingested_at ?? null,
       },
     })
   },
@@ -1388,16 +1395,21 @@ export const useAppStore = create<AppState>((set, get) => ({
               source_db: null,
               paper_id: null,
               source_path: currentSource,
+              // Local carts don't currently carry per-pattern timestamps
+              // in the frontend cart representation. Preserved as null until
+              // localCart parsing pulls h-row bytes 24-27.
+              ingested_at: null,
             },
           })
           return
         }
       }
       const pattern = await api.getPattern(idx)
-      // Server-mounted carts don't currently return per-pattern source_path;
-      // carry the modal's existing source_path forward (unchanged) so any
-      // client-side constraint remains stable. When the backend starts
-      // returning source_path in PatternResponse, prefer that value.
+      // Server-mounted carts now DO return per-pattern source_path +
+      // ingested_at (v3 provenance surface plumbed through cart_reader.py
+      // + /api/patterns/{idx}). Prefer the backend's value; fall back to
+      // the modal's existing source_path only when the backend returns
+      // nothing (legacy cart without provenance).
       const prevSource = get().modalPassage?.source_path ?? null
       set({
         modalPassage: {
@@ -1408,7 +1420,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           next_idx: pattern.next_idx,
           source_db: pattern.source_db ?? null,
           paper_id: pattern.paper_id ?? null,
-          source_path: prevSource,
+          source_path: pattern.source_path ?? prevSource,
+          ingested_at: pattern.ingested_at ?? null,
         },
       })
     } catch (e) {
@@ -1437,7 +1450,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           next_idx: pattern.next_idx,
           source_db: pattern.source_db ?? current.source_db ?? null,
           paper_id: pattern.paper_id ?? null,
-          source_path: current.source_path ?? null,
+          source_path: pattern.source_path ?? current.source_path ?? null,
+          ingested_at: pattern.ingested_at ?? current.ingested_at ?? null,
         },
       })
     } catch (e) {

@@ -1785,31 +1785,39 @@ def _save_cartridge_sync() -> MessageResponse:
 
 
 # ---------------------------------------------------------------------------
-# Source-paths cache — populates SearchResult.source_path for the frontend
-# "from <filename>" caption. Lazy per-mount: first search after mount pays
-# the .npz-parse cost, subsequent searches read from the cache.
+# Provenance cache — populates SearchResult.source_path / PatternResponse's
+# source_path + ingested_at from the mounted cart's h-row (bytes 18-19 for
+# v3 source_idx, bytes 24-27 for the timestamp uint32 LE) plus the top-level
+# source_strings dedup table. Lazy per-mount: first read after mount pays
+# the .npz-parse cost, subsequent reads hit the cache.
 # ---------------------------------------------------------------------------
 
-_source_paths_cache: dict[str, list[str]] = {}
+# Value shape: (source_paths, timestamps). Either list may be empty when the
+# cart doesn't carry that surface; callers handle both cases.
+_provenance_cache: dict[str, tuple[list[str], list[int]]] = {}
 
 
-def _load_source_paths_for_cart(cart_path: str) -> list[str]:
-    """Return per-pattern source-path list for the cart at ``cart_path``.
+def _load_provenance_for_cart(cart_path: str) -> tuple[list[str], list[int]]:
+    """Return ``(source_paths, timestamps)`` for the cart at ``cart_path``.
 
-    Resolution order matches api/reports/cart_reader.py:
+    ``source_paths`` resolution order matches api/reports/cart_reader.py:
       1. v3-native: ``source_strings`` (dedup table) + h-row ``source_idx``
          (bytes 18-19 uint16 LE) when h-row format_version = 3.
       2. v1/v2 sidecar: ``source_paths.npy`` unicode array.
-      3. Empty list — search falls back to nothing rendered on the card.
+      3. Empty list — downstream falls back to no caption / no source line.
 
-    Returns an empty list on any parse failure (fail-open — no crash).
+    ``timestamps`` come from h-row bytes 24-27 (uint32 LE Unix epoch) in
+    every format version. Empty list when no hippocampus is present.
+
+    Returns ``([], [])`` on any parse failure (fail-open — no crash).
     """
     try:
         with np.load(cart_path, allow_pickle=True) as z:
             files = list(z.files)
             hippo = z["hippocampus"] if "hippocampus" in files else None
 
-            # v3-native path
+            # -- source_paths --
+            source_paths: list[str] = []
             if (hippo is not None
                     and hippo.shape[0] > 0
                     and hippo.shape[1] >= 20
@@ -1820,29 +1828,45 @@ def _load_source_paths_for_cart(cart_path: str) -> list[str]:
                     lo = hippo[:, 18].astype(np.uint32)
                     hi = hippo[:, 19].astype(np.uint32)
                     src_idx = (lo | (hi << 8)).tolist()
-                    return [
+                    source_paths = [
                         strings_table[i] if 0 <= i < len(strings_table) else ""
                         for i in src_idx
                     ]
+            if not source_paths and "source_paths" in files:
+                source_paths = [str(x) for x in z["source_paths"].tolist()]
 
-            # v1/v2 sidecar path
-            if "source_paths" in files:
-                return [str(x) for x in z["source_paths"].tolist()]
+            # -- timestamps (all format versions, bytes 24-27) --
+            timestamps: list[int] = []
+            if (hippo is not None
+                    and hippo.shape[0] > 0
+                    and hippo.shape[1] >= 28):
+                b0 = hippo[:, 24].astype(np.uint32)
+                b1 = hippo[:, 25].astype(np.uint32)
+                b2 = hippo[:, 26].astype(np.uint32)
+                b3 = hippo[:, 27].astype(np.uint32)
+                timestamps = (b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)).tolist()
+
+            return source_paths, timestamps
     except Exception:
-        return []
-    return []
+        return [], []
+
+
+def _get_mounted_provenance() -> tuple[list[str], list[int]]:
+    """Cached wrapper — resolves per-mount, invalidated when mounted_path
+    changes. Callers get ``([], [])`` when nothing is mounted or no
+    provenance data is available."""
+    mp = engine.mounted_path
+    if not mp or not os.path.exists(mp):
+        return [], []
+    if mp not in _provenance_cache:
+        _provenance_cache[mp] = _load_provenance_for_cart(mp)
+    return _provenance_cache[mp]
 
 
 def _get_mounted_source_paths() -> list[str]:
-    """Cached wrapper — resolves per-mount, invalidated when mounted_path
-    changes. Callers get [] when nothing is mounted or no provenance data
-    is available; downstream just skips the caption in that case."""
-    mp = engine.mounted_path
-    if not mp or not os.path.exists(mp):
-        return []
-    if mp not in _source_paths_cache:
-        _source_paths_cache[mp] = _load_source_paths_for_cart(mp)
-    return _source_paths_cache[mp]
+    """Back-compat shim — just the source_paths half. Retained so existing
+    callers don't need to know about the timestamps."""
+    return _get_mounted_provenance()[0]
 
 
 # ---------------------------------------------------------------------------
@@ -1875,10 +1899,13 @@ async def search_endpoint(req: SearchRequest):
 
     search_results = []
     hippo = engine.hippocampus
-    # v3 provenance — resolve per-pattern source filename from the mounted
-    # cart's source_paths cache. Populates the "from <filename>" caption
-    # in ResultCard.tsx. Empty list when the cart has no provenance surface.
-    source_paths = _get_mounted_source_paths()
+    # v3 provenance — resolve per-pattern source filename + ingestion
+    # timestamp from the mounted cart's provenance cache. Populates the
+    # "from <filename>" caption in ResultCard.tsx AND the PassageModal
+    # "Ingested" line when the user opens a result. Empty lists when the
+    # cart has no provenance surface.
+    source_paths, timestamps = _get_mounted_provenance()
+    from datetime import datetime, timezone
     for rank, r in enumerate(results):
         idx = r['idx']
         perms = None
@@ -1888,6 +1915,14 @@ async def search_endpoint(req: SearchRequest):
         if source_paths and 0 <= idx < len(source_paths):
             sp = source_paths[idx]
             source_path = sp if sp else None
+        ingested_at = None
+        if timestamps and 0 <= idx < len(timestamps):
+            ts = int(timestamps[idx])
+            if ts > 0:
+                try:
+                    ingested_at = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+                except Exception:
+                    ingested_at = None
         search_results.append(SearchResult(
             rank=rank + 1,
             idx=idx,
@@ -1902,6 +1937,7 @@ async def search_endpoint(req: SearchRequest):
             from_lattice=r.get('from_lattice', False),
             source_db=source_db_label,
             source_path=source_path,
+            ingested_at=ingested_at,
             prev_idx=r.get('prev_idx'),
             next_idx=r.get('next_idx'),
             perms=perms,
@@ -2105,11 +2141,32 @@ async def get_pattern(idx: int):
         next_idx = entry.get('next')
         perms = entry.get('perms')
 
+    # v3 provenance surface for the passage modal — filename resolves the
+    # v3 source_strings table (or falls back to v1 sidecar); ingested_at is
+    # the h-row timestamp formatted as ISO 8601 UTC. Both are optional; the
+    # modal hides the metadata line when neither is present.
+    source_paths, timestamps = _get_mounted_provenance()
+    source_path = None
+    if source_paths and 0 <= idx < len(source_paths):
+        sp = source_paths[idx]
+        source_path = sp if sp else None
+    ingested_at = None
+    if timestamps and 0 <= idx < len(timestamps):
+        ts = int(timestamps[idx])
+        if ts > 0:
+            try:
+                from datetime import datetime, timezone
+                ingested_at = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+            except Exception:
+                ingested_at = None
+
     return PatternResponse(
         idx=idx, title=title, preview=preview, full_text=text,
         prev_idx=prev_idx, next_idx=next_idx,
         source_db=source_db, paper_id=paper_id,
         perms=perms,
+        source_path=source_path,
+        ingested_at=ingested_at,
     )
 
 

@@ -76,6 +76,11 @@ class SearchResult(BaseModel):
     # this as a "from <filename>" caption above the title when populated.
     # None when the cart carries no provenance surface at all.
     source_path: str | None = None
+    # v3 provenance — h-row ingestion timestamp (bytes 24-27 uint32 LE)
+    # formatted as ISO 8601 UTC. Same field as PatternResponse.ingested_at
+    # so PassageModal can render "Ingested" consistently whether opened from
+    # a fresh search or navigated to via Prev/Next.
+    ingested_at: str | None = None
 
 class SearchResponse(BaseModel):
     query: str
@@ -204,6 +209,18 @@ class PatternResponse(BaseModel):
     # Step 2b: per-pattern RWX from the hippocampus row's flags byte. None
     # if the cart has no hippocampus or this pattern's flags=0 (legacy).
     perms: dict | None = None
+    # v3 provenance — per-pattern source filename, resolved from
+    # source_strings + h-row source_idx (or v1 sidecar fallback). Populated
+    # for local + hosted carts alike; None when the cart carries no
+    # provenance data at all. Same field as SearchResult.source_path so the
+    # PassageModal can render a consistent "Source: filename" line.
+    source_path: str | None = None
+    # v3 provenance — h-row ingestion timestamp (bytes 24-27 uint32 LE)
+    # formatted as ISO 8601 UTC. Populated at cart-build time; batch-scoped
+    # for CLI-built carts (every pattern in one build shares the batch
+    # timestamp) and per-exchange for session-cart auto-append. None when
+    # no hippocampus present or timestamp is zero.
+    ingested_at: str | None = None
 
 class MessageResponse(BaseModel):
     success: bool
