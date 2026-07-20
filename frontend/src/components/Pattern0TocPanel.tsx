@@ -747,6 +747,15 @@ export default function Pattern0TocPanel() {
           ) : (
             pageItems.map((item, i) => {
               const clickable = drillEnabled && item.pattern_count > 0
+              // Display basename only in the TOC row (parses last '/' or
+              // '\\'); full path preserved on hover via the title attribute.
+              // Same treatment as ResultCard + PassageModal so all three
+              // provenance surfaces present consistently.
+              const displayName = (() => {
+                const p = item.name ?? ''
+                const sep = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+                return sep >= 0 ? p.slice(sep + 1) : p
+              })()
               const rowInner = (
                 <>
                   <span className="text-slate-600 mt-0.5 shrink-0" aria-hidden>•</span>
@@ -756,7 +765,7 @@ export default function Pattern0TocPanel() {
                         className={`truncate ${clickable ? 'text-slate-200 group-hover:text-purple-200' : 'text-slate-200'}`}
                         title={item.name}
                       >
-                        {item.name}
+                        {displayName}
                       </span>
                       {item.pattern_count > 0 && (
                         <span className="text-[10px] text-slate-500 font-mono shrink-0">
