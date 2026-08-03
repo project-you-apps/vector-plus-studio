@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { LogIn, LogOut, User as UserIcon } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
+import { useAppStore } from '../store/appStore'
 
 // Header element: "Sign In" button when signed out, user chip + dropdown when
 // signed in. Render this inside Header.tsx anywhere on the right cluster.
@@ -9,6 +10,7 @@ export default function AuthChip() {
   const initialized = useAuthStore((s) => s.initialized)
   const openSignIn = useAuthStore((s) => s.openSignInModal)
   const signOut = useAuthStore((s) => s.signOut)
+  const setActiveScreen = useAppStore((s) => s.setActiveScreen)
   const [menuOpen, setMenuOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
 
@@ -70,12 +72,11 @@ export default function AuthChip() {
             <div className="text-sm text-slate-200 truncate">{label}</div>
           </div>
           <button
-            onClick={() => { setMenuOpen(false); /* TODO: profile screen */ }}
+            onClick={() => { setMenuOpen(false); setActiveScreen('profile') }}
             className="w-full flex items-center gap-2 px-3 py-2 text-xs text-slate-400 hover:bg-slate-800/60 hover:text-slate-200"
           >
             <UserIcon size={14} />
             Profile
-            <span className="ml-auto text-[10px] text-slate-600">soon</span>
           </button>
           <button
             onClick={async () => { setMenuOpen(false); await signOut() }}

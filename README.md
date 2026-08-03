@@ -1,6 +1,17 @@
-# Vector+ Studio v1.3 — Rich Pattern-0, Desktop Cart Builder, Edit Carts Drill-Down
+# Vector+ Studio v1.4 — User Profiles, Cart Sharing, and Per-Seat Memory
 
  I built Vector+ Studio (with Claude's help) to answer a specific question: what would search feel like if it found *related* ideas, not just matching words? The substrate is a neuromorphic lattice — physics-based retrieval that finds neighbors-by-meaning rather than nearest-by-distance. Try it at **https://project-you.app/vps/app** on the bundled sample carts, or drop in your own PDFs and the browser will build you a cartridge while you watch. No install, no GPU required. Sign in if you want your own private library; the demo carts are public and ready to search without signup. If your machine has real GPU horsepower and you want to build big carts locally, pair the [Vector+ Desktop Builder](https://github.com/project-you-apps/vector-plus-desktop-builder) — the web UI detects it and delegates builds automatically.
+
+**What's new in v1.4:**
+08-02-26
+
+- **User Profiles** — a Profile screen showing who you are, your seat, and every cart you can reach with its access level. Reachable from the nav rail or the account dropdown. It reads Supabase directly under row-level security rather than going through our API, so the database itself refuses to hand your browser someone else's row.
+- **Cart sharing with access levels** — `viewer` / `commenter` / `editor`, using the same vocabulary as the `.permissions.json` sidecar so a cart cannot grant write in one layer and deny it in another. Only an owner can grant or revoke, enforced in Postgres rather than in application code. **Ownership is not grantable**: it is proven by owning the cart row and holding the key that signs the cart, never by a string someone can write.
+- **Per-seat memory** — each seat now has its own attention: what *you* have read, marked, and returned to. Two people searching the same shared cart build different hierarchies over it. Attention is keyed to your account UUID rather than your email, because emails change and re-point history at the wrong person.
+- **Sub-cartridges** — a named selection of a cart, stored *by reference*: a parent pointer plus content keys, no passages and no embeddings copied. One cart can carry many views — per-person, per-topic, per-customer — for the cost of a small key list each.
+- **A firm-level view** — the shared cart keeps a record of what the *organisation* is warm on, not just what each person is. One person reading something forty times and forty people reading it once are the same access count and very different facts about a company.
+
+**A note on what access levels are and are not:** they control what you can *do* with a cart you can reach. They are not a secrecy boundary. Carts you have no access to are not filtered out of a list — they are not in your account at all. **Secrecy is separated by cart; scope is separated by view.**
 
 **What's new in v1.3:**
 07-03-26
