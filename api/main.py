@@ -27,7 +27,8 @@ except ImportError:
     pass
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form
+from fastapi import (FastAPI, HTTPException, WebSocket, WebSocketDisconnect,
+                     UploadFile, File, Form, Depends)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -194,6 +195,116 @@ def _cart_generation_module():
     return _CART_GENERATION
 
 
+# --- per-seat attention -----------------------------------------------------------
+# Until now the studio recorded NO per-seat attention at all. memory_server and membot
+# both track it; the product with the UI did not — so "Ben's hot stack versus Karthik's"
+# existed everywhere except the place you would show someone.
+#
+# The seat comes from the signed-in user's JWT `sub` when there is one, and from VPS_SEAT
+# otherwise, so a local single-user studio still accumulates a hot stack. No seat at all
+# means no recording — an anonymous visitor on the public demo should not be quietly
+# building someone's attention profile.
+_OVERLAY_MODULES = "unloaded"
+_OVERLAY_STORES: dict = {}
+
+
+def _overlay_modules():
+    """(overlay, overlay_store, subcart) or None. Cached; absence degrades to no tracking."""
+    global _OVERLAY_MODULES
+    if _OVERLAY_MODULES == "unloaded":
+        try:
+            import sys as _sys
+            added = _membot_dir not in _sys.path
+            if added:
+                _sys.path.insert(0, _membot_dir)
+            try:
+                ov = _load_membot_module("overlay")
+                store = _load_membot_module("overlay_store")
+                sc = _load_membot_module("subcart")
+                _OVERLAY_MODULES = (ov, store, sc) if all((ov, store, sc)) else None
+            finally:
+                if added and _membot_dir in _sys.path:
+                    _sys.path.remove(_membot_dir)
+        except Exception as e:                          # noqa: BLE001
+            print(f"[VPS] per-seat attention unavailable: {type(e).__name__}: {e}")
+            _OVERLAY_MODULES = None
+    return _OVERLAY_MODULES
+
+
+_SUCCESSION = "unloaded"
+
+
+def _succession_module():
+    """membot/succession_store.py — the changes sidecar. Cached; absence is non-fatal."""
+    global _SUCCESSION
+    if _SUCCESSION == "unloaded":
+        try:
+            import sys as _sys
+            added = _membot_dir not in _sys.path
+            if added:
+                _sys.path.insert(0, _membot_dir)
+            try:
+                _SUCCESSION = _load_membot_module("succession_store")
+            finally:
+                if added and _membot_dir in _sys.path:
+                    _sys.path.remove(_membot_dir)
+        except Exception as e:                          # noqa: BLE001
+            print(f"[VPS] succession log unavailable: {type(e).__name__}: {e}")
+            _SUCCESSION = None
+    return _SUCCESSION
+
+
+def _seat_for(user: dict | None) -> str | None:
+    """Which seat this request belongs to, or None when there isn't one."""
+    if isinstance(user, dict):
+        sub = user.get("sub")
+        if isinstance(sub, str) and sub.strip():
+            return sub.strip()
+    local = _os.environ.get("VPS_SEAT", "").strip()
+    return local or None
+
+
+def _overlay_store_for_mounted():
+    """Overlay store beside the mounted cart's save target, or None."""
+    mods = _overlay_modules()
+    if mods is None or not engine.mounted_name:
+        return None
+    _, store_mod, _ = mods
+    key = str(DATA_DIR)
+    existing = _OVERLAY_STORES.get(key)
+    if existing is None:
+        try:
+            existing = store_mod.OverlayStore(
+                _os.path.join(DATA_DIR, "overlays"),
+                parent_cart=f"{engine.mounted_name}.pkl")
+            _OVERLAY_STORES[key] = existing
+        except Exception as e:                          # noqa: BLE001
+            print(f"[VPS] overlay store unavailable: {type(e).__name__}: {e}")
+            return None
+    return existing
+
+
+def _record_seat_attention(seat: str | None, passages) -> None:
+    """Credit a seat for the passages a search returned. Best-effort, never fatal.
+
+    `passages` must be FULL bodies. The studio truncates for display in several places,
+    and hashing a truncated body yields content keys that match nothing in the parent —
+    silently, forever. Same trap membot had; same fix.
+    """
+    if not seat or not passages:
+        return
+    mods = _overlay_modules()
+    store = _overlay_store_for_mounted()
+    if mods is None or store is None:
+        return
+    _, _, sc = mods
+    try:
+        store.touch_many(seat, [sc.content_key(p) for p in passages])
+        store.flush()                                   # interval-gated; no-op when not due
+    except Exception as e:                              # noqa: BLE001
+        store.stats["last_error"] = f"touch: {e}"
+
+
 print(f"[VPS] Membox loader: membot dir = {_membot_dir}")
 try:
     # Strategy: temporarily prepend membot/ to sys.path JUST for this import
@@ -246,6 +357,7 @@ from . import reports_routes
 from . import llm_routes
 from . import agents_routes
 from . import profile_routes
+from .auth import get_current_user
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +466,33 @@ async def get_status():
         read_only=engine.read_only or READ_ONLY_MODE,
         read_only_mode=READ_ONLY_MODE,
         cart_permissions=engine.cart_permissions,
+        seat_attention=_seat_attention_status(),
     )
+
+
+def _seat_attention_status() -> dict:
+    """Whether per-seat attention is recording, and if not, WHICH of the three reasons."""
+    if _overlay_modules() is None:
+        return {"enabled": False, "reason": "overlay modules not importable"}
+    store = _overlay_store_for_mounted()
+    if store is None:
+        return {"enabled": False,
+                "reason": "no cart mounted" if not engine.mounted_name
+                          else "overlay store unavailable"}
+    local_seat = _os.environ.get("VPS_SEAT", "").strip()
+    report = store.report()
+    return {
+        "enabled": True,
+        "dir": str(store.dir),
+        "local_seat": local_seat or None,
+        "note": ("signed-in users are tracked by their own seat; VPS_SEAT is the fallback "
+                 "for local single-user use. Anonymous visitors are not tracked."),
+        "seats_loaded": report["seats_loaded"],
+        "rows": report["rows"],
+        "touches": report["touches"],
+        "flush_errors": report["flush_errors"],
+        "last_error": report["last_error"],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1954,7 +2092,8 @@ def _get_mounted_source_paths() -> list[str]:
 # ---------------------------------------------------------------------------
 
 @app.post("/api/search", response_model=SearchResponse)
-async def search_endpoint(req: SearchRequest):
+async def search_endpoint(req: SearchRequest,
+                          user: dict | None = Depends(get_current_user)):
     if not engine.mounted_name:
         return SearchResponse(
             query=req.query, mode="none", elapsed_ms=0,
@@ -2023,6 +2162,15 @@ async def search_endpoint(req: SearchRequest):
             perms=perms,
         ))
 
+    # Credit this seat for what it actually saw. Uses the FULL passage from the engine,
+    # never `preview` or the truncated `full_text` in the response — a content key computed
+    # from truncated text matches nothing in the cart, silently and permanently.
+    _record_seat_attention(
+        _seat_for(user),
+        [engine.passages[r['idx']] for r in results
+         if isinstance(r.get('idx'), int) and 0 <= r['idx'] < len(engine.passages)],
+    )
+
     return SearchResponse(
         query=req.query,
         mode=mode_label,
@@ -2045,6 +2193,70 @@ async def delete_pattern(idx: int):
         return MessageResponse(success=False, message=f"Invalid index: {idx}")
     engine.deleted_ids.add(idx)
     return MessageResponse(success=True, message=f"Pattern {idx} tombstoned")
+
+
+@app.put("/api/patterns/{idx}", response_model=MessageResponse)
+async def edit_pattern(idx: int, req: AddPassageRequest,
+                       user: dict | None = Depends(get_current_user)):
+    """Replace a passage: append the new text, tombstone the old, RECORD THE SUCCESSION.
+
+    THE VERB THAT WAS MISSING. Editing was previously two independent calls — POST a new
+    passage, DELETE the old one — with nothing recording that they were related. Since an
+    edit changes the body it changes the content key, so every sub-cart manifest holding the
+    old key had a dangling reference and every seat's overlay row for it went unresolved. A
+    curated cluster would shed members as they were edited, and a person's attention history
+    would lose exactly the passages they had worked on hardest. Nothing raised.
+
+    One call, so the relationship cannot be lost by a client that does step one and crashes.
+    """
+    _enforce_writable(idx=idx)
+    if engine.read_only:
+        return MessageResponse(success=False, message="Cartridge is read-only. Unlock first.")
+    if idx < 0 or idx >= len(engine.passages):
+        return MessageResponse(success=False, message=f"Invalid index: {idx}")
+
+    new_text = (req.text or "").strip()
+    if not new_text:
+        return MessageResponse(success=False, message="Replacement text is empty")
+
+    old_text = engine.passages[idx]
+    if old_text.strip() == new_text:
+        return MessageResponse(success=False, message="Text is unchanged — nothing to do")
+
+    # Append FIRST. If embedding fails we have changed nothing; tombstoning first would
+    # leave the passage deleted with no replacement.
+    added = await asyncio.to_thread(_add_passage_sync, new_text)
+    if not added.success:
+        return added
+    new_idx = len(engine.passages) - 1
+
+    # Record the relationship BEFORE tombstoning, for the same reason.
+    recorded = False
+    mods = _succession_module()
+    if mods is not None:
+        try:
+            mods.record(_os.path.join(DATA_DIR, f"{engine.mounted_name}.pkl"),
+                        old_text, new_text, seat=_seat_for(user) or "studio")
+            recorded = True
+        except Exception as e:                          # noqa: BLE001
+            # Loud, and reported to the caller. An edit whose succession was NOT recorded
+            # is exactly the silent-orphan case this endpoint exists to prevent, so the
+            # caller must be told rather than left assuming it worked.
+            print(f"[VPS] succession NOT recorded for edit of {idx}: "
+                  f"{type(e).__name__}: {e}")
+
+    engine.deleted_ids.add(idx)
+
+    if recorded:
+        message = (f"Pattern {idx} replaced by {new_idx}. Old text tombstoned; "
+                   f"clusters and per-seat attention will follow the edit.")
+    else:
+        message = (f"Pattern {idx} replaced by {new_idx}, but the succession link could "
+                   f"NOT be recorded. Clusters and attention pointing at the old text will "
+                   f"not follow this edit and will appear to lose it. Check the server log, "
+                   f"then re-record or restore.")
+    return MessageResponse(success=True, message=message,
+                           succession_recorded=recorded)
 
 
 @app.post("/api/patterns/{idx}/restore", response_model=MessageResponse)

@@ -122,6 +122,10 @@ class StatusResponse(BaseModel):
     # Absolute path of the mounted cart, or None. Frontend passes this back
     # to /api/cartridges/eject to identify which sandbox file to delete.
     mounted_path: str | None = None
+    # 2026-08-03 — per-seat attention. Reported even when OFF, and with the reason:
+    # a silently-absent feature is indistinguishable from a broken one, and this one
+    # can be off for three different reasons (no modules, no seat, no cart).
+    seat_attention: dict | None = None
 
 # --- Pattern-0 TOC (v1) ---
 # 2026-07-01 spec: left-side TOC panel on the Search tab that shows metadata
@@ -235,6 +239,12 @@ class PatternResponse(BaseModel):
 class MessageResponse(BaseModel):
     success: bool
     message: str
+    # Set by PUT /api/patterns/{idx}. An edit can SUCCEED while its succession link fails to
+    # record — the passage really was replaced, so returning success=False would be a lie —
+    # but that leaves clusters and per-seat attention pointing at text nobody will find
+    # again. A structured flag so a client can render a real warning instead of
+    # string-matching the message prose. None means "not an edit; not applicable".
+    succession_recorded: bool | None = None
 
 
 # --- Membox visualizer ---
