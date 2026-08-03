@@ -15,3 +15,7 @@ PyJWT>=2.8.0
 # Optional: main.py wraps the import in try/except so prod (systemd env)
 # works without it. Local dev pulls env from a gitignored .env file.
 python-dotenv>=1.0.0
+
+# Table extraction from text-layer PDFs (cartbuilder.parsers.extract_pdf_tables).
+# Was already installed in the working env but never declared.
+pdfplumber>=0.11.0

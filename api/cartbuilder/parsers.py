@@ -31,16 +31,278 @@ def scrub_lone_surrogates(text: str) -> str:
     return _LONE_SURROGATE_RE.sub('', text) if text else text
 
 
+def _join_single_char_runs(text: str, min_run: int = 3) -> str:
+    """Collapse runs of consecutive single-character lines into one line.
+
+    Business forms set narrow column headers vertically, one glyph per line.
+    PyMuPDF reads them top-to-bottom, so a Sysco invoice linearizes to:
+
+        S
+        P
+        T
+        L
+        I
+        LOC
+
+    That is 9% of the extracted lines on a real invoice and it is pure layout
+    artifact — it carries no meaning as separate lines, wastes embedding
+    signal, and looks broken in the passage viewer. Joining the run to
+    "S P T L I" keeps every character while costing five lines of noise.
+
+    Requires min_run consecutive singles so ordinary text (a lone "I", "a",
+    a list marker) is left alone.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    run: list[str] = []
+
+    def flush():
+        if len(run) >= min_run:
+            out.append(" ".join(run))
+        else:
+            out.extend(run)
+        run.clear()
+
+    for line in lines:
+        if len(line.strip()) == 1:
+            run.append(line.strip())
+        else:
+            flush()
+            out.append(line)
+    flush()
+    return "\n".join(out)
+
+
 def parse_pdf(filepath: Path) -> list[dict]:
     import fitz  # PyMuPDF
     doc = fitz.open(str(filepath))
     results = []
     for i, page in enumerate(doc):
-        text = page.get_text().strip()
+        text = _join_single_char_runs(page.get_text().strip())
         if text:
             results.append({"text": text, "page": i + 1, "source": filepath.name})
     doc.close()
     return results
+
+
+# Tables from text-layer PDFs.
+#
+# Until now, `tables` was only ever populated by the Image Builder OCR path,
+# so a SCANNED document produced table patterns and a DIGITAL one did not.
+# The better input produced the worse structure. `parse_pdf` above runs
+# PyMuPDF get_text(), which linearizes the page — on a vendor invoice the
+# headers come back as loose lines and every qty-to-description-to-price
+# relationship is gone.
+#
+# Concretely, on a real Sysco invoice the OCR path returned a header reading
+# `UNITTYTYTYTY...` and an extended price glued to a state fee as `86.61.58`,
+# while the same invoice as a digital PDF yields exact rows. Invoices, order
+# guides and statements are the core ingestion case and the table IS the
+# content, so the text route needs to produce tables too.
+#
+# Emits the same {html, page, bbox} shape Docling returns, so everything
+# downstream (`content_type: "table"` patterns, `_table_html_to_text`) is
+# unchanged.
+
+# Table extraction costs roughly 50-200ms/page, so long PDFs cap out. Matches
+# the classify sampling cap for the same reason: predictable ingest latency.
+PDF_TABLE_MAX_PAGES = 15
+# Two cells in one row is a table; one column is a list, and layout scaffolding
+# frequently parses as a single wide column.
+PDF_TABLE_MIN_COLS = 2
+PDF_TABLE_MIN_ROWS = 2
+
+
+# Empty cells get a visible placeholder rather than being left blank. On a wide
+# business form most cells are empty, and a markdown row of bare pipes gives a
+# reader no way to count columns or tell which value sits under which header —
+# the layout is the information. An interpunct is unobtrusive, unambiguously
+# "nothing here", and keeps the grid legible. Aesthetics of the cell don't
+# matter; the rows and columns reading correctly does.
+EMPTY_CELL = "·"
+
+
+def _cell_html(value) -> str:
+    text = "" if value is None else str(value).replace("\n", " ").strip()
+    if not text:
+        return EMPTY_CELL
+    return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+_SPACED_CAPS = "letter-spaced header repair"
+
+
+def _collapse_spaced(cell) -> str:
+    """'L O C' -> 'LOC'. Business forms set vertical headers as spaced capitals.
+
+    Only fires when EVERY token is a single character, so 'TOT.PCS', 'A 1' and
+    ordinary prose are untouched. Without this, a Sysco invoice header reads
+    'L O C | C O N T | T A X | P I' and no reader — human or model — can tell
+    those are LOC / CONT / TAX / PI.
+    """
+    # _normalize_columns pads short rows with None, so coerce before splitting.
+    text = "" if cell is None else str(cell)
+    parts = text.split()
+    if len(parts) > 1 and all(len(p) == 1 for p in parts):
+        return "".join(parts)
+    return text
+
+
+def _numeric_dominant(cell) -> bool:
+    """True for a VALUE cell, false for a sentence that happens to contain digits.
+
+    '37.99', '6001208', '9.52OZ' -> True.
+    'CALL 800-797-2627 OR EMAIL...' and the PACA legal paragraph -> False.
+    Length cap plus a 50% digit ratio is what separates them; 'contains a
+    digit' alone lets phone numbers and statute citations pose as data.
+    """
+    s = ("" if cell is None else str(cell)).strip()
+    if not s or len(s) > 24:
+        return False
+    digits = sum(ch.isdigit() for ch in s)
+    return bool(digits) and digits / len(s) >= 0.5
+
+
+def _split_table_rows(rows: list[list]):
+    """-> (header_row | None, data_rows, prose_rows).
+
+    A ruled business form is one big bordered region, so pdfplumber returns the
+    WHOLE PAGE as a single table: column headers, marketing copy, line items,
+    totals, signature block and legal boilerplate all in one grid. Rendering
+    that verbatim produces a 23-column wall where each prose sentence is
+    smeared across eight cells.
+
+    Split by shape rather than by keyword, so it generalizes past Sysco:
+      - data row  : >= 2 numeric-dominant cells (real values in real columns)
+      - header    : the first all-text row wide enough to be labels
+      - prose     : everything else — emitted as TEXT, never dropped
+
+    Nothing is discarded; prose is relocated out of the grid into the passage
+    body where it reads normally.
+    """
+    header, data, prose = None, [], []
+    for row in rows:
+        filled = [c for c in row if c]
+        if not filled:
+            continue
+        n_values = sum(1 for c in filled if _numeric_dominant(c))
+        if header is None and n_values == 0 and len(filled) >= 4:
+            header = row
+            continue
+        (data if n_values >= 2 else prose).append(row)
+    return header, data, prose
+
+
+def _merge_disjoint_columns(rows: list[list]) -> list[list]:
+    """Merge adjacent columns never both filled in the same row.
+
+    Lossless by construction: if two columns never co-occupy a row, one column
+    can hold both without a collision. Business forms produce many such
+    columns because different row types use different parts of the grid.
+    Measured on real Sysco invoices: 23 columns -> 14, no content lost.
+    """
+    while True:
+        width = max((len(r) for r in rows), default=0)
+        merged = False
+        for a in range(width - 1):
+            b = a + 1
+            if all(not (r[a] and r[b]) for r in rows):
+                for r in rows:
+                    r[a] = r[a] or r[b]
+                    del r[b]
+                merged = True
+                break
+        if not merged:
+            return rows
+
+
+def _normalize_columns(rows: list[list]) -> list[list]:
+    """Pad ragged rows to a uniform width, then drop all-empty columns.
+
+    The padding is the load-bearing half. pdfplumber returns ragged rows — on
+    one real invoice a header row had 23 cells and a continuation row had 2 —
+    and emitting those directly produces a malformed markdown table with
+    misaligned columns.
+
+    The all-empty-column drop is cheap insurance that measured ZERO hits
+    across 52 tables from 99 real Sysco invoices: on those forms every column
+    is populated in at least one row, so the table is genuinely 23 columns
+    wide rather than padded. Kept for other document shapes, but do not
+    expect it to tidy invoices — it won't, and the width you see is real.
+    """
+    width = max((len(r) for r in rows), default=0)
+    padded = [list(r) + [None] * (width - len(r)) for r in rows]
+    keep = [c for c in range(width)
+            if any(row[c] is not None and str(row[c]).strip() for row in padded)]
+    return [[row[c] for c in keep] for row in padded]
+
+
+def extract_pdf_tables(filepath: Path) -> list[dict]:
+    """Extract tables from a text-layer PDF -> [{html, page, bbox}].
+
+    Never raises: a table-extraction failure must not fail an ingest that
+    would otherwise succeed. On any error the caller gets [] and the document
+    still lands as text, which is exactly today's behaviour.
+    """
+    try:
+        import pdfplumber
+    except ImportError:
+        return []
+
+    out: list[dict] = []
+    try:
+        with pdfplumber.open(str(filepath)) as pdf:
+            for i, page in enumerate(pdf.pages[:PDF_TABLE_MAX_PAGES]):
+                try:
+                    found = page.find_tables()
+                except Exception:
+                    continue
+                for t in found:
+                    try:
+                        rows = t.extract()
+                    except Exception:
+                        continue
+                    rows = [r for r in (rows or [])
+                            if any(c is not None and str(c).strip() for c in r)]
+                    if len(rows) < PDF_TABLE_MIN_ROWS:
+                        continue
+                    if max((len(r) for r in rows), default=0) < PDF_TABLE_MIN_COLS:
+                        continue
+                    rows = _normalize_columns(rows)
+                    if max((len(r) for r in rows), default=0) < PDF_TABLE_MIN_COLS:
+                        continue
+
+                    # Repair letter-spaced headers before anything reads them.
+                    rows = [[_collapse_spaced(c) for c in r] for r in rows]
+
+                    # Lift running prose out of the grid, then collapse the
+                    # columns it was forcing open. Fall back to the whole grid
+                    # whenever this doesn't clearly apply — a table that isn't
+                    # a business form should come through exactly as before.
+                    header, data_rows, prose_rows = _split_table_rows(rows)
+                    notes: list[str] = []
+                    if header is not None and len(data_rows) >= 1:
+                        rows = _merge_disjoint_columns(
+                            [r[:] for r in ([header] + data_rows)])
+                        notes = [" ".join(c for c in r if c).strip()
+                                 for r in prose_rows]
+                        notes = [n for n in notes if n]
+
+                    body = "".join(
+                        "<tr>" + "".join(f"<td>{_cell_html(c)}</td>" for c in r) + "</tr>"
+                        for r in rows)
+                    out.append({
+                        "html": f"<table>{body}</table>",
+                        "page": i + 1,
+                        "bbox": list(t.bbox) if getattr(t, "bbox", None) else [],
+                        # Prose lifted out of the grid. The caller appends these
+                        # below the rendered table so the passage keeps every
+                        # word the page had, just not jammed into cells.
+                        "notes": notes,
+                    })
+    except Exception:
+        return []
+    return out
 
 
 # Day 2 — PDF classification for Image Builder routing. Mirrors the

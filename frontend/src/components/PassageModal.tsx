@@ -440,9 +440,15 @@ export default function PassageModal() {
                   blockquote: ({ children }) => (
                     <blockquote className="border-l-2 border-purple-500/40 pl-3 my-3 italic text-slate-400">{children}</blockquote>
                   ),
+                  // Wide invoice tables run past the modal edge. `table-scroll`
+                  // gives them a visible horizontal slider (see index.css) —
+                  // the previous 6px-width-only rule left the horizontal bar at
+                  // the browser default, so a 14-column Sysco table just looked
+                  // truncated. `min-w-max` stops the table compressing columns
+                  // to fit, which is what makes the values unreadable.
                   table: ({ children }) => (
-                    <div className="my-3 overflow-x-auto">
-                      <table className="border-collapse text-[13px]">{children}</table>
+                    <div className="my-3 table-scroll rounded-lg border border-slate-800/60">
+                      <table className="border-collapse text-[13px] min-w-max">{children}</table>
                     </div>
                   ),
                   th: ({ children }) => (

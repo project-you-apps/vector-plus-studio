@@ -32,7 +32,7 @@ from fastapi.responses import JSONResponse
 # ---------------------------------------------------------------------------
 
 try:
-    from .parsers import parse_file, chunk_texts, classify_pdf, is_image_file
+    from .parsers import parse_file, chunk_texts, classify_pdf, is_image_file, extract_pdf_tables
     from .builder import build_cart_async, get_state
     _CART_BUILDER_AVAILABLE = True
 except Exception as _e:  # pragma: no cover
@@ -268,6 +268,12 @@ def _process_upload(save_path: Path) -> dict:
     if route == "text":
         sections = parse_file(save_path)
         text_chunks = chunk_texts(sections)
+        # A text-layer PDF gets its tables too. Without this, a SCANNED invoice
+        # produced table patterns and a DIGITAL one did not — the better input
+        # giving the worse structure. Same {html, page, bbox} shape the OCR
+        # path returns, so the emit loop below is unchanged.
+        if save_path.suffix.lower() == ".pdf":
+            tables = extract_pdf_tables(save_path)
     else:
         try:
             ocr_result = _delegate_to_image_builder(save_path)
@@ -316,6 +322,13 @@ def _process_upload(save_path: Path) -> dict:
     for i, t in enumerate(tables):
         html = t.get("html") or ""
         text = _table_html_to_text(html) or f"Table {i + 1} of {display_source} Page {t.get('page') or 1}"
+        # Prose the extractor lifted out of the grid (marketing copy, legal
+        # boilerplate, signature blocks). Kept in the same passage, below the
+        # table, so the passage still contains every word on the page — it just
+        # reads as prose instead of being smeared across empty columns.
+        notes = [n for n in (t.get("notes") or []) if n]
+        if notes:
+            text = text + "\n\n" + "\n".join(notes)
         extra_chunks.append({
             "text": text,
             "page": t.get("page") or 1,

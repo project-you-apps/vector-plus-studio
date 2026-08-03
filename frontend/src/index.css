@@ -19,11 +19,24 @@ body {
   min-height: 100vh;
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: #1a1d2e; }
-::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+/* Custom scrollbar.
+   `height` matters as much as `width`: width styles the VERTICAL bar, height
+   the HORIZONTAL one. Only width was set, so every horizontally-scrolling
+   surface in the app fell back to the browser default and read as "content is
+   cut off" rather than "content scrolls". Wide invoice tables in the passage
+   modal were the case that surfaced it. */
+::-webkit-scrollbar { width: 6px; height: 10px; }
+::-webkit-scrollbar-track { background: #1a1d2e; border-radius: 5px; }
+::-webkit-scrollbar-thumb { background: #334155; border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+/* Wide data tables get a deliberately visible slider. A table cut off at the
+   modal edge with no obvious control looks broken; the affordance has to be
+   discoverable without hovering to find it. */
+.table-scroll { overflow-x: auto; scrollbar-color: #475569 #1a1d2e; scrollbar-width: thin; }
+.table-scroll::-webkit-scrollbar { height: 12px; }
+.table-scroll::-webkit-scrollbar-thumb { background: #4b5b74; border-radius: 6px; }
+.table-scroll::-webkit-scrollbar-thumb:hover { background: #64748b; }
 
 /* Gradient accent */
 .gradient-text {
