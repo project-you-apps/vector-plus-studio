@@ -176,6 +176,24 @@ def _load_membot_module(name: str):
     spec.loader.exec_module(mod)
     return mod
 
+
+# Cart generation counter (membot/cart_generation.py). Stdlib-only over there, so it needs
+# none of the sys.path juggling the Membox import below does. Loaded lazily and cached:
+# absence must degrade to "no staleness checking", never to a studio that will not boot.
+_CART_GENERATION = "unloaded"
+
+
+def _cart_generation_module():
+    global _CART_GENERATION
+    if _CART_GENERATION == "unloaded":
+        try:
+            _CART_GENERATION = _load_membot_module("cart_generation")
+        except Exception as e:                          # noqa: BLE001
+            print(f"[VPS] cart generation unavailable: {type(e).__name__}: {e}")
+            _CART_GENERATION = None
+    return _CART_GENERATION
+
+
 print(f"[VPS] Membox loader: membot dir = {_membot_dir}")
 try:
     # Strategy: temporarily prepend membot/ to sys.path JUST for this import
@@ -1025,6 +1043,24 @@ async def _dispatch_mount(helper_fn, *args) -> MountResponse:
         # on mount without a second round-trip. engine.cart_permissions is
         # populated by _apply_cart_permissions_after_mount above.
         resp.cart_permissions = engine.cart_permissions
+
+        # Record WHICH VERSION of the cart this mount loaded, so a later save can tell
+        # whether it would be overwriting someone else's newer work. Done here rather than
+        # in the five mount helpers because all of them funnel through this one function --
+        # and "fixed one call site, missed its sibling" has cost us four bugs this week.
+        #
+        # The save path resolves to DATA_DIR/<name>.pkl regardless of where the cart was
+        # mounted FROM, so the generation is tracked against the save target. A cart opened
+        # from elsewhere and saved into DATA_DIR is a copy, and copies do not conflict.
+        generation = _cart_generation_module()
+        engine.cart_generation = 0
+        if generation is not None:
+            try:
+                save_target = _os.path.join(DATA_DIR, f"{engine.mounted_name}.pkl")
+                engine.cart_generation = generation.read_generation(
+                    save_target)["generation"]
+            except Exception as e:                      # noqa: BLE001
+                print(f"[VPS] could not read cart generation: {type(e).__name__}: {e}")
     return resp
 
 
@@ -1754,6 +1790,25 @@ def _save_cartridge_sync() -> MessageResponse:
     _os.makedirs(DATA_DIR, exist_ok=True)
     save_path = _os.path.join(DATA_DIR, f"{cart_name}.pkl")
 
+    # REFUSE A STALE WRITE. A save here is destructive by design -- deleted passages do not
+    # come back, as a 2026-08-03 test confirmed. With more than one seat on a cart, writing
+    # our in-memory arrays over someone else's newer save silently reverts their work, and
+    # whole-cart last-writer-wins means a single passage edit can undo an afternoon.
+    #
+    # This REFUSES rather than merges. Merge logic built on the per-session-copy model
+    # would be discarded by the shared-mount change; a refusal survives it.
+    generation = _cart_generation_module()
+    if generation is not None:
+        try:
+            generation.assert_writable(
+                save_path, getattr(engine, "cart_generation", 0), seat="studio")
+        except generation.StaleCartError as e:
+            return MessageResponse(
+                success=False,
+                message=(f"Save refused — {e} Nothing was written; your in-memory "
+                         f"changes are intact. Reload the cart to catch up."),
+            )
+
     try:
         from .cartridge_io import save_cartridge_multimodal
 
@@ -1765,6 +1820,19 @@ def _save_cartridge_sync() -> MessageResponse:
         )
 
         saved_parts = [f"{len(engine.passages)} patterns saved to {save_path}"]
+
+        # Bump AFTER the write lands, never before: bumping first and then failing would
+        # leave every other session believing it is behind something that never happened.
+        if generation is not None:
+            try:
+                engine.cart_generation = generation.bump_generation(
+                    save_path, seat="studio")["generation"]
+            except Exception as gen_err:                # noqa: BLE001
+                # A cart that saved while its generation did not is a real hazard -- the
+                # NEXT save will look current when it is not -- so this is loud. It must
+                # not, however, make a successful save look like a failure.
+                print(f"[VPS] cart saved but generation bump FAILED for {save_path}: "
+                      f"{type(gen_err).__name__}: {gen_err}")
 
         # Save signatures if available
         if engine.signatures is not None and engine.signatures_loaded:

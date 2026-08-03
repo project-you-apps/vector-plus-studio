@@ -218,6 +218,10 @@ class EngineManager:
         # Cartridge state
         self.mounted_name: str | None = None
         self.mounted_path: str | None = None  # full path if opened from file picker
+        # Which version of the cart this mount loaded. A save compares it against the
+        # generation on disk and refuses if someone else has saved since -- otherwise a
+        # whole-cart write silently reverts their work. Set by _dispatch_mount.
+        self.cart_generation: int = 0
         self.embeddings: np.ndarray | None = None
         self.passages: list[str] = []
         self.compressed_lens: list[int] = []
@@ -314,6 +318,7 @@ class EngineManager:
         """Clear all cartridge state."""
         self.mounted_name = None
         self.mounted_path = None
+        self.cart_generation = 0
         self.embeddings = None
         self.passages = []
         self.compressed_lens = []
