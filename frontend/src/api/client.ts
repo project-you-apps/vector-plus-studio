@@ -2,6 +2,7 @@ import type {
   CartridgeInfo, SearchResponse, StatusResponse, DeletedPattern,
   SearchMode, PatternResponse, Pattern0Response, PerPatternMetaResponse,
   MemboxCartInfo, MemboxStatus, MemboxImprintRequest, MemboxMountRequest,
+  CartPermissions,
 } from './types'
 import { useAuthStore } from '../store/authStore'
 import {
@@ -145,7 +146,16 @@ export async function ejectCartridge(cartPath: string): Promise<{ success: boole
 }
 
 export async function mountCartridge(filename: string) {
-  return fetchJSON<{ success: boolean; message: string; name: string; pattern_count: number }>(
+  // 2026-07-23 -- Permission UI MVP #2. cart_permissions bubbles up from the
+  // backend's _dispatch_mount so appStore can populate currentCartPermissions
+  // in one round-trip. null when the cart has no .permissions.json sidecar.
+  return fetchJSON<{
+    success: boolean
+    message: string
+    name: string
+    pattern_count: number
+    cart_permissions?: CartPermissions | null
+  }>(
     '/cartridges/mount',
     { method: 'POST', body: JSON.stringify({ filename }) }
   )

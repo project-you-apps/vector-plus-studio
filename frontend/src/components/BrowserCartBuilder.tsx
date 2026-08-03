@@ -199,6 +199,12 @@ export default function BrowserCartBuilder() {
   const [metaAgentBriefing, setMetaAgentBriefing] = useState('')
   const [metaTags, setMetaTags] = useState('')
   const [metaOwner, setMetaOwner] = useState('')
+  // 2026-07-23 — Permission UI MVP #1: cart-level default at build time.
+  // Values map to `.permissions.json` schema (`r` = read-only, `rw` = editable).
+  // Default stays `rw` — matches the "you just built it in your browser, you
+  // own it" instinct from writer/permissions.ts. Picker sits above the Build
+  // button so users see the choice BEFORE they push.
+  const [permissionDefault, setPermissionDefault] = useState<'r' | 'rw'>('rw')
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   // Fix #11 (corrected 2026-06-30 PM): while the native file picker dialog is
   // open, the drop zone must reject drag-and-drop. Otherwise the user can
@@ -483,6 +489,10 @@ export default function BrowserCartBuilder() {
             onBackendChange: handleBackendChange,
             buildOptions: {
               pattern0Meta: meta,
+              // 2026-07-23 — thread the user-selected default through the
+              // writer's buildPermissions() so `.permissions.json` sidecar
+              // reflects the picker choice instead of the hardcoded 'rw'.
+              permissions: { default: permissionDefault },
             },
           }
         )
@@ -938,6 +948,50 @@ export default function BrowserCartBuilder() {
               </div>
             )
           })}
+        </div>
+      )}
+
+      {/* Permission default picker — visible ABOVE the Build button per
+          docs/vps-internal/permission-ui-scope-2026-07-18.md.
+          "The picker must be visible above the Build button, not tucked into a
+          Settings sub-menu, so the user sees what they're getting BEFORE they
+          push Build." Only surfaces once there's a queue to build. */}
+      {queued.length > 0 && (
+        <div className="mb-3 rounded-lg border border-slate-700 bg-slate-900/40 p-3 space-y-2">
+          <div className="text-[11px] uppercase tracking-wider text-slate-400">
+            Cart permission
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setPermissionDefault('rw')}
+              disabled={building}
+              className={`flex-1 rounded-md px-3 py-2 text-sm border transition-colors ${
+                permissionDefault === 'rw'
+                  ? 'bg-purple-500/30 border-purple-500/50 text-purple-100'
+                  : 'bg-slate-900/40 border-slate-700 text-slate-400 hover:border-slate-600'
+              } ${building ? 'cursor-not-allowed opacity-60' : ''}`}
+            >
+              Editable
+            </button>
+            <button
+              type="button"
+              onClick={() => setPermissionDefault('r')}
+              disabled={building}
+              className={`flex-1 rounded-md px-3 py-2 text-sm border transition-colors ${
+                permissionDefault === 'r'
+                  ? 'bg-amber-500/30 border-amber-500/50 text-amber-100'
+                  : 'bg-slate-900/40 border-slate-700 text-slate-400 hover:border-slate-600'
+              } ${building ? 'cursor-not-allowed opacity-60' : ''}`}
+            >
+              Read-Only
+            </button>
+          </div>
+          <div className="text-xs text-slate-500">
+            {permissionDefault === 'rw'
+              ? 'Editable: you can add or remove passages after the cart is built.'
+              : 'Read-Only: cart contents lock at build time. Users can view and copy passages but not modify the cart.'}
+          </div>
         </div>
       )}
 

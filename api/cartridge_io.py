@@ -633,14 +633,32 @@ def save_cart_permissions(cart_path: str, permissions: dict) -> str:
 def cart_permits_write(permissions: dict | None) -> bool:
     """Resolve whether the cart-level permissions allow writes.
 
-    Returns True if the cart's `default` includes 'w'. Absent/malformed
-    permissions default to True (rw) for backward compat with carts built
-    before Step 2a.
+    Delegates to `api.access` (2026-08-01) so this is not a second, drifting copy of the
+    permission rules. Canon `CARTRIDGE-FORMAT.md` §7.1.1: every enforcement point reads
+    `can(access_level, "write")` rather than testing the level directly.
+
+    **Dual-read.** `access_level` is preferred; a legacy `default` of r/rw/rwx still maps
+    (r→viewer, rw→editor, rwx→editor — `x` must not silently promote). Carts with no sidecar
+    at all stay writable, which is the pre-Step-2a behaviour and must not change.
+
+    **Two fail-OPEN cases are closed by this change — behaviour change, deliberate:**
+
+    | sidecar | before | now |
+    |---|---|---|
+    | `{}` (empty)                | **True** — `not {}` short-circuited | False |
+    | `{"description": "x"}`      | **True** — `.get("default","rw")` defaulted to writable | False |
+
+    Both are "a sidecar EXISTS and declares no permission we can read." Canon: *"A sidecar
+    carrying neither key, or an unrecognized role, resolves to the most restrictive
+    interpretation the caller supports — fail closed, never open."* Defaulting an
+    unreadable declaration to *writable* inverted that.
+
+    A cart whose sidecar has no `default` key now becomes read-only. That is the intended
+    correction; if a real cart depended on the old behaviour it was depending on a bug, and
+    the fix is to write an explicit `access_level` into its sidecar.
     """
-    if not permissions:
-        return True
-    default = str(permissions.get("default", "rw")).lower()
-    return "w" in default
+    from api.access import can, resolve_access_level
+    return can(resolve_access_level(permissions), "write")
 
 
 def validate_brain_manifest(brain_path, embeddings):

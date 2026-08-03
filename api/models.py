@@ -46,6 +46,16 @@ class MountResponse(BaseModel):
     brain_loaded: bool = False
     signatures_loaded: bool = False
     message: str = ""
+    # 2026-07-23 -- Permission UI MVP #2. Cart's .permissions.json sidecar
+    # payload, or None if the cart has no sidecar (legacy carts default to
+    # writable). Frontend reads this to know whether Edit Carts should
+    # surface the read-only banner + disable destructive actions.
+    # Populated by _apply_cart_permissions_after_mount() which loads the
+    # sidecar and sets engine.cart_permissions. Shape mirrors
+    # api/cartridge_io.py:load_cart_permissions -- typically
+    # {"default": "r" | "rw", "version": "1.0", "owner": "...",
+    #  "description": "..."} but any subset is valid.
+    cart_permissions: dict | None = None
 
 class SearchResult(BaseModel):
     rank: int

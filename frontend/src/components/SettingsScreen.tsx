@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Sun, Moon, Settings as SettingsIcon, Info } from 'lucide-react'
+import { Sun, Moon, Settings as SettingsIcon, Info, ShieldAlert, Unlock, Database } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 
 // Settings screen — global preferences and search defaults. Read-write,
@@ -51,6 +51,15 @@ export default function SettingsScreen() {
     strictMode, setStrictMode,
     exactMatch, setExactMatch,
   } = useAppStore()
+  // 2026-07-23 -- Permission UI MVP #5. Surface the mounted cart's
+  // permission sidecar as a chip + owner line so users can check "what
+  // access do I have on this thing?" without opening Edit Carts.
+  const status = useAppStore((s) => s.status)
+  const currentCartPermissions = useAppStore((s) => s.currentCartPermissions)
+  const backendMounted = !!status?.mounted_cartridge
+  const permissionWritable =
+    currentCartPermissions == null ||
+    (typeof currentCartPermissions.default === 'string' && currentCartPermissions.default.includes('w'))
 
   const [theme, setTheme] = useState(() =>
     document.documentElement.classList.contains('light') ? 'light' : 'dark'
@@ -71,6 +80,69 @@ export default function SettingsScreen() {
           </h1>
           <p className="text-sm text-slate-500">Global preferences, search defaults, appearance.</p>
         </div>
+
+        {/* 2026-07-23 -- Permission UI MVP #5. Mounted Cart section. Only
+            renders when a backend cart is mounted (LocalCarts have no
+            sidecar and are always writable, so the chip would just say
+            "Editable" every time -- noise). Chip mirrors the one in the
+            CRUDScreen banner + OpenCartBanner so users learn one visual. */}
+        {backendMounted && (
+          <Section title="Mounted Cart">
+            <div className="py-3 flex items-center gap-3">
+              <Database size={16} className="text-purple-400 flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-slate-200 truncate">
+                  {status?.mounted_cartridge}
+                </div>
+                <div className="text-xs text-slate-500">
+                  {status?.pattern_count?.toLocaleString() ?? 0} patterns
+                </div>
+              </div>
+              {permissionWritable ? (
+                <span
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-green-500/20 border border-green-500/40 text-green-300"
+                  title={
+                    currentCartPermissions == null
+                      ? 'Legacy cart — no permissions sidecar. Treated as writable by default.'
+                      : `Sidecar declares default="${currentCartPermissions.default}" — includes write access.`
+                  }
+                >
+                  <Unlock size={11} /> Editable
+                </span>
+              ) : (
+                <span
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-amber-500/20 border border-amber-500/40 text-amber-200"
+                  title="Cart owner has set this cart to read-only. Only the owner can change this."
+                >
+                  <ShieldAlert size={11} /> Read-only
+                </span>
+              )}
+            </div>
+            {currentCartPermissions && (
+              <div className="border-t border-slate-800 pt-3 pb-1 space-y-1.5 text-xs">
+                {currentCartPermissions.owner && (
+                  <div className="flex gap-3">
+                    <span className="text-slate-500 w-20 shrink-0">Owner</span>
+                    <span className="font-mono text-slate-300 truncate">{currentCartPermissions.owner}</span>
+                  </div>
+                )}
+                {currentCartPermissions.description && (
+                  <div className="flex gap-3">
+                    <span className="text-slate-500 w-20 shrink-0">About</span>
+                    <span className="text-slate-300 italic">{currentCartPermissions.description}</span>
+                  </div>
+                )}
+                {!permissionWritable && (
+                  <div className="mt-2 text-[11px] text-slate-500 leading-snug">
+                    To change permissions, the owner can rewrite the cart's{' '}
+                    <code className="font-mono text-slate-400">.permissions.json</code> sidecar
+                    (or use <code className="font-mono text-slate-400">bin/set_cart_permissions.py</code>).
+                  </div>
+                )}
+              </div>
+            )}
+          </Section>
+        )}
 
         {/* Search Defaults */}
         <Section title="Search Defaults">

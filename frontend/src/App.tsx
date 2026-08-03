@@ -17,6 +17,7 @@ import CRUDScreen from './components/CRUDScreen'
 import ReportsScreen from './components/ReportsScreen'
 import AgentsScreen from './components/AgentsScreen'
 import SQLEditorScreen from './components/SQLEditorScreen'
+import ProfileScreen from './components/ProfileScreen'
 import FolderPickerModal from './components/FolderPickerModal'
 import SignInModal from './components/SignInModal'
 import DesktopHelperPairModal from './components/DesktopHelperPairModal'
@@ -149,6 +150,8 @@ export default function App() {
         {activeScreen === 'agents' && <AgentsScreen />}
 
         {activeScreen === 'sql' && <SQLEditorScreen />}
+
+        {activeScreen === 'profile' && <ProfileScreen />}
 
         {activeScreen === 'settings' && <SettingsScreen />}
       </div>

@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type {
   CartridgeInfo, SearchResult, StatusResponse, DeletedPattern, SearchMode,
-  MemboxCartInfo, MemboxStatus,
+  MemboxCartInfo, MemboxStatus, CartPermissions,
 } from '../api/types'
 import * as api from '../api/client'
 import type { GenerateReportResponse, RunAgentResponse } from '../api/client'
@@ -128,7 +128,7 @@ export interface WalkStep {
 // Top-level screen state (nav rail picks which screen renders in the main area).
 // 'search' is the default; the original VPS 1.0 search/CRUD experience. Other
 // screens are stubbed in this iteration and fleshed out incrementally.
-export type ActiveScreen = 'search' | 'overview' | 'cartBuilder' | 'crud' | 'reports' | 'agents' | 'sql' | 'settings'
+export type ActiveScreen = 'search' | 'overview' | 'cartBuilder' | 'crud' | 'reports' | 'agents' | 'sql' | 'profile' | 'settings'
 
 // Current report display state — lifted from ReportsScreen.tsx 2026-07-13
 // so a report survives tab switches (Reports → Search → Reports resumes
@@ -297,6 +297,12 @@ interface AppState {
   // Cartridges
   cartridges: CartridgeInfo[]
   mounting: boolean
+  // 2026-07-23 -- Permission UI MVP #3. Snapshot of the currently-mounted
+  // cart's .permissions.json sidecar (as delivered by the mount response's
+  // cart_permissions field). null when no cart is mounted OR the cart has
+  // no sidecar (legacy carts default to writable). Consumers: CRUDScreen
+  // read-only banner, Settings + Overview permission badges.
+  currentCartPermissions: CartPermissions | null
 
   // Search
   searchMode: SearchMode
@@ -578,6 +584,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   statusLoading: false,
   cartridges: [],
   mounting: false,
+  currentCartPermissions: null,
 
   searchMode: 'hamming',
   blendAlpha: 0.7,
@@ -1574,6 +1581,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         pushToast('error', `Mount failed: ${resp.message || 'unknown error'}`, 8000)
         return
       }
+      // 2026-07-23 -- Permission UI MVP #3. Populate currentCartPermissions
+      // from the mount response so CRUDScreen / Settings / Overview know
+      // whether to surface read-only affordances. undefined -> null so
+      // downstream consumers only need to null-check.
+      set({ currentCartPermissions: resp.cart_permissions ?? null })
       await get().fetchStatus()
       await get().fetchCartridges()
       // Fetch per-pattern metadata sidecar so sandbox/server-mounted carts
@@ -1616,6 +1628,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         walkTrail: [], searchModeLabel: '', searchElapsed: 0,
         showTocPanel: true,
         sandboxPerPatternMeta: null,
+        // 2026-07-23 -- Permission UI MVP #3. Clear the mounted-cart perms
+        // snapshot so a subsequent read (banner, badge) doesn't render a
+        // ghost from the just-unmounted cart.
+        currentCartPermissions: null,
       })
       // Await both refreshes so a subsequent user click on the dropdown
       // observes fresh state, not the transiently-empty in-between window.

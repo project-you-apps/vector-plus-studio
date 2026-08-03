@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   Pencil, Plus, Save, Trash2, RotateCcw, Lock, Unlock, FilePlus2,
   FolderOpen, Folder, Database, AlertCircle, CheckCircle2, Loader2,
-  Hammer, ChevronRight, X, List, ChevronLeft, Search,
+  Hammer, ChevronRight, X, List, ChevronLeft, Search, ShieldAlert,
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import CartBrowser from './CartBrowser'
@@ -90,6 +90,12 @@ export default function CRUDScreen() {
   // below so Search's Pattern-0 TOC + results refetch on the next visit
   // without any polling loop or a full mount cycle.
   const bumpCartVersion = useAppStore((s) => s.bumpCartVersion)
+  // 2026-07-23 -- Permission UI MVP #4. Cart's .permissions.json sidecar
+  // payload from the last mount. Populated by appStore.mount(); cleared on
+  // unmount. `default` is a string like "r" | "rw" | "rwx"; the presence of
+  // 'w' in it means the current viewer may write. Legacy carts with no
+  // sidecar return null here => treated as writable (backward compat).
+  const currentCartPermissions = useAppStore((s) => s.currentCartPermissions)
 
   const activeLocalCart = activeLocalCartName ? localCarts.get(activeLocalCartName) ?? null : null
   const isLocalMount = !!activeLocalCart && !status?.mounted_cartridge
@@ -140,7 +146,20 @@ export default function CRUDScreen() {
   // Dirty tracks unsaved tombstones/adds for local carts; backend tracks its
   // own dirty flag via status.dirty.
   const mounted = isBackendMount || isLocalMount
-  const readOnly = isBackendMount ? !!status?.read_only : false
+  const lockReadOnly = isBackendMount ? !!status?.read_only : false
+  // 2026-07-23 -- Permission UI MVP #4. A cart's sidecar-declared permission
+  // is a hard override the *viewer* cannot toggle -- only the owner can
+  // rewrite the sidecar. Distinct from lockReadOnly (which the user CAN
+  // toggle via the Lock/Unlock button). Only applies to backend mounts;
+  // LocalCarts are always owned by the user on their own disk.
+  const permissionReadOnly =
+    isBackendMount &&
+    currentCartPermissions != null &&
+    typeof currentCartPermissions.default === 'string' &&
+    !currentCartPermissions.default.includes('w')
+  // effective = either source of read-only-ness. Every OpPanel disabled state
+  // reads this, not lockReadOnly, so the sidecar wins.
+  const readOnly = lockReadOnly || permissionReadOnly
   const dirty = isBackendMount ? !!status?.dirty : (activeLocalCart?.dirty ?? false)
   const patternCount = isBackendMount
     ? (status?.pattern_count ?? 0)
@@ -489,6 +508,43 @@ export default function CRUDScreen() {
         {/* Operations grid — only shown when there's a mounted cart */}
         {mode === 'open' && mounted && (
           <>
+            {/* 2026-07-23 -- Permission UI MVP #4. Prominent banner when the
+                mounted backend cart's .permissions.json sidecar declares the
+                cart read-only for this viewer. Above the ops grid so it
+                explains WHY Add/Update/Delete are disabled. Distinct from the
+                user's own Lock/Unlock toggle (which they can flip) -- this is
+                a permission the owner set that the viewer can't override. */}
+            {permissionReadOnly && (
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 flex items-start gap-3">
+                <ShieldAlert size={18} className="text-amber-300 flex-shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-amber-100 mb-1">
+                    This cart is read-only.
+                  </div>
+                  <div className="text-xs text-slate-300 leading-relaxed">
+                    Ask the owner to edit permissions to make changes.
+                    {currentCartPermissions?.owner && (
+                      <>
+                        {' '}Owner: <span className="font-mono text-amber-200">{currentCartPermissions.owner}</span>.
+                      </>
+                    )}
+                    {currentCartPermissions?.description && (
+                      <div className="text-[11px] text-slate-400 mt-1 italic">
+                        {currentCartPermissions.description}
+                      </div>
+                    )}
+                    <div className="text-[11px] text-slate-500 mt-2">
+                      You can still browse, search, and copy passages. Add / Update / Delete are disabled below.
+                    </div>
+                  </div>
+                </div>
+                {/* "Duplicate as editable copy" is deferred to a follow-up
+                    (needs a Save-As flow into a new writable cart). Leaving
+                    the affordance space open here so it's obvious where the
+                    button lands when it ships. */}
+              </div>
+            )}
+
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
               {/* Add panel. For LocalCart adds an additional 'source label'
                   input so the new passage gets a sourcePath entry (used by
@@ -498,7 +554,11 @@ export default function CRUDScreen() {
                 title="Add"
                 accent="green"
                 disabled={readOnly}
-                disabledReason="Cart is read-only — unlock first"
+                disabledReason={
+                  permissionReadOnly
+                    ? "Cart is read-only per its permissions — ask the owner to make it writable"
+                    : "Cart is read-only — unlock first"
+                }
               >
                 {isLocalMount && (
                   <input
@@ -588,7 +648,13 @@ export default function CRUDScreen() {
                 title="Update"
                 accent="cyan"
                 disabled={readOnly || isLocalMount}
-                disabledReason={isLocalMount ? undefined : 'Cart is read-only — unlock first'}
+                disabledReason={
+                  isLocalMount
+                    ? undefined
+                    : permissionReadOnly
+                      ? "Cart is read-only per its permissions — ask the owner to make it writable"
+                      : 'Cart is read-only — unlock first'
+                }
               >
                 {isLocalMount && (
                   <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 flex items-center gap-2">
@@ -648,7 +714,11 @@ export default function CRUDScreen() {
                 title="Delete"
                 accent="rose"
                 disabled={readOnly}
-                disabledReason="Cart is read-only — unlock first"
+                disabledReason={
+                  permissionReadOnly
+                    ? "Cart is read-only per its permissions — ask the owner to make it writable"
+                    : "Cart is read-only — unlock first"
+                }
               >
                 {isLocalMount && (
                   // Match the Mode-tabs pattern at top of Edit Carts (slate-800/40
@@ -955,18 +1025,29 @@ export default function CRUDScreen() {
           <div className="text-[11px] text-slate-500">{subDetail}</div>
         </div>
         {/* Lock toggle only meaningful for backend carts. Local carts are
-            always editable (user owns the file they picked from their disk). */}
-        {!isLocalMount && (
+            always editable (user owns the file they picked from their disk).
+            When the cart is permission-locked via its sidecar, the toggle is
+            replaced with an inert pill -- toggling would fake write access
+            the backend won't grant, so don't offer the affordance. */}
+        {!isLocalMount && permissionReadOnly && (
+          <span
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-amber-500/20 border border-amber-500/40 text-amber-200"
+            title="Cart owner has set this cart to read-only. Only the owner can change this."
+          >
+            <ShieldAlert size={11} /> Permission-locked
+          </span>
+        )}
+        {!isLocalMount && !permissionReadOnly && (
           <button
             onClick={toggleLock}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-              readOnly
+              lockReadOnly
                 ? 'bg-rose-500/20 border border-rose-500/40 text-rose-300 hover:bg-rose-500/30'
                 : 'bg-green-500/20 border border-green-500/40 text-green-300 hover:bg-green-500/30'
             }`}
-            title={readOnly ? 'Click to unlock for editing' : 'Click to lock (read-only)'}
+            title={lockReadOnly ? 'Click to unlock for editing' : 'Click to lock (read-only)'}
           >
-            {readOnly ? <><Lock size={11} /> Read-only</> : <><Unlock size={11} /> Editable</>}
+            {lockReadOnly ? <><Lock size={11} /> Read-only</> : <><Unlock size={11} /> Editable</>}
           </button>
         )}
         {isLocalMount && (

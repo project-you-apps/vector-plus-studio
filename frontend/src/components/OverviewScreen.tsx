@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Database, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
+import { Database, CheckCircle2, AlertCircle, Loader2, ShieldAlert, Unlock } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 
 // Overview screen — system health + cartridge inventory at a glance.
@@ -45,6 +45,27 @@ function HealthRow({ ok, label, detail }: { ok: boolean; label: string; detail?:
 
 export default function OverviewScreen() {
   const { status, cartridges, fetchStatus, fetchCartridges } = useAppStore()
+  // 2026-07-23 -- Permission UI MVP #6. Sidecar-declared permission for the
+  // mounted cart. Distinct from status.read_only (which is the user's own
+  // toggle) -- this is what the OWNER declared and the viewer cannot flip.
+  // Rendered as a compact chip on the Mounted card so at-a-glance answers
+  // "what access do I have?" without opening Settings or Edit Carts.
+  const currentCartPermissions = useAppStore((s) => s.currentCartPermissions)
+  const permissionWritable =
+    currentCartPermissions == null ||
+    (typeof currentCartPermissions.default === 'string' && currentCartPermissions.default.includes('w'))
+  // 2026-07-23 -- LocalCart fix for "Lock state" card. Reading
+  // status.read_only alone was misleading: for a LocalCart (mounted via the
+  // browser File System Access API), nothing is mounted on the backend, so
+  // status.read_only stays at its initial True default, and Overview
+  // wrongly reported "Read-only" for a cart the user owns and can edit.
+  // Now the card mirrors the same three-state logic Edit Carts uses:
+  // LocalCart -> Editable; backend + permission-locked -> Read-only (owner);
+  // backend + user-locked -> Read-only; backend + unlocked -> Editable.
+  const activeLocalCartName = useAppStore((s) => s.activeLocalCart)
+  const localCarts = useAppStore((s) => s.localCarts)
+  const activeLocalCart = activeLocalCartName ? localCarts.get(activeLocalCartName) ?? null : null
+  const isLocalMount = !!activeLocalCart && !status?.mounted_cartridge
   // Mirror Header.tsx's 3-way physics-engine detection so the Overview's
   // Engine card and the top-right pill agree (Andy 6/15 PM cosmetic bug:
   // pill said WebGPU while Overview said CPU). Backend engine (status.gpu_available)
@@ -70,6 +91,31 @@ export default function OverviewScreen() {
   }
 
   const totalSize = cartridges.reduce((sum, c) => sum + c.size_mb, 0)
+
+  // Lock-state display resolution -- three concepts collapsed into one card:
+  //   1. LocalCart mounted    -> always Editable (user owns the file on disk)
+  //   2. Backend + perm-locked -> Read-only (owner-declared, viewer can't flip)
+  //   3. Backend + user-locked -> Read-only (user's own toggle)
+  //   4. Backend + unlocked    -> Editable
+  //   5. Nothing mounted       -> hide dirty state, just show current backend flag
+  const lockDisplay: { label: string; sub: React.ReactNode; accent: Accent } =
+    isLocalMount
+      ? {
+          label: 'Editable',
+          sub: activeLocalCart?.dirty ? 'Unsaved local edits' : 'Clean (local)',
+          accent: 'green',
+        }
+      : status.mounted_cartridge && !permissionWritable
+        ? {
+            label: 'Read-only',
+            sub: 'Owner-declared',
+            accent: 'rose',
+          }
+        : {
+            label: status.read_only ? 'Read-only' : 'Editable',
+            sub: status.dirty ? 'Unsaved changes' : 'Clean',
+            accent: status.read_only ? 'rose' : 'green',
+          }
 
   return (
     <main className="flex-1 flex flex-col p-6 overflow-y-auto">
@@ -108,14 +154,49 @@ export default function OverviewScreen() {
           <StatCard
             label="Mounted"
             value={status.mounted_cartridge ?? <span className="italic text-slate-500 text-xl">None</span>}
-            sub={status.mounted_cartridge ? `${status.pattern_count.toLocaleString()} patterns` : 'No cartridge active'}
+            sub={
+              status.mounted_cartridge ? (
+                // 2026-07-23 -- Permission UI MVP #6. Compact chip beside the
+                // pattern count. Same visual language as CRUDScreen banner +
+                // Settings mounted-cart section so users learn one glyph:
+                // amber ShieldAlert = someone else set this read-only.
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span>{status.pattern_count.toLocaleString()} patterns</span>
+                  {permissionWritable ? (
+                    <span
+                      className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-green-500/15 text-green-300 border border-green-500/30"
+                      title={
+                        currentCartPermissions == null
+                          ? 'Legacy cart (no permissions sidecar). Treated as writable by default.'
+                          : `Cart is writable — sidecar default="${currentCartPermissions.default}".`
+                      }
+                    >
+                      <Unlock size={9} /> Editable
+                    </span>
+                  ) : (
+                    <span
+                      className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-amber-500/15 text-amber-200 border border-amber-500/30"
+                      title={
+                        currentCartPermissions?.owner
+                          ? `Cart owner (${currentCartPermissions.owner}) has set this cart to read-only.`
+                          : 'Cart owner has set this cart to read-only.'
+                      }
+                    >
+                      <ShieldAlert size={9} /> Read-only
+                    </span>
+                  )}
+                </div>
+              ) : (
+                'No cartridge active'
+              )
+            }
             accent={status.mounted_cartridge ? 'purple' : 'slate'}
           />
           <StatCard
             label="Lock state"
-            value={status.read_only ? 'Read-only' : 'Editable'}
-            sub={status.dirty ? 'Unsaved changes' : 'Clean'}
-            accent={status.read_only ? 'rose' : 'green'}
+            value={lockDisplay.label}
+            sub={lockDisplay.sub}
+            accent={lockDisplay.accent}
           />
           <StatCard
             label="Cartridges"

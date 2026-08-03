@@ -227,6 +227,7 @@ from . import uploads as uploads_mod
 from . import reports_routes
 from . import llm_routes
 from . import agents_routes
+from . import profile_routes
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +289,12 @@ app.include_router(llm_routes.router)
 # professor, cart_curator) self-register via @register_agent when
 # agents_routes imports them at module top.
 app.include_router(agents_routes.router)
+
+# Profiles / seats / cart sharing — GET /api/me, GET /api/me/carts, and the
+# grant endpoints. Enforcement lives in Postgres RLS (db/004_cart_grants.sql);
+# these routes run every query as the CALLING user, so a bug here can only
+# refuse access, never widen it.
+app.include_router(profile_routes.router)
 
 
 # ---------------------------------------------------------------------------
@@ -1013,6 +1020,11 @@ async def _dispatch_mount(helper_fn, *args) -> MountResponse:
     resp = await asyncio.to_thread(helper_fn, *args)
     if resp.success:
         _apply_cart_permissions_after_mount(engine.mounted_path)
+        # 2026-07-23 -- Permission UI MVP #2. Bubble cart_permissions into the
+        # response so the frontend appStore can populate currentCartPermissions
+        # on mount without a second round-trip. engine.cart_permissions is
+        # populated by _apply_cart_permissions_after_mount above.
+        resp.cart_permissions = engine.cart_permissions
     return resp
 
 
