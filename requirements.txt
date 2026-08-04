@@ -4,3 +4,21 @@ sentence-transformers>=2.2.0
 PyPDF2>=3.0.0
 pypdf>=3.0.0
 python-docx>=0.8.11
+
+# Supabase client — used by api/profile_routes.py for profiles, cart grants, and the
+# mount-gate RPC (api/cart_access.py). Undeclared until 2026-08-04, which is the SECOND
+# time this exact shape has bitten us: membot was missing `fastmcp` until 2026-08-01, found
+# by an outside cold-install audit. Both worked on machines that happened to have the
+# package from something else, which is why neither showed up in our own testing.
+#
+# The failure mode here was worse than an import error at startup: credentials were
+# present, the library was not, so the mount gate concluded it could not verify access and
+# fail-closed on EVERY cart. A missing dependency presented as a permissions outage.
+supabase>=2.0.0
+
+# OS certificate store for TLS verification. Consumer AV and corporate proxies MITM HTTPS
+# with their own CA; Norton Web/Mail Shield's is rejected by OpenSSL 3.x ("Basic Constraints
+# of CA cert not marked critical") while browsers accept it via the OS verifier. Without
+# this, HTTPS from Python fails on such machines -- which broke the mount gate and the
+# embedding model fetch on 2026-08-04. See the injection block at the top of api/main.py.
+truststore>=0.9.0

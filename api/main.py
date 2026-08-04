@@ -27,6 +27,31 @@ except ImportError:
     pass
 
 from contextlib import asynccontextmanager
+# Use the OPERATING SYSTEM's certificate store instead of certifi's bundle. Must run before
+# anything opens a TLS connection.
+#
+# WHY (2026-08-04): consumer antivirus and corporate proxies intercept HTTPS by presenting
+# their own CA. Norton Web/Mail Shield on this machine issues one whose Basic Constraints
+# extension is not marked critical, which OpenSSL 3.x rejects outright:
+#
+#     CERTIFICATE_VERIFY_FAILED: Basic Constraints of CA cert not marked critical
+#
+# Browsers are unaffected because they use the OS verifier, which is why the studio's
+# frontend reached Supabase while the API could not reach it from Python three feet away.
+# It broke the mount gate AND the embedding model download, and it would break on any
+# customer machine running similar security software -- a large fraction of small offices.
+#
+# truststore delegates verification to the OS, which is the same trust decision the browser
+# already made. Not a relaxation of verification: certificates are still fully verified,
+# just against the store the machine's administrator actually controls.
+try:
+    import truststore as _truststore
+    _truststore.inject_into_ssl()
+except Exception as _e:                                  # noqa: BLE001
+    print(f"[VPS] truststore unavailable ({type(_e).__name__}); using certifi bundle. "
+          f"If HTTPS calls fail with CERTIFICATE_VERIFY_FAILED, install it: "
+          f"pip install truststore")
+
 from fastapi import (FastAPI, HTTPException, WebSocket, WebSocketDisconnect,
                      UploadFile, File, Form, Depends, Request)
 from fastapi.middleware.cors import CORSMiddleware

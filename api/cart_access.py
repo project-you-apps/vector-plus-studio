@@ -113,7 +113,30 @@ def enforcement_available() -> bool:
     """
     key = (os.environ.get("SUPABASE_PUBLISHABLE_KEY")
            or os.environ.get("SUPABASE_ANON_KEY"))
-    return bool(os.environ.get("SUPABASE_URL") and key)
+    if not (os.environ.get("SUPABASE_URL") and key):
+        return False
+
+    # The CLIENT LIBRARY is part of "configured", and leaving it out cost us a working
+    # studio on 2026-08-04: credentials were present, `supabase` was not installed, every
+    # lookup raised, the gate fell back to fail-closed, and EVERY MOUNT returned 503.
+    #
+    # Two facts were being collapsed into one branch, and they deserve opposite answers:
+    #
+    #   library missing      -> enforcement can NEVER work here. A permanent configuration
+    #                           fact. Refusing every mount forever protects nothing and
+    #                           breaks everything, so: unavailable, and say so loudly.
+    #   library present,
+    #   database unreachable -> a TRANSIENT outage, and the one moment enforcement matters.
+    #                           Fail closed (see lookup_failed).
+    try:
+        import supabase  # noqa: F401
+    except ImportError:
+        log.warning(
+            "cart access enforcement DISABLED: SUPABASE_URL and a key are set, but the "
+            "`supabase` client library is not installed. Mounts are permitted unchecked. "
+            "Install it (pip install supabase) to enable the mount gate.")
+        return False
+    return True
 
 
 def decide(*, registered: bool, owner_id: str | None, grant_level: str | None,

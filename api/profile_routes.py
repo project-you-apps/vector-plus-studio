@@ -102,7 +102,18 @@ def _supabase(user_token: str):
             detail=("SUPABASE_URL / SUPABASE_PUBLISHABLE_KEY (or SUPABASE_ANON_KEY) "
                     "not configured"))
     client = create_client(url, key)
-    client.postgrest.auth(user_token)
+    # Only attach a token when we actually have one. postgrest.auth("") raises
+    # ValueError("Neither bearer token or basic authentication scheme is provided"), so an
+    # anonymous caller used to crash here -- and the mount gate reported that crash as
+    # "could not verify access", refusing every anonymous mount with a 503 that looked like
+    # a service outage rather than the missing header it was.
+    #
+    # Without a token the client acts as `anon`, which is exactly what db/005's
+    # `cart_access_for()` expects: auth.uid() is null, so it answers 'unregistered' for an
+    # unmanaged cart and NULL (denied) for a registered one. Anonymous is a legitimate
+    # caller here, not an error.
+    if user_token:
+        client.postgrest.auth(user_token)
     return client
 
 

@@ -143,3 +143,41 @@ def test_audit_line_names_seat_cart_and_reason():
 def test_audit_line_marks_anonymous_without_inventing_a_seat():
     d = decide(registered=True, owner_id=OWNER_SEAT, grant_level=None, seat=None)
     assert "anonymous" in d.audit("payroll.pkl", None)
+
+
+# ------------------------------------------------------- the client library is config too
+
+def test_enforcement_off_when_supabase_library_missing(monkeypatch):
+    """Credentials present, library absent -> unavailable, NOT fail-closed.
+
+    Regression for 2026-08-04: the studio had SUPABASE_URL and a key but no `supabase`
+    package (it was never in requirements.txt). Every lookup raised, the gate fell back to
+    fail-closed, and EVERY MOUNT returned 503 -- a missing dependency presenting as a
+    permissions outage.
+
+    A missing library is a PERMANENT fact: enforcement can never work, so refusing forever
+    protects nothing. A reachable library with an unreachable database is TRANSIENT and is
+    exactly when fail-closed matters. Different facts, opposite answers.
+    """
+    import builtins
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
+
+    real_import = builtins.__import__
+
+    def no_supabase(name, *a, **kw):
+        if name == "supabase":
+            raise ImportError("No module named 'supabase'")
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", no_supabase)
+    assert enforcement_available() is False
+
+
+def test_publishable_key_also_enables_enforcement(monkeypatch):
+    """The migration renames anon -> publishable. Gating on the old name only would switch
+    enforcement OFF at the moment of a rename -- a security control disabled by a rename."""
+    monkeypatch.delenv("SUPABASE_ANON_KEY", raising=False)
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "pub-key")
+    assert enforcement_available() is True
