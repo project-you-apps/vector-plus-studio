@@ -1,3 +1,4 @@
+/*
 -- =============================================================================
 -- 005 — cart_access_for(): the caller's effective access to a cart BY FILENAME
 -- =============================================================================
@@ -38,6 +39,7 @@
 -- because the day we host two firms with a `payroll.pkl` each is the day it
 -- matters, and it will not announce itself.
 -- =============================================================================
+*/
 
 create or replace function public.cart_access_for(p_filename text)
 returns text
@@ -52,10 +54,11 @@ begin
   if p_filename is null or length(trim(p_filename)) = 0 then
     return null;
   end if;
-
+  /*
   -- Registered at all? Any owner's row counts: the question here is whether the
   -- NAME is under management, which is what separates a legacy cart from a
   -- governed one.
+  */
   if not exists (select 1 from public.user_carts uc
                   where uc.cart_filename = p_filename) then
     return 'unregistered';
@@ -86,14 +89,16 @@ begin
   return v_level;                    -- null when registered and ungranted: denied
 end;
 $$;
-
+/*
 -- `authenticated` covers signed-in seats; `anon` is included so an anonymous
 -- caller receives an honest "denied" from the function rather than a permission
 -- error the API would have to guess the meaning of.
+*/
 grant execute on function public.cart_access_for(text) to authenticated, anon;
 
-
+/*
 -- ---------------------------------------------------------------------------
 -- verification (expect: 'unregistered' for a name no one has registered)
 -- ---------------------------------------------------------------------------
 -- select public.cart_access_for('definitely-not-a-real-cart.pkl');
+*/
