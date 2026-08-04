@@ -28,7 +28,7 @@ except ImportError:
 
 from contextlib import asynccontextmanager
 from fastapi import (FastAPI, HTTPException, WebSocket, WebSocketDisconnect,
-                     UploadFile, File, Form, Depends)
+                     UploadFile, File, Form, Depends, Request)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -357,7 +357,24 @@ from . import reports_routes
 from . import llm_routes
 from . import agents_routes
 from . import profile_routes
+from . import cart_access
 from .auth import get_current_user
+
+# What a refused mount tells the caller. Wording matters more than usual here: it is read
+# by someone who believes they should have access, so each one names the fix rather than
+# just the refusal. None of them reveal whether the cart EXISTS beyond what the caller
+# already knew by naming it.
+_MOUNT_REFUSAL_DETAIL = {
+    cart_access.DECISION_NO_GRANT:
+        "You do not have access to this cart. Ask its owner to grant you a level "
+        "(viewer, commenter, or editor) from their Profile screen.",
+    cart_access.DECISION_ANONYMOUS:
+        "Sign in to open this cart. It is registered to an account, so it cannot be "
+        "opened anonymously.",
+    cart_access.DECISION_LOOKUP_FAILED:
+        "Cart access could not be verified right now, so the mount was refused rather "
+        "than allowed unchecked. This is a service problem, not a permissions one.",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -1176,6 +1193,19 @@ async def _dispatch_mount(helper_fn, *args) -> MountResponse:
     resp = await asyncio.to_thread(helper_fn, *args)
     if resp.success:
         _apply_cart_permissions_after_mount(engine.mounted_path)
+
+        # Apply the grant level resolved at the gate. Done HERE, after the sidecar, for the
+        # same reason the generation stamp is: all five mount helpers funnel through this
+        # one function, and "fixed one call site, missed its sibling" has cost us five bugs
+        # this week.
+        #
+        # This only ever TIGHTENS. A viewer or commenter is forced read-only; an owner or
+        # editor does not get their read-only flag cleared, because a cart the user
+        # deliberately locked should stay locked. Permission to write is not an instruction
+        # to unlock.
+        decision = getattr(engine, "mount_decision", None)
+        if decision is not None and decision.level and not decision.may_write:
+            engine.read_only = True
         # 2026-07-23 -- Permission UI MVP #2. Bubble cart_permissions into the
         # response so the frontend appStore can populate currentCartPermissions
         # on mount without a second round-trip. engine.cart_permissions is
@@ -1202,10 +1232,48 @@ async def _dispatch_mount(helper_fn, *args) -> MountResponse:
     return resp
 
 
+def _gate_mount(request: Request, user: dict | None, filename: str):
+    """Resolve whether this seat may mount this cart. See api/cart_access.py.
+
+    Looks up by BASENAME: `user_carts.cart_filename` is the name on disk, while a mount
+    request may carry an absolute path from the Open dialog. Comparing the two directly
+    would register every cart as legacy and quietly disable the gate -- a fail-open that
+    would look exactly like working code.
+    """
+    if not cart_access.enforcement_available():
+        return cart_access.decide(registered=False, owner_id=None, grant_level=None,
+                                  seat=None, enforced=False)
+
+    try:
+        client = profile_routes._supabase(profile_routes._token(request))
+        return cart_access.lookup(client, _os.path.basename(filename), _seat_for(user))
+    except Exception as e:                              # noqa: BLE001
+        # Log the TYPE, not just the message: a bare `except` reporting a NameError as
+        # "attention unavailable" cost us an hour on 2026-08-03.
+        print(f"[VPS] cart access lookup failed: {type(e).__name__}: {e}")
+        return cart_access.lookup_failed()
+
+
 @app.post("/api/cartridges/mount", response_model=MountResponse)
-async def mount_cartridge(req: MountRequest):
+async def mount_cartridge(req: MountRequest, request: Request,
+                          user: dict | None = Depends(get_current_user)):
+    # Access check BEFORE the unmount below. A refused mount must not have the side effect
+    # of dropping the cart the caller already had open -- "you may not open that" should
+    # not also mean "and I closed the one you were using."
+    decision = _gate_mount(request, user, req.filename)
+    print(f"[Mount] {decision.audit(req.filename, _seat_for(user))}")
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=403 if decision.reason != cart_access.DECISION_LOOKUP_FAILED else 503,
+            detail=_MOUNT_REFUSAL_DETAIL.get(decision.reason, "Cart access denied."))
+
     # Unmount current if any
     engine.unmount()
+
+    # Stash AFTER the unmount: engine.unmount() may reset mount-scoped state, and a stale
+    # decision from a previous mount governing this one would be a permission bug of the
+    # worst kind -- the previous cart's level applied to the next cart's data.
+    engine.mount_decision = decision
 
     filename = req.filename
     print(f"[Mount] filename='{filename}' isabs={os.path.isabs(filename)} exists={os.path.exists(filename)}")
