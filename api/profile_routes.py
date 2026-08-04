@@ -47,8 +47,24 @@ from .profiles import (
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["profiles"])
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
+def supabase_url() -> str:
+    return (os.environ.get("SUPABASE_URL") or "").strip()
+
+
+def supabase_client_key() -> str:
+    """The browser-safe key: publishable (new) or anon (legacy).
+
+    Supabase's asymmetric-key migration renames `anon` to a *publishable* key. Both names
+    are accepted so the swap in `docs/RUNBOOK-jwt-migration-and-key-revoke-2026-08-04.md`
+    is not order-sensitive against a deploy -- an env file updated before or after the new
+    code lands works either way.
+
+    Read at call time, not import. The previous module constants froze whatever the
+    environment held when the first import ran, which made the migration untestable and
+    hid a live fact behind a startup snapshot.
+    """
+    return (os.environ.get("SUPABASE_PUBLISHABLE_KEY")
+            or os.environ.get("SUPABASE_ANON_KEY") or "").strip()
 
 
 # --------------------------------------------------------------------- models
@@ -79,10 +95,13 @@ def _supabase(user_token: str):
     except ImportError as e:                       # pragma: no cover - env dependent
         raise HTTPException(status_code=503,
                             detail=f"supabase client not installed: {e}")
-    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
-        raise HTTPException(status_code=503,
-                            detail="SUPABASE_URL / SUPABASE_ANON_KEY not configured")
-    client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+    url, key = supabase_url(), supabase_client_key()
+    if not url or not key:
+        raise HTTPException(
+            status_code=503,
+            detail=("SUPABASE_URL / SUPABASE_PUBLISHABLE_KEY (or SUPABASE_ANON_KEY) "
+                    "not configured"))
+    client = create_client(url, key)
     client.postgrest.auth(user_token)
     return client
 

@@ -102,11 +102,18 @@ class MountDecision:
 def enforcement_available() -> bool:
     """True when the deployment has an auth system whose answers could bind.
 
+    Accepts either key name: `SUPABASE_PUBLISHABLE_KEY` (asymmetric-key migration) or
+    `SUPABASE_ANON_KEY` (legacy). Checking only the legacy name would silently switch
+    enforcement OFF the moment the key was renamed during the migration -- a security
+    control disabled by a rename is exactly the failure this module exists to prevent.
+
     Deliberately reads the environment at call time rather than at import: the tests and
     the desktop build both toggle it, and a module-level constant would freeze whichever
     state happened to exist when the first import ran.
     """
-    return bool(os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_ANON_KEY"))
+    key = (os.environ.get("SUPABASE_PUBLISHABLE_KEY")
+           or os.environ.get("SUPABASE_ANON_KEY"))
+    return bool(os.environ.get("SUPABASE_URL") and key)
 
 
 def decide(*, registered: bool, owner_id: str | None, grant_level: str | None,
