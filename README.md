@@ -48,6 +48,27 @@
 - **Eject** — bring-your-own carts can be unmounted and removed from the sandbox in one click
 - **Same physics engine** — the hosted droplet runs the same `lattice_cuda_v7.dll` as the desktop app, just behind FastAPI
 
+### If HTTPS fails but your browser works
+
+If a first search, cart build, sign-in, or cart mount fails with
+`CERTIFICATE_VERIFY_FAILED` -- while a browser on the same machine reaches the same address
+fine -- your machine is **intercepting TLS**. Consumer antivirus (Norton, Avast, Kaspersky,
+ESET) and corporate proxies do this by presenting their own certificate. Browsers accept it
+because they verify against the OS trust store; Python verifies against a bundled CA set
+that has never heard of it.
+
+`requirements.txt` includes [`truststore`](https://pypi.org/project/truststore/), which
+routes verification through the OS store -- the same decision your browser already makes.
+A normal install handles it. **Verification stays fully on**; this changes where trust comes
+from, not whether it is checked.
+
+Watch for it especially when a cart **mount** returns 503: a TLS failure inside an access
+check is indistinguishable from a permissions outage, and the error will not mention
+certificates.
+
+Full diagnosis, an admin-facing section, and a one-line check:
+[docs/TROUBLESHOOTING-TLS-INTERCEPTION.md](../docs/TROUBLESHOOTING-TLS-INTERCEPTION.md)
+
 ## Quick Start (Hosted Demo)
 
 1. Visit `https://project-you.app/vps/app`
