@@ -1269,9 +1269,19 @@ def _gate_mount(request: Request, user: dict | None, filename: str):
         return cart_access.decide(registered=False, owner_id=None, grant_level=None,
                                   seat=None, enforced=False)
 
+    # Identity for the GATE comes from the verified token ONLY -- never from _seat_for(),
+    # whose VPS_SEAT fallback is a local convenience for attributing attention.
+    #
+    # 2026-08-05: with VPS_SEAT set, an anonymous mount of a registered cart was refused as
+    # "no-grant" instead of "anonymous", so the user was told to ask the owner for access
+    # when all they had to do was sign in. Access was never actually bypassed -- the
+    # authoritative answer is cart_access_for(), which reads auth.uid() from the token and
+    # correctly denied. But an env var must not shape an access decision even when it cannot
+    # grant one: the day it CAN is the day nobody remembers this line.
+    seat = user.get("sub") if isinstance(user, dict) else None
     try:
         client = profile_routes._supabase(profile_routes._token(request))
-        return cart_access.lookup(client, _os.path.basename(filename), _seat_for(user))
+        return cart_access.lookup(client, _os.path.basename(filename), seat)
     except Exception as e:                              # noqa: BLE001
         # Log the TYPE, not just the message: a bare `except` reporting a NameError as
         # "attention unavailable" cost us an hour on 2026-08-03.
@@ -1286,7 +1296,9 @@ async def mount_cartridge(req: MountRequest, request: Request,
     # of dropping the cart the caller already had open -- "you may not open that" should
     # not also mean "and I closed the one you were using."
     decision = _gate_mount(request, user, req.filename)
-    print(f"[Mount] {decision.audit(req.filename, _seat_for(user))}")
+    # Log the TOKEN's seat, not _seat_for()'s -- an audit line that prints VPS_SEAT for an
+    # unauthenticated caller records a person who was never there.
+    print(f"[Mount] {decision.audit(req.filename, user.get('sub') if isinstance(user, dict) else None)}")
     if not decision.allowed:
         raise HTTPException(
             status_code=403 if decision.reason != cart_access.DECISION_LOOKUP_FAILED else 503,

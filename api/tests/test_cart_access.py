@@ -21,6 +21,27 @@ from api.cart_access import (
 OWNER_SEAT = "11111111-1111-1111-1111-111111111111"
 OTHER_SEAT = "22222222-2222-2222-2222-222222222222"
 
+# Every Supabase variable enforcement_available() consults. Cleared before each test so no
+# case depends on ambient environment.
+_ENFORCEMENT_VARS = ("SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_PUBLISHABLE_KEY")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_env(monkeypatch):
+    """Start every test from a known-empty environment.
+
+    `api/main.py` calls `load_dotenv()` AT IMPORT, so any test in the suite that imports it
+    loads the developer's real .env into os.environ for the whole session. On 2026-08-05,
+    once .env gained a live SUPABASE_PUBLISHABLE_KEY, `test_enforcement_needs_both_halves`
+    began failing in the suite while passing alone: it cleared SUPABASE_ANON_KEY but the
+    publishable key was still there from the dotenv load.
+
+    Clearing per test rather than fixing the import, because loading .env at import is the
+    right behaviour for the app -- it is only wrong to let a test inherit it.
+    """
+    for var in _ENFORCEMENT_VARS:
+        monkeypatch.delenv(var, raising=False)
+
 
 # ----------------------------------------------------------------- legacy carts
 
@@ -181,3 +202,24 @@ def test_publishable_key_also_enables_enforcement(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "pub-key")
     assert enforcement_available() is True
+
+
+def test_anonymous_reason_is_anonymous_not_no_grant():
+    """An unauthenticated caller must be told to SIGN IN, not to ask the owner.
+
+    Regression for 2026-08-05: VPS_SEAT was set in the shell, `_seat_for()` fell back to it
+    when no token was present, and the gate therefore saw a seat where there was no
+    authenticated user -- refusing a registered cart as 'no-grant'. The user was told to
+    request access from the owner when all they needed to do was log in.
+
+    Access was never bypassed (cart_access_for() reads auth.uid() and correctly denied), but
+    an environment variable must not shape an access decision even when it cannot grant one.
+    The gate now takes identity from the verified token only.
+    """
+    d = decide(registered=True, owner_id=OWNER_SEAT, grant_level=None, seat=None)
+    assert d.reason == DECISION_ANONYMOUS
+    assert not d.allowed
+
+    # And with a seat present it is a genuine no-grant, which is a different message.
+    d2 = decide(registered=True, owner_id=OWNER_SEAT, grant_level=None, seat=OTHER_SEAT)
+    assert d2.reason == DECISION_NO_GRANT
