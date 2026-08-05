@@ -9,10 +9,20 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   base: process.env.VITE_BASE || '/',
   server: {
+    // Backend target is env-driven so several full stacks can run side by side, each
+    // frontend talking to its OWN backend:
+    //
+    //   VITE_API_TARGET=http://localhost:8001 npm run dev -- --port 5174
+    //
+    // Needed because `engine` is a process-level singleton with ONE mounted cart. Three
+    // browsers against one backend give three real identities sharing one open cart, so
+    // whoever mounts last silently changes what everyone else is looking at. Separate
+    // processes are the only way to have three people on three different carts today.
     proxy: {
-      '/api': 'http://localhost:8000',
+      '/api': process.env.VITE_API_TARGET || 'http://localhost:8000',
       '/ws': {
-        target: 'ws://localhost:8000',
+        target: (process.env.VITE_API_TARGET || 'http://localhost:8000')
+          .replace(/^http/, 'ws'),
         ws: true,
       },
     },
