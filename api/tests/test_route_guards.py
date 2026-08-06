@@ -224,3 +224,44 @@ def test_unenforced_writes_are_deferred_not_refused(monkeypatch):
     _decision(monkeypatch, registered=False, owner_id=None, grant_level=None, seat=None,
               enforced=False)
     assert cart_guard.require_cart_write(_Req(), None) is not None
+
+
+# ------------------------------------------------ per-passage read control (PERM_R)
+
+def test_pattern_permits_read_matches_is_readable_semantics():
+    """The two implementations of "is this passage readable" must agree, forever.
+
+    Read control grew two implementations: CartHandle.is_readable (honoured by the AGENT
+    retrieval path) and nothing at all on /api/search, which read the perms, returned them
+    in every result, and never filtered. A passage marked unreadable was therefore hidden
+    from agents and shown to people -- canon §7.1.2 requires BOTH cart access and PERM_R,
+    and we enforced the second on one path of two.
+
+    These cases mirror is_readable exactly. If they ever diverge, one caller starts leaking.
+    """
+    from api.cartridge_io import pattern_permits_read, PERM_R, PERM_W
+
+    # Legacy / absent -> readable. Anything stricter hides every existing cart.
+    assert pattern_permits_read(None) is True
+    assert pattern_permits_read({}) is True
+    assert pattern_permits_read({"perms": None}) is True
+    assert pattern_permits_read({"perms": {}}) is True
+
+    # Explicit grants.
+    assert pattern_permits_read({"perms": {"r": True,  "w": False}}) is True
+    assert pattern_permits_read({"perms": {"r": False, "w": True}}) is False
+
+
+def test_read_and_write_helpers_are_independent():
+    """A passage can be readable-not-writable, or writable-not-readable.
+
+    Sounds odd until you want an append-only record nobody may re-read, or a reference
+    passage nobody may edit. The bits are orthogonal; the helpers must not conflate them.
+    """
+    from api.cartridge_io import pattern_permits_read, pattern_permits_write
+
+    read_only = {"perms": {"r": True, "w": False}}
+    assert pattern_permits_read(read_only) and not pattern_permits_write(read_only)
+
+    write_only = {"perms": {"r": False, "w": True}}
+    assert not pattern_permits_read(write_only) and pattern_permits_write(write_only)

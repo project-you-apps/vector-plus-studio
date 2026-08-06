@@ -400,6 +400,7 @@ from .cartridge_io import (
     find_cartridge_path, find_companion_file, validate_brain_manifest,
     save_brain_manifest, save_signatures, DATA_DIR, parse_hippocampus,
     load_cart_permissions, cart_permits_write, pattern_permits_write,
+    pattern_permits_read,
 )
 from .search import search as do_search
 from .forge import forge_cartridge
@@ -2268,6 +2269,15 @@ async def search_endpoint(req: SearchRequest,
         perms = None
         if hippo is not None and 0 <= idx < len(hippo):
             perms = hippo[idx].get('perms')
+            # PERM_R, byte 29 bit 0. Until 2026-08-06 this loop READ the perms and RETURNED
+            # them in every result without ever filtering on them -- so a passage explicitly
+            # marked unreadable was hidden from agents (agents/retrieval._should_include)
+            # and shown to people. Canon §7.1.2 requires BOTH cart access and PERM_R to
+            # pass; we were enforcing the second on one of two retrieval paths.
+            #
+            # Same helper both paths use now, so the rule cannot drift again.
+            if not pattern_permits_read(hippo[idx]):
+                continue
         source_path = None
         if source_paths and 0 <= idx < len(source_paths):
             sp = source_paths[idx]

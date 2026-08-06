@@ -214,6 +214,33 @@ def pattern_permits_write(hippocampus_entry: dict | None) -> bool:
     return bool(perms.get("w"))
 
 
+def pattern_permits_read(hippocampus_entry: dict | None) -> bool:
+    """Is the given hippocampus entry's pattern readable? (PERM_R, byte 29 bit 0.)
+
+    THE TWIN OF pattern_permits_write, ADDED 2026-08-06 BECAUSE IT WAS MISSING.
+
+    Write had a shared helper here from the start; read did not, so read control grew two
+    separate implementations -- `reports/cart_reader.CartHandle.is_readable`, honoured by
+    `agents/retrieval._should_include`, and nothing at all on `/api/search`, which READ the
+    perms, RETURNED them in every result, and never filtered on them.
+
+    Net effect until today: a passage explicitly marked unreadable was hidden from agents and
+    shown to people. Canon §7.1.2 requires BOTH cart access and PERM_R to pass; we were
+    enforcing the second on exactly one of two retrieval paths.
+
+    Legacy semantics match `is_readable` exactly, and must stay matched: a missing entry,
+    absent perms, or a zero perms_byte all read as READABLE (pre-Step-2b carts defaulted to
+    R+W). Only an explicit non-zero perms byte with PERM_R clear hides a passage. Anything
+    stricter would make every existing cart vanish from search.
+    """
+    if not hippocampus_entry:
+        return True
+    perms = hippocampus_entry.get("perms")
+    if not perms:
+        return True
+    return bool(perms.get("r"))
+
+
 def parse_hippocampus(npz_data) -> list[dict] | None:
     """Parse hippocampus metadata from a loaded .cart.npz file.
 
