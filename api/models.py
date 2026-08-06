@@ -114,6 +114,10 @@ class StatusResponse(BaseModel):
     dirty: bool = False
     read_only: bool = True
     read_only_mode: bool = False  # global server-side lock (VPS_READ_ONLY env var)
+    # True when this server may not expose arbitrary filesystem paths.
+    # Distinct from read_only_mode: one governs WRITES, this governs whether a
+    # stranger can walk the disk. Split 2026-08-06 -- see main.PUBLIC_HOST.
+    public_host: bool = False
     cart_permissions: dict | None = None  # cart-format RWX sidecar (Step 2a)
     # True when the currently-mounted cart's file lives inside the upload
     # sandbox (cartridges/_session_uploads/). UI uses this to surface an

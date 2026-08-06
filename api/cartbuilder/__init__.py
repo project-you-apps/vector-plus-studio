@@ -418,13 +418,37 @@ def _table_html_to_text(html: str) -> str:
     return "\n".join(out)
 
 
+def _flag(name: str) -> bool:
+    return os.environ.get(name, "").lower() in ("1", "true", "yes", "on")
+
+
 def _check_writable() -> None:
     """Raise 403 if the server is in global read-only mode (VPS_READ_ONLY env var).
     Mirrors main._enforce_writable but kept local to avoid a circular import."""
-    if os.environ.get("VPS_READ_ONLY", "").lower() in ("1", "true", "yes", "on"):
+    if _flag("VPS_READ_ONLY"):
         raise HTTPException(
             status_code=403,
             detail="Server is in read-only mode. Cart Builder writes disabled for the public demo.",
+        )
+
+
+def _check_filesystem_readable() -> None:
+    """Raise 403 if this server may not expose arbitrary filesystem paths.
+
+    SEPARATE FROM _check_writable ON PURPOSE (2026-08-06). Listing a directory is a READ,
+    and it was previously blocked by the WRITE check -- so the moment per-cart access
+    control let us stop refusing writes globally, a stranger would have regained the
+    ability to walk /opt, /etc, and anywhere else this process can read.
+
+    Mirrors main.PUBLIC_HOST, including its default: with only VPS_READ_ONLY set, this
+    still refuses. The split cannot weaken an existing deployment.
+    """
+    if _flag("VPS_PUBLIC_HOST") or (_flag("VPS_READ_ONLY")
+                                    and "VPS_PUBLIC_HOST" not in os.environ):
+        raise HTTPException(
+            status_code=403,
+            detail=("This server does not expose filesystem paths. Browse the carts it "
+                    "hosts, or run the studio locally for access to your own disk."),
         )
 
 
@@ -641,7 +665,7 @@ async def list_carts(path: str = ""):
     arbitrary path traversal in a hosted demo.
     """
     if path:
-        _check_writable()  # blocks arbitrary filesystem reads on the public droplet
+        _check_filesystem_readable()   # a directory listing is a READ, not a write
     folders = load_cart_folders()
     DOC_EXTS = {".pdf", ".docx", ".doc", ".xlsx", ".xls", ".md", ".txt", ".rtf"}
 

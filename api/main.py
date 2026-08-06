@@ -122,9 +122,36 @@ else:
 # Step 1 of the RWX roadmap: a coarse server-wide lock for the public
 # demo. Step 2 replaces it with cart-format RWX bits in the hippocampus
 # row + Pattern 0 manifest.
-READ_ONLY_MODE = os.environ.get("VPS_READ_ONLY", "").lower() in ("1", "true", "yes", "on")
+def _flag(name: str) -> bool:
+    return os.environ.get(name, "").lower() in ("1", "true", "yes", "on")
+
+
+READ_ONLY_MODE = _flag("VPS_READ_ONLY")
 if READ_ONLY_MODE:
     print("[VPS] READ_ONLY_MODE active (VPS_READ_ONLY env var set). All writes refused.")
+
+# PUBLIC_HOST — "this server is reachable by people who do not own the machine."
+#
+# WHY THIS IS SEPARATE FROM READ_ONLY_MODE (2026-08-06)
+# -----------------------------------------------------
+# VPS_READ_ONLY was doing two unrelated jobs on the droplet: refusing writes, AND blocking
+# arbitrary filesystem reads through `/api/cartbuilder/carts?path=…`, which walks any
+# directory it is given. The second is the security-critical one -- without it a stranger
+# can enumerate /opt, /etc, or anywhere else the service user can read.
+#
+# Those jobs have to come apart, because per-cart access control (cart_guard.py) is what
+# should govern writes now, and turning VPS_READ_ONLY off to enable that would silently
+# re-open the filesystem. One flag standing in for two policies is how a security control
+# gets disabled by someone fixing an unrelated feature.
+#
+# DEFAULTS TO READ_ONLY_MODE. An existing deployment that only sets VPS_READ_ONLY keeps the
+# filesystem blocked exactly as before -- this change cannot weaken a running server, only
+# let us strengthen one deliberately.
+PUBLIC_HOST = _flag("VPS_PUBLIC_HOST") or (
+    READ_ONLY_MODE and "VPS_PUBLIC_HOST" not in os.environ)
+if PUBLIC_HOST:
+    print("[VPS] PUBLIC_HOST active. Arbitrary filesystem paths refused; "
+          "cart access governed per-cart.")
 
 
 def _enforce_writable(idx: int | None = None):
@@ -508,6 +535,11 @@ async def get_status():
         dirty=engine.dirty,
         read_only=engine.read_only or READ_ONLY_MODE,
         read_only_mode=READ_ONLY_MODE,
+        # Separate from read_only_mode so the frontend can hide filesystem UI on a public
+        # host WITHOUT that being tied to whether writes are allowed. Keying "Open from My
+        # Computer" off read_only_mode is what would silently restore it the day per-cart
+        # write governance lets us turn VPS_READ_ONLY off.
+        public_host=PUBLIC_HOST,
         cart_permissions=engine.cart_permissions,
         seat_attention=_seat_attention_status(),
     )

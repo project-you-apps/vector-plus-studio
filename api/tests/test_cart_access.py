@@ -223,3 +223,36 @@ def test_anonymous_reason_is_anonymous_not_no_grant():
     # And with a seat present it is a genuine no-grant, which is a different message.
     d2 = decide(registered=True, owner_id=OWNER_SEAT, grant_level=None, seat=OTHER_SEAT)
     assert d2.reason == DECISION_NO_GRANT
+
+
+# ------------------------------------------------- the read-only / public-host flag split
+
+@pytest.mark.parametrize("env,writes_blocked,fs_blocked", [
+    # Existing droplet config: only VPS_READ_ONLY. Both must stay blocked -- the split
+    # must not weaken a deployment that has not been reconfigured.
+    ({"VPS_READ_ONLY": "1"},                        True,  True),
+    # The target droplet config: filesystem stays shut, writes governed per-cart.
+    ({"VPS_PUBLIC_HOST": "1"},                      False, True),
+    # Local single-user: neither.
+    ({},                                            False, False),
+    # Explicitly opting a private host OUT of the filesystem block while keeping writes off.
+    ({"VPS_READ_ONLY": "1", "VPS_PUBLIC_HOST": "0"}, True, False),
+])
+def test_read_only_and_public_host_are_independent(monkeypatch, env, writes_blocked, fs_blocked):
+    """VPS_READ_ONLY governs WRITES. VPS_PUBLIC_HOST governs FILESYSTEM EXPOSURE.
+
+    They were one flag until 2026-08-06, which meant turning writes back on -- the whole
+    point of per-cart access control -- would silently restore a stranger's ability to walk
+    /opt and /etc via /api/cartbuilder/carts?path=. A control disabled as a side effect of
+    fixing an unrelated feature is the worst kind.
+    """
+    import importlib
+    for var in ("VPS_READ_ONLY", "VPS_PUBLIC_HOST"):
+        monkeypatch.delenv(var, raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+
+    from api import main as _main
+    importlib.reload(_main)
+    assert _main.READ_ONLY_MODE is writes_blocked
+    assert _main.PUBLIC_HOST is fs_blocked
