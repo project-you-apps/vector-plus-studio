@@ -200,3 +200,27 @@ def test_nothing_mounted_is_not_a_refusal(monkeypatch):
     from api import cart_guard
     monkeypatch.setattr(cart_guard.engine, "mounted_path", None, raising=False)
     assert cart_guard.require_cart_read(_Req(), None) is None
+
+
+def test_legacy_cart_writes_are_deferred_not_refused(monkeypatch):
+    """A cart with no grant row must stay writable per its read-only flag.
+
+    Regression for the first draft of require_cart_write, which refused whenever
+    `may_write` was False -- freezing every unregistered cart AND the entire single-user
+    local studio. `may_write` answers "did a grant authorise this", never "is the cart
+    writable". Andy's rule, 2026-08-03: "if they are editable then anyone can write them and
+    if they are read-only then no one can write them."
+    """
+    from api import cart_guard
+    _mounted(monkeypatch)
+    _decision(monkeypatch, registered=False, owner_id=None, grant_level=None, seat="andy")
+    assert cart_guard.require_cart_write(_Req(), {"sub": "andy"}) is not None
+
+
+def test_unenforced_writes_are_deferred_not_refused(monkeypatch):
+    """No auth configured at all: the local studio must keep working exactly as before."""
+    from api import cart_guard
+    _mounted(monkeypatch)
+    _decision(monkeypatch, registered=False, owner_id=None, grant_level=None, seat=None,
+              enforced=False)
+    assert cart_guard.require_cart_write(_Req(), None) is not None

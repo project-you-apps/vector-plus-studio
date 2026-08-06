@@ -208,9 +208,24 @@ def require_cart_write(request: Request,
         return None
     if not decision.allowed:
         raise _refuse(decision)
+
+    # NO GRANT GOVERNS THIS CART -> DEFER, do not refuse.
+    #
+    # `level is None` means either a legacy cart with no user_carts row, or enforcement not
+    # configured at all. In both cases Andy's rule (2026-08-03) is that writability belongs
+    # to the existing read-only flag, not to us: "if they are editable then anyone can write
+    # them and if they are read-only then no one can write them."
+    #
+    # Refusing here instead would freeze every unregistered cart and the whole single-user
+    # local studio -- which is precisely the failure `test_unregistered_cart_claims_no_write
+    # _grant` was written to warn about, and which this function did on its first draft.
+    # `may_write` answers "did a grant authorise this", never "is the cart writable".
+    if decision.level is None:
+        return decision
+
     if not decision.may_write:
         raise HTTPException(
             status_code=403,
-            detail=(f"Your access to this cart is '{decision.level or 'none'}', which cannot "
-                    f"modify it. Ask its owner for editor access."))
+            detail=(f"Your access to this cart is '{decision.level}', which cannot modify it. "
+                    f"Ask its owner for editor access."))
     return decision
