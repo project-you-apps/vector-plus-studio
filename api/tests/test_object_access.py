@@ -227,3 +227,91 @@ def test_audit_line_names_the_document_and_the_origin():
         "redwood-company.cart.npz", 10857319, "betty")
     assert "betty" in line and "10857319" in line
     assert OA.ORIGIN_INHERITED in line and "grandfathered" in line
+
+
+# --------------------------------------------------------------------------
+# Lookup — the boundary between Postgres and the rules
+# --------------------------------------------------------------------------
+
+class _RPC:
+    """Minimal stand-in for the supabase client's rpc().execute() chain."""
+
+    def __init__(self, data):
+        self._data = data
+
+    def rpc(self, name, params):
+        self.called = (name, params)
+        return self
+
+    def execute(self):
+        class _R:
+            data = self._data
+        return _R()
+
+
+def test_lookup_converts_jsonb_string_keys_to_ints():
+    """`source_hash` is an integer everywhere else in the system; jsonb keys are strings.
+
+    Converting at the boundary means no caller has to remember which side it is on — and a
+    dict keyed by "10857319" would silently miss every lookup by 10857319.
+    """
+    c = _RPC({"inherit": True, "exceptions": {"10857319": "deny"}})
+    p = OA.lookup(c, "redwood-finance.cart.npz")
+    assert p.exception_for(10857319) == DENY
+    assert p.exceptions == {10857319: DENY}
+
+
+def test_lookup_survives_a_hash_above_int4():
+    """Half of all real source hashes exceed 2^31 — verified 150/300 in redwood-company.
+
+    A signed-int assumption anywhere on this path silently drops half the documents.
+    """
+    big = 4284229723
+    c = _RPC({"inherit": False, "exceptions": {str(big): "viewer"}})
+    p = OA.lookup(c, "x.cart.npz")
+    assert p.exception_for(big) == "viewer"
+
+
+def test_lookup_of_an_unregistered_cart_governs_nothing():
+    c = _RPC({"inherit": True, "exceptions": {}})
+    p = OA.lookup(c, "legacy.pkl")
+    assert p.inherit and not p.exceptions
+    assert p.exception_for(123) is None
+
+
+def test_a_failed_lookup_is_a_third_state_not_a_permissive_default():
+    """Assuming "no exceptions" would show restricted documents to the person they were
+    hidden from. Assuming "all restricted" reads as data loss. Neither is acceptable, so
+    the caller refuses instead — same 503 `cart_guard` already returns."""
+    p = OA.policy_lookup_failed()
+    assert p.available is False
+
+
+def test_a_normal_lookup_is_available():
+    assert OA.lookup(_RPC({"inherit": True, "exceptions": {}}), "x").available is True
+
+
+def test_cart_now_explicit_drives_the_grandfathered_badge():
+    """The policy carries the toggle, so the caller never has to re-read cart state to
+    decide whether an inherited answer is legacy."""
+    inheriting = OA.lookup(_RPC({"inherit": True, "exceptions": {}}), "x")
+    flipped = OA.lookup(_RPC({"inherit": False, "exceptions": {}}), "x")
+    assert inheriting.cart_now_explicit is False
+    assert flipped.cart_now_explicit is True
+
+
+def test_source_hash_is_read_from_h_block_offset_18():
+    """One place knows the offset. Verified against a real cart in the same commit."""
+    row = bytearray(64)
+    row[18:22] = (4284229723).to_bytes(4, "little")
+    assert OA.source_hash_of(row) == 4284229723
+
+
+def test_source_hash_matches_the_builder_for_a_real_document():
+    """Round-trip against membot's own hash, so the two can never drift apart silently."""
+    import hashlib
+    fn = "dsid_097aa97db50a406fbd83d29e97120b9e__staged-payload-evolution.txt"
+    expected = int(hashlib.md5(fn.encode()).hexdigest()[:8], 16)
+    row = bytearray(64)
+    row[18:22] = expected.to_bytes(4, "little")
+    assert OA.source_hash_of(row) == expected

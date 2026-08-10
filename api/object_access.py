@@ -219,6 +219,95 @@ def _apply_perms(decision: ObjectDecision, perms_byte: int | None) -> ObjectDeci
                           decision.grandfathered)
 
 
+# --------------------------------------------------------------------------- lookup
+
+@dataclass(frozen=True)
+class ObjectPolicy:
+    """Everything this seat's document-level decisions need, for ONE cart.
+
+    Fetched once per (seat, cart) and cached, not once per document: a search returns
+    passages from many documents, and asking per document would put a network round-trip
+    inside the result loop. The exception set is sparse by construction — three restricted
+    documents in a 39,000-passage cart is three entries — so the whole of it costs less
+    than one page of results.
+    """
+
+    inherit: bool = True
+    exceptions: dict | None = None          # {source_hash:int -> level|DENY}
+    inherit_changed_at: str | None = None
+    available: bool = True                  # False when the lookup did not complete
+
+    def exception_for(self, source_hash: int) -> str | None:
+        return (self.exceptions or {}).get(int(source_hash))
+
+    @property
+    def cart_now_explicit(self) -> bool:
+        """Whether inherited access on this cart is now legacy — the grandfathered badge."""
+        return not self.inherit
+
+
+def policy_lookup_failed() -> ObjectPolicy:
+    """A lookup that did not complete. The caller must refuse, not degrade.
+
+    Both degradations are wrong and in opposite directions: assuming NO exceptions shows
+    restricted documents to the person they were hidden from, and assuming ALL documents
+    are restricted makes the cart look empty, which reads as data loss and will be
+    "fixed" by someone turning enforcement off.
+
+    So this is a third state, and the caller turns it into the same honest 503 that
+    `cart_guard` already returns for DECISION_LOOKUP_FAILED: the request was refused
+    because access could not be verified, which is a service problem rather than a
+    permissions one.
+    """
+    return ObjectPolicy(inherit=True, exceptions={}, available=False)
+
+
+def lookup(client, cart_filename: str) -> ObjectPolicy:
+    """Ask Postgres for this caller's document policy on one cart. See db/006.
+
+    One RPC returning `{inherit, inherit_changed_at, exceptions}`. SECURITY DEFINER,
+    because RLS on `cart_object_exceptions` is owner-only: a caller-scoped client asking
+    about its own restrictions would get zero rows and read that as "unrestricted". That is
+    fail-open, and it is invisible in any test run against a live database — the same trap
+    `cart_access_for()` exists to avoid one layer up.
+
+    Raises nothing of its own; a transport failure propagates so the caller owns the policy
+    for what an unanswerable lookup means.
+    """
+    raw = client.rpc("object_access_for", {"p_filename": cart_filename}).execute().data
+
+    if isinstance(raw, list):            # some client versions wrap scalar returns
+        raw = raw[0] if raw else None
+    if not isinstance(raw, dict):
+        return ObjectPolicy()
+
+    # jsonb object keys are strings; source_hash is an integer everywhere else in the
+    # system. Convert at the boundary so no caller has to remember which side it is on.
+    exceptions = {}
+    for k, v in (raw.get("exceptions") or {}).items():
+        try:
+            exceptions[int(k)] = v
+        except (TypeError, ValueError):
+            continue
+
+    return ObjectPolicy(
+        inherit=bool(raw.get("inherit", True)),
+        exceptions=exceptions,
+        inherit_changed_at=raw.get("inherit_changed_at"),
+    )
+
+
+def source_hash_of(hippocampus_row) -> int:
+    """The document a passage belongs to: uint32 at h-block offset 18.
+
+    Written by `cartridge_builder.build_metadata` as a deterministic md5 of the source
+    filename, long before any of this existed. Read here rather than re-derived so there is
+    exactly one place that knows the offset.
+    """
+    b = bytes(hippocampus_row[18:22])
+    return int.from_bytes(b, "little", signed=False)
+
+
 def mark_grandfathered(decision: ObjectDecision, cart_now_explicit: bool) -> ObjectDecision:
     """Flag an inherited answer on a cart whose toggle has since been flipped to explicit.
 
