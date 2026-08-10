@@ -322,13 +322,24 @@ def _overlay_store_for_mounted():
     if mods is None or not engine.mounted_name:
         return None
     _, store_mod, _ = mods
-    key = str(DATA_DIR)
+
+    # The cart belongs in the cache key, not just the directory. Keying on DATA_DIR alone
+    # meant the FIRST cart mounted in the process created the store and froze its
+    # `parent_cart` forever: mount finance, then company, and every seat's attention on
+    # company was still labelled finance. Same single-global family as `engine.mounted_path`
+    # -- one process-wide value standing in for something that varies per request.
+    #
+    # And the parent is the cart's REAL filename. This used to append ".pkl" unconditionally,
+    # so an `.cart.npz` cart recorded a parent that does not exist on disk. Nothing joins on
+    # it today, which is the only reason it never surfaced -- and the cart-sync work is
+    # explicit that joins go on the source ref, so a wrong parent is a trap left armed.
+    parent = _os.path.basename(engine.mounted_path or "") or f"{engine.mounted_name}.pkl"
+    key = (str(DATA_DIR), parent)
     existing = _OVERLAY_STORES.get(key)
     if existing is None:
         try:
             existing = store_mod.OverlayStore(
-                _os.path.join(DATA_DIR, "overlays"),
-                parent_cart=f"{engine.mounted_name}.pkl")
+                _os.path.join(DATA_DIR, "overlays"), parent_cart=parent)
             _OVERLAY_STORES[key] = existing
         except Exception as e:                          # noqa: BLE001
             print(f"[VPS] overlay store unavailable: {type(e).__name__}: {e}")
