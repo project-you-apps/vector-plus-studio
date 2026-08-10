@@ -105,8 +105,9 @@ export interface StatusResponse {
   // UI surfaces an "Eject" button to immediately delete the uploaded file
   // instead of waiting up to 1h for TTL eviction.
   mounted_is_sandboxed?: boolean
-  // Absolute path of the mounted cart (used as eject target). Null when nothing mounted.
-  mounted_path?: string | null
+  // No mounted_path. The server stopped publishing the absolute cart path on 2026-08-10 —
+  // /api/status is polled before sign-in so it cannot be behind auth, and eject no longer
+  // needs the client to name the file. See api/uploads.py.
 }
 
 export interface CartPermissions {

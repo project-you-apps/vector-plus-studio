@@ -123,9 +123,11 @@ class StatusResponse(BaseModel):
     # sandbox (cartridges/_session_uploads/). UI uses this to surface an
     # "Eject" button that immediately purges the user's uploaded cart.
     mounted_is_sandboxed: bool = False
-    # Absolute path of the mounted cart, or None. Frontend passes this back
-    # to /api/cartridges/eject to identify which sandbox file to delete.
-    mounted_path: str | None = None
+    # NO mounted_path. It was here so the frontend could pass the absolute path back to
+    # /api/cartridges/eject, which meant /api/status -- an endpoint the app polls every 2s
+    # BEFORE sign-in, so it cannot be behind auth -- handed the full server path to anyone
+    # who asked. Removed 2026-08-10 along with eject's path parameter: the server already
+    # knows which cart is mounted and does not need the client to tell it what to delete.
     # 2026-08-03 — per-seat attention. Reported even when OFF, and with the reason:
     # a silently-absent feature is indistinguishable from a broken one, and this one
     # can be off for three different reasons (no modules, no seat, no cart).

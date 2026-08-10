@@ -268,22 +268,42 @@ router = APIRouter(prefix="/api/cartridges", tags=["uploads"])
 
 
 @router.delete("/eject")
-async def eject_cartridge(cart_path: str):
-    """Immediately delete a sandboxed upload + its permissions sidecar.
+async def eject_cartridge():
+    """Immediately delete the CURRENTLY-MOUNTED sandboxed upload + its permissions sidecar.
 
     Privacy/control feature: users who uploaded a sensitive
     cart shouldn't have to wait up to 1h for TTL eviction. This endpoint
     deletes the file on demand.
 
+    TAKES NO ARGUMENT, deliberately (2026-08-10). It used to accept `cart_path`, which meant
+    the client had to be told the absolute server path — so /api/status published it to
+    every anonymous caller, and a delete operation accepted a filesystem path chosen by the
+    client. The sandbox check made that safe, but a check standing between an attacker and
+    the filesystem is a weaker position than never accepting the path at all. The server
+    already knows what it has mounted.
+
+    It also unmounts first rather than refusing when mounted. The old contract made the
+    client call unmount() then eject(path), and the gap between those two calls is exactly
+    the ghost-row race documented in the 2026-07-15 dispatch report — a stale dropdown entry
+    the user could click and mount against a path about to be deleted. One call, no gap.
+
     Safety:
-      • Only files inside SANDBOX_DIR can be ejected (path-resolution check).
-        Attempts on the canonical cartridges/ catalog or any other path 403.
-      • Refuses if the file is currently mounted — caller must unmount first
-        (avoids OS-specific mounted-file delete confusion).
+      • Only a cart resolving inside SANDBOX_DIR can be ejected. The canonical cartridges/
+        catalog and everything else 403 — unchanged, and now unreachable by construction.
 
     Response: { success: true, ejected: <absolute path> }
     """
-    target = Path(cart_path).resolve()
+    # Lazy import to avoid a circular import with main.py.
+    try:
+        from .engine import engine  # type: ignore
+    except ImportError as e:
+        raise HTTPException(status_code=500, detail="Engine unavailable.") from e
+
+    mounted = getattr(engine, "mounted_path", None)
+    if not mounted:
+        raise HTTPException(status_code=400, detail="No cart is mounted.")
+
+    target = Path(mounted).resolve()
     sandbox_resolved = SANDBOX_DIR.resolve()
     try:
         target.relative_to(sandbox_resolved)
@@ -298,19 +318,12 @@ async def eject_cartridge(cart_path: str):
     if not target.is_file():
         raise HTTPException(status_code=400, detail="Path is not a file.")
 
-    # Refuse if currently mounted — caller must unmount first.
-    # We import lazily to avoid a circular import with main.py.
+    # Release the file before deleting it. Windows refuses to unlink an open file, and the
+    # engine holding a handle to a cart we just erased is a worse state than either.
     try:
-        from .engine import engine  # type: ignore
-        mounted = getattr(engine, "mounted_path", None)
-        if mounted and Path(mounted).resolve() == target:
-            raise HTTPException(
-                status_code=409,
-                detail="Cart is currently mounted. Unmount it first, then eject.",
-            )
-    except ImportError:
-        # engine not importable in this context (tests etc.) — skip the check.
-        pass
+        engine.unmount()
+    except Exception as e:                                      # noqa: BLE001
+        print(f"[VPS] eject: unmount failed, continuing: {type(e).__name__}: {e}")
 
     # Compute the sidecar's predicted path. Mirrors the naming used in
     # upload_cartridge() above. If the sidecar isn't where we expect, swallow

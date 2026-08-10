@@ -55,7 +55,7 @@ except Exception as _e:                                  # noqa: BLE001
 from fastapi import (FastAPI, HTTPException, WebSocket, WebSocketDisconnect,
                      UploadFile, File, Form, Depends, Request)
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 # ---------------------------------------------------------------------------
 # Sentry error monitoring.
@@ -502,8 +502,39 @@ app.include_router(profile_routes.router)
 # Status
 # ---------------------------------------------------------------------------
 
+@app.get("/health")
+async def health():
+    """Unauthenticated liveness/readiness probe.
+
+    Deliberately says nothing about the corpus, the filesystem, or the machine — /api/status
+    carries all of that and is need-to-know for exactly that reason.
+
+    The 503-while-loading is the load-bearing part: it is what makes `curl -sf .../health` a
+    correct readiness gate. Polling /api/status instead cannot distinguish "still loading the
+    model" from "refused", which on 2026-07-30 spun a deploy loop for seven minutes against a
+    perfectly healthy server. Same shape as memory_server's /health.
+    """
+    ready = bool(engine.engine_ready)
+    body = {"status": "ok" if ready else "loading"}
+    return body if ready else JSONResponse(status_code=503, content=body)
+
+
 @app.get("/api/status", response_model=StatusResponse)
-async def get_status():
+async def get_status(request: Request,
+                     user: dict | None = Depends(get_current_user)):
+    """Server state for the UI's 2s poll. PUBLIC BY NECESSITY, so it is need-to-know.
+
+    App.tsx polls this unconditionally on mount, before auth is consulted — `engine_ready`
+    and `gpu_available` are what boot the UI, so a 401 here makes the app look dead to every
+    signed-out visitor including the public demo. It therefore cannot go behind auth, and
+    the protection has to be per-FIELD instead of per-route.
+
+    `mounted_cartridge` is the one field that names someone else's data. Susie having
+    finance open is not a fact a stranger is entitled to, so the name is resolved against
+    the caller's own access and nulled when they may not read it. `mounted_is_sandboxed`
+    stays unconditional: it describes the caller's own upload workflow, not a cart's
+    identity.
+    """
     # Detect whether the currently-mounted cart lives inside the upload
     # sandbox — the UI uses this to expose an "Eject" button. Path-resolved
     # relative_to() is the canonical zero-traversal check.
@@ -519,11 +550,26 @@ async def get_status():
         except (ValueError, OSError):
             pass
 
+    # Name the mounted cart only to a seat that may read it. `resolve` returns None when
+    # nothing is mounted, and an ALLOWED decision when enforcement is unconfigured or the
+    # cart is unregistered — so the single-user local studio and the public demo both keep
+    # showing the name exactly as before.
+    mounted_name = engine.mounted_name
+    if mounted_name:
+        try:
+            decision = cart_guard.resolve(request, user)
+            if decision is not None and not decision.allowed:
+                mounted_name = None
+        except Exception as e:                                  # noqa: BLE001
+            # Status is the UI's heartbeat. If access lookup is broken, degrade to hiding
+            # the name rather than failing the poll and making the whole app look dead.
+            print(f"[VPS] status cart-name gate failed: {type(e).__name__}: {e}")
+            mounted_name = None
+
     return StatusResponse(
         engine_ready=engine.engine_ready,
         gpu_available=engine.gpu_available,
-        mounted_cartridge=engine.mounted_name,
-        mounted_path=mounted_path,
+        mounted_cartridge=mounted_name,
         mounted_is_sandboxed=mounted_is_sandboxed,
         pattern_count=len(engine.passages),
         physics_trained=engine.physics_trained,

@@ -79,22 +79,20 @@ export default function SearchToolbar() {
   const mounted = status?.mounted_cartridge ?? null
   const mountedCart = mounted ? cartridges.find((c) => c.name === mounted) : null
   const isSandboxed = !!status?.mounted_is_sandboxed
-  const sandboxPath = status?.mounted_path ?? null
 
   const pushToast = useCartBuilderStore((s) => s.pushToast)
 
   const handleEject = async () => {
-    if (!sandboxPath || ejecting) return
+    if (!isSandboxed || ejecting) return
     if (!confirm('Delete this uploaded cart from the sandbox now? Unmounts and erases the file immediately.')) {
       return
     }
     setEjecting(true)
     try {
-      // Unmount first — eject endpoint refuses if currently mounted.
-      if (mounted) {
-        await unmount()
-      }
-      const res = await api.ejectCartridge(sandboxPath)
+      // No unmount call, and no path: the server ejects the cart it has mounted and
+      // unmounts it itself. Unmounting here first would leave nothing for eject to find,
+      // and the gap between the two calls was the ghost-row race (2026-07-15).
+      const res = await api.ejectCartridge()
       if (res.success) {
         pushToast('success', 'Cart ejected — file deleted from sandbox.', 4000)
         // Await BOTH refreshes before the handler returns. Non-awaited
@@ -411,7 +409,7 @@ export default function SearchToolbar() {
       {/* Eject button — only shown when the mounted cart is from the upload
           sandbox. Privacy/control feature: lets users delete their uploaded
           cart immediately instead of waiting for the 1h TTL. */}
-      {isSandboxed && sandboxPath && (
+      {isSandboxed && (
         <button
           onClick={handleEject}
           disabled={ejecting}

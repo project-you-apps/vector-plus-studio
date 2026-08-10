@@ -132,9 +132,12 @@ export async function uploadCartridge(file: File): Promise<UploadResponse> {
   return res.json()
 }
 
-export async function ejectCartridge(cartPath: string): Promise<{ success: boolean; ejected: string }> {
+// Takes no argument: the server ejects whatever sandboxed cart it currently has mounted,
+// and unmounts it itself. We used to pass the absolute server path, which required
+// /api/status to publish that path to every anonymous caller. See api/uploads.py.
+export async function ejectCartridge(): Promise<{ success: boolean; ejected: string }> {
   const res = await fetch(
-    `${BASE}/cartridges/eject?cart_path=${encodeURIComponent(cartPath)}`,
+    `${BASE}/cartridges/eject`,
     { method: 'DELETE', headers: authHeaders() }
   )
   if (!res.ok) {
