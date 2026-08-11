@@ -232,3 +232,73 @@ def test_health_returns_503_while_loading_not_200():
     """
     src = inspect.getsource(main.health)
     assert "status_code=503" in src
+
+
+# --------------------------------------------------------------------------
+# The lock is per-caller, not per-process
+# --------------------------------------------------------------------------
+
+def _status(monkeypatch, decision, engine_read_only=False):
+    import asyncio
+    monkeypatch.setattr(main.engine, "mounted_name", "redwood-revenue.cart.npz",
+                        raising=False)
+    monkeypatch.setattr(main.engine, "mounted_path", "/srv/redwood-revenue.cart.npz",
+                        raising=False)
+    monkeypatch.setattr(main.engine, "read_only", engine_read_only, raising=False)
+    monkeypatch.setattr(cart_guard, "resolve", lambda request, user: decision)
+    return asyncio.run(main.get_status(_FakeRequest(), None))
+
+
+def test_a_viewer_is_told_read_only_even_when_the_owner_unlocked_it(monkeypatch):
+    """ANDY'S BUG, 2026-08-10.
+
+    Susie (owner) unlocks revenue, signs out. Betty signs in as a VIEWER and the cart is
+    still unlocked for her, because `engine.read_only` is one process-global boolean and
+    nothing re-mounted -- the engine outlives the browser session.
+
+    Writes were never actually reachable (every write route re-resolves through
+    require_cart_write), so this was a lying UI rather than a breach. Worth fixing anyway:
+    the day someone adds a write route and forgets the dependency, the lie becomes the hole.
+    """
+    viewer = cart_access.decide(registered=True, owner_id="susie",
+                                grant_level="viewer", seat="betty")
+    res = _status(monkeypatch, viewer, engine_read_only=False)   # owner left it unlocked
+    assert res.read_only is True
+
+
+def test_an_editor_still_sees_an_unlocked_cart(monkeypatch):
+    """The other direction. Over-locking would make the feature useless and someone would
+    turn it off."""
+    editor = cart_access.decide(registered=True, owner_id="susie",
+                                grant_level="editor", seat="andy")
+    assert _status(monkeypatch, editor, engine_read_only=False).read_only is False
+
+
+def test_an_owners_deliberate_lock_is_still_honoured(monkeypatch):
+    """Permission to write is not an instruction to unlock. A cart the owner locked stays
+    locked for the owner."""
+    owner = cart_access.decide(registered=True, owner_id="susie", grant_level=None,
+                               seat="susie")
+    assert _status(monkeypatch, owner, engine_read_only=True).read_only is True
+
+
+def test_a_legacy_cart_defers_to_the_flag(monkeypatch):
+    """`level is None` is legacy/unenforced. Forcing read-only here would lock every cart
+    in the single-user local studio."""
+    legacy = cart_access.decide(registered=False, owner_id=None, grant_level=None,
+                                seat="andy")
+    assert _status(monkeypatch, legacy, engine_read_only=False).read_only is False
+
+
+def test_an_unresolvable_caller_is_shown_a_locked_cart(monkeypatch):
+    """Degrade CLOSED on the lock, even though the cart NAME degrades to hidden. Showing an
+    editor-looking UI to someone who may be a viewer is the worse failure."""
+    def _boom(request, user):
+        raise RuntimeError("supabase unreachable")
+    monkeypatch.setattr(main.engine, "mounted_name", "x.cart.npz", raising=False)
+    monkeypatch.setattr(main.engine, "mounted_path", "/srv/x.cart.npz", raising=False)
+    monkeypatch.setattr(main.engine, "read_only", False, raising=False)
+    monkeypatch.setattr(cart_guard, "resolve", _boom)
+    import asyncio
+    res = asyncio.run(main.get_status(_FakeRequest(), None))
+    assert res.read_only is True and res.mounted_cartridge is None

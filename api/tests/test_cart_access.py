@@ -253,6 +253,19 @@ def test_read_only_and_public_host_are_independent(monkeypatch, env, writes_bloc
         monkeypatch.setenv(k, v)
 
     from api import main as _main
-    importlib.reload(_main)
-    assert _main.READ_ONLY_MODE is writes_blocked
-    assert _main.PUBLIC_HOST is fs_blocked
+    try:
+        importlib.reload(_main)
+        assert _main.READ_ONLY_MODE is writes_blocked
+        assert _main.PUBLIC_HOST is fs_blocked
+    finally:
+        # RELOAD BACK, or this test poisons every test that runs after it.
+        #
+        # monkeypatch restores the ENVIRONMENT on teardown but has no idea a module was
+        # reloaded from it, so `main.READ_ONLY_MODE` kept whatever the last parametrised
+        # case set -- True. Found 2026-08-10 when new per-caller lock tests passed alone and
+        # failed in the suite; the flag they read had been frozen True by this test hours
+        # earlier. Same shape as the `.env` leak fixed on 08-05: module state derived from
+        # the environment at import time is not restored by restoring the environment.
+        for var in ("VPS_READ_ONLY", "VPS_PUBLIC_HOST"):
+            monkeypatch.delenv(var, raising=False)
+        importlib.reload(_main)

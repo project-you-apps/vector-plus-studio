@@ -596,16 +596,42 @@ async def get_status(request: Request,
     # cart is unregistered — so the single-user local studio and the public demo both keep
     # showing the name exactly as before.
     mounted_name = engine.mounted_name
+    # Read-only is resolved PER CALLER, never read straight off the engine.
+    #
+    # BUG, found by Andy 2026-08-10: Susie (owner) unlocks revenue, signs out, Betty signs
+    # in as a VIEWER -- and revenue is still unlocked for her. `engine.read_only` is one
+    # process-global boolean, and the mount-time tightening that would have re-applied
+    # Betty's level never ran, because nothing re-mounted: the engine outlives the browser
+    # session. Same single-global family as `engine.mounted_path`.
+    #
+    # Writes were never actually reachable -- every write route re-resolves through
+    # `require_cart_write`, which refuses a viewer -- so this was a LYING UI rather than a
+    # breach. That distinction is worth keeping in mind and not worth relying on: the day
+    # somebody adds a write route and forgets the dependency, the lie becomes the hole.
+    # 20 routes were exactly that on 08-05.
+    #
+    # The global stays (a cart the owner deliberately locked should stay locked for them);
+    # what changes is that a caller who may not write is TOLD read-only regardless of it.
+    effective_read_only = engine.read_only or READ_ONLY_MODE
     if mounted_name:
         try:
             decision = cart_guard.resolve(request, user)
             if decision is not None and not decision.allowed:
                 mounted_name = None
+            # `level is None` means legacy/unenforced -- defer to the flag, exactly as
+            # `require_cart_write` does, or every single-user local cart reads as locked.
+            if (decision is not None and decision.level is not None
+                    and not decision.may_write):
+                effective_read_only = True
         except Exception as e:                                  # noqa: BLE001
             # Status is the UI's heartbeat. If access lookup is broken, degrade to hiding
             # the name rather than failing the poll and making the whole app look dead.
             print(f"[VPS] status cart-name gate failed: {type(e).__name__}: {e}")
             mounted_name = None
+            # Degrade CLOSED on the lock too. A caller whose access could not be
+            # resolved must not be shown a writable cart -- the failure mode of the
+            # other choice is an editor-looking UI for someone who may be a viewer.
+            effective_read_only = True
 
     return StatusResponse(
         engine_ready=engine.engine_ready,
@@ -621,7 +647,7 @@ async def get_status(request: Request,
         signatures_loaded=engine.signatures_loaded,
         deleted_count=len(engine.deleted_ids),
         dirty=engine.dirty,
-        read_only=engine.read_only or READ_ONLY_MODE,
+        read_only=effective_read_only,
         read_only_mode=READ_ONLY_MODE,
         # Separate from read_only_mode so the frontend can hide filesystem UI on a public
         # host WITHOUT that being tied to whether writes are allowed. Keying "Open from My
