@@ -47,6 +47,7 @@ from typing import Optional
 from fastapi import Depends, HTTPException, Request
 
 from . import cart_access
+from . import object_access
 from .auth import get_current_user
 from .engine import engine
 
@@ -57,6 +58,10 @@ CACHE_TTL_SECONDS = 30.0
 # (seat_or_None, cart_basename) -> (expires_at, MountDecision)
 _cache: dict[tuple[Optional[str], str], tuple[float, cart_access.MountDecision]] = {}
 
+# Same key and TTL as `_cache`, separate dict so `invalidate()` can clear either without
+# the other -- a grant change and an exception change are different events.
+_object_cache: dict = {}
+
 
 def invalidate(seat: Optional[str] = None) -> None:
     """Drop cached decisions. Call after any grant change.
@@ -66,9 +71,12 @@ def invalidate(seat: Optional[str] = None) -> None:
     """
     if seat is None:
         _cache.clear()
+        _object_cache.clear()
         return
     for key in [k for k in _cache if k[0] == seat]:
         _cache.pop(key, None)
+    for key in [k for k in _object_cache if k[0] == seat]:
+        _object_cache.pop(key, None)
 
 
 def _seat_from_token(user: object) -> Optional[str]:
@@ -118,6 +126,75 @@ def resolve(request: Request, user: object) -> Optional[cart_access.MountDecisio
 
     _cache[key] = (now + CACHE_TTL_SECONDS, decision)
     return decision
+
+
+def object_policy(request: Request, user: object):
+    """This caller's DOCUMENT-level policy for the mounted cart. See db/006.
+
+    Cached on the same (seat, cart) key and TTL as the mount decision, and for the same
+    reason: a search returns passages from many documents and the policy is consulted once
+    per result, so an uncached lookup would put a network round-trip inside the result loop.
+
+    Returns an ObjectPolicy whose `available` is False when the lookup did not complete.
+    Callers MUST refuse in that case rather than pick a default — see
+    `object_access.policy_lookup_failed` for why both defaults are wrong.
+
+    An unconfigured deployment gets an empty, permissive policy: with no auth there are no
+    seats, so there is nothing document-level to enforce and every cart behaves as it always
+    has. Same reasoning as `cart_access.enforcement_available`.
+    """
+    mounted = getattr(engine, "mounted_path", None)
+    if not mounted or not cart_access.enforcement_available():
+        return object_access.ObjectPolicy()
+
+    seat = _seat_from_token(user)
+    cart = os.path.basename(str(mounted))
+    key = (seat, cart)
+    now = time.monotonic()
+
+    hit = _object_cache.get(key)
+    if hit and hit[0] > now:
+        return hit[1]
+
+    try:
+        from . import profile_routes
+        client = profile_routes._supabase(profile_routes._token(request))
+        policy = object_access.lookup(client, cart)
+    except Exception as e:                                  # noqa: BLE001
+        log.warning("object policy lookup failed: %s: %s", type(e).__name__, e)
+        return object_access.policy_lookup_failed()
+
+    _object_cache[key] = (now + CACHE_TTL_SECONDS, policy)
+    return policy
+
+
+def may_read_document(policy, decision, hippo_entry) -> bool:
+    """Whether this caller may see one passage, given its document.
+
+    The single place the search path and the agent path both ask, so the rule cannot drift
+    between them — which is exactly what happened with PERM_R, where the bit was honoured
+    for agents and ignored for people for weeks.
+
+    PERM_R is deliberately NOT re-checked here. `pattern_permits_read` is the one authority
+    for that bit and both paths already call it; doing it twice would mean two places to
+    keep in agreement, which is the failure this function exists to avoid.
+    """
+    key = object_access.document_key(hippo_entry)
+    if key is None:
+        # No provenance in this cart -- most of ours predate it. Nothing document-level can
+        # apply, so this is not a denial.
+        return True
+
+    level = getattr(decision, "level", None)
+    is_owner = level == "owner"
+    result = object_access.resolve(
+        cart_level=level,
+        inherit=policy.inherit,
+        exception=policy.exception_for(key),
+        is_owner=is_owner,
+        perms_byte=None,
+    )
+    return result.may_read
 
 
 def _refuse(decision: cart_access.MountDecision) -> HTTPException:

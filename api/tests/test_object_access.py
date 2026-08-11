@@ -300,18 +300,96 @@ def test_cart_now_explicit_drives_the_grandfathered_badge():
     assert flipped.cart_now_explicit is True
 
 
-def test_source_hash_is_read_from_h_block_offset_18():
-    """One place knows the offset. Verified against a real cart in the same commit."""
-    row = bytearray(64)
-    row[18:22] = (4284229723).to_bytes(4, "little")
-    assert OA.source_hash_of(row) == 4284229723
+def test_document_key_reads_v1_v2_source_hash():
+    """v1/v2 carts carry the uint32 directly. Every Redwood cart is this shape."""
+    assert OA.document_key({"source_hash": 4284229723}) == 4284229723
 
 
-def test_source_hash_matches_the_builder_for_a_real_document():
-    """Round-trip against membot's own hash, so the two can never drift apart silently."""
+def test_document_key_derives_the_same_number_from_a_v3_filename():
+    """THE BUG THIS FUNCTION EXISTS TO PREVENT.
+
+    v3 replaced the uint32 at offset 18 with a uint16 source_idx plus a reserved uint16, so
+    reading those four bytes as a uint32 -- which the first draft did -- produces a garbage
+    key for every provenance-v3 cart, silently, with no error anywhere.
+
+    Both formats must land on the SAME number for the same file, so an exception written
+    against a v1/v2 cart survives that cart being rebuilt as v3.
+    """
     import hashlib
     fn = "dsid_097aa97db50a406fbd83d29e97120b9e__staged-payload-evolution.txt"
     expected = int(hashlib.md5(fn.encode()).hexdigest()[:8], 16)
-    row = bytearray(64)
-    row[18:22] = expected.to_bytes(4, "little")
-    assert OA.source_hash_of(row) == expected
+
+    v1 = OA.document_key({"source_hash": expected})
+    v3 = OA.document_key({"source_idx": 7, "source_path": fn})
+    assert v1 == v3 == expected
+
+
+def test_document_key_matches_the_builder():
+    """Pins our copy of the hash to membot's `cartridge_builder._source_hash`.
+
+    Duplicated rather than imported so the studio takes no hard dependency on membot; this
+    test is the thing that stops the two drifting.
+    """
+    import hashlib
+    fn = "pay-equalization-roadmap.txt"
+    assert OA.document_key({"source_path": fn}) == int(
+        hashlib.md5(fn.encode()).hexdigest()[:8], 16)
+
+
+def test_document_key_is_none_when_the_cart_has_no_provenance():
+    """Most carts predate provenance. That must read as "no policy can apply here", never
+    as a denial -- the latter would empty every legacy cart the moment this shipped."""
+    assert OA.document_key({}) is None
+    assert OA.document_key({"perms": {"r": True}}) is None
+    assert OA.document_key(None) is None
+
+
+# --------------------------------------------------------------------------
+# Wiring — the part that made PERM_R a bug for six weeks
+# --------------------------------------------------------------------------
+
+def test_search_consults_the_document_gate():
+    """`/api/search` must ask, not just import.
+
+    PERM_R was stored, returned in every result, and never filtered on. The rule existed;
+    nothing called it. This asserts the call site rather than the rule.
+    """
+    import inspect
+    from api import main
+    src = inspect.getsource(main.search_endpoint)
+    assert "cart_guard.object_policy(" in src
+    assert "may_read_document(" in src
+
+
+def test_search_refuses_when_the_policy_lookup_fails():
+    """Not "return everything" and not "return nothing" -- refuse, and say it is a service
+    problem. Both silent degradations are wrong in opposite directions."""
+    import inspect
+    from api import main
+    src = inspect.getsource(main.search_endpoint)
+    assert "_obj_policy.available" in src
+    assert "503" in src
+
+
+def test_a_cart_without_provenance_is_not_silently_emptied():
+    """Most of our carts predate provenance entirely. `document_key` returns None for them
+    and the gate must read that as "nothing document-level applies", never as a denial --
+    the alternative empties every legacy cart the moment this ships."""
+    from api import cart_guard
+    policy = OA.ObjectPolicy(inherit=False, exceptions={})     # strictest possible policy
+    decision = type("D", (), {"level": "viewer"})()
+    assert cart_guard.may_read_document(policy, decision, {"perms": {"r": True}}) is True
+
+
+def test_the_gate_denies_a_document_the_seat_is_excepted_from():
+    """End to end through the wiring function, not just the rule."""
+    from api import cart_guard
+    import hashlib
+    fn = "pay-equalization-roadmap.txt"
+    key = int(hashlib.md5(fn.encode()).hexdigest()[:8], 16)
+    policy = OA.ObjectPolicy(inherit=True, exceptions={key: DENY})
+    decision = type("D", (), {"level": "viewer"})()
+
+    assert cart_guard.may_read_document(policy, decision, {"source_path": fn}) is False
+    assert cart_guard.may_read_document(
+        policy, decision, {"source_path": "some-other-doc.txt"}) is True

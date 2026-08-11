@@ -2288,7 +2288,7 @@ def _get_mounted_source_paths() -> list[str]:
 # ---------------------------------------------------------------------------
 
 @app.post("/api/search", response_model=SearchResponse)
-async def search_endpoint(req: SearchRequest,
+async def search_endpoint(req: SearchRequest, request: Request,
                           user: dict | None = Depends(get_current_user), _guard=Depends(cart_guard.require_cart_read)):
     if not engine.mounted_name:
         return SearchResponse(
@@ -2320,12 +2320,33 @@ async def search_endpoint(req: SearchRequest,
     # "Ingested" line when the user opens a result. Empty lists when the
     # cart has no provenance surface.
     source_paths, timestamps = _get_mounted_provenance()
+
+    # Document-level policy for THIS caller, fetched once for the whole result set rather
+    # than once per result -- see cart_guard.object_policy. db/006.
+    _obj_policy = cart_guard.object_policy(request, user)
+    if not _obj_policy.available:
+        # The lookup did not complete. Refusing is the only honest option: returning
+        # unfiltered results would show restricted documents to the person they were hidden
+        # from, and returning nothing reads as data loss. Same 503 and same wording the
+        # cart-level gate already uses for an unanswerable lookup.
+        raise HTTPException(
+            status_code=503,
+            detail=("Document access could not be verified right now, so the search was "
+                    "refused rather than answered unchecked. This is a service problem, "
+                    "not a permissions one."))
+
     from datetime import datetime, timezone
     for rank, r in enumerate(results):
         idx = r['idx']
         perms = None
         if hippo is not None and 0 <= idx < len(hippo):
             perms = hippo[idx].get('perms')
+            # Document-level gate, distinct from PERM_R below: PERM_R asks "is this passage
+            # readable by anyone", this asks "may THIS SEAT read the document it belongs
+            # to". Canon §7.1.2 wants both, and a cart with no provenance answers True here
+            # because nothing document-level can apply to it.
+            if not cart_guard.may_read_document(_obj_policy, _guard, hippo[idx]):
+                continue
             # PERM_R, byte 29 bit 0. Until 2026-08-06 this loop READ the perms and RETURNED
             # them in every result without ever filtering on them -- so a passage explicitly
             # marked unreadable was hidden from agents (agents/retrieval._should_include)

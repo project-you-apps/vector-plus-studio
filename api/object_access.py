@@ -297,15 +297,46 @@ def lookup(client, cart_filename: str) -> ObjectPolicy:
     )
 
 
-def source_hash_of(hippocampus_row) -> int:
-    """The document a passage belongs to: uint32 at h-block offset 18.
+def document_key(hippo_entry) -> int | None:
+    """Which document a passage belongs to, as one number, from EITHER h-block format.
 
-    Written by `cartridge_builder.build_metadata` as a deterministic md5 of the source
-    filename, long before any of this existed. Read here rather than re-derived so there is
-    exactly one place that knows the offset.
+    THE TWO FORMATS DO NOT AGREE ON WHAT LIVES AT OFFSET 18, and reading the bytes directly
+    is therefore wrong half the time:
+
+        v1/v2  offset 18 is a uint32 `source_hash` -- md5(filename)[:8]
+        v3     offset 18 is a uint16 `source_idx` + a uint16 reserved, indexing into the
+               cart's `source_strings` table (provenance schema, 2026-07-18)
+
+    So take the parsed entry, never the raw row, and normalise to ONE key space by hashing
+    the v3 filename with the same function the v1/v2 writer used. Two consequences worth
+    having:
+
+      - an exception written against a v1/v2 cart keeps working if that cart is later
+        rebuilt as v3 from the same files, because both sides land on md5(filename)[:8];
+      - there is exactly one definition of "which document", so the search path and the
+        agent path cannot drift apart the way PERM_R did.
+
+    Returns None when the cart carries no provenance at all. Callers must treat that as
+    "no document-level policy can apply", not as "denied" -- most carts we have predate
+    provenance entirely.
     """
-    b = bytes(hippocampus_row[18:22])
-    return int.from_bytes(b, "little", signed=False)
+    if not isinstance(hippo_entry, dict):
+        return None
+
+    h = hippo_entry.get("source_hash")
+    if h is not None:
+        return int(h)
+
+    path = hippo_entry.get("source_path")
+    if path:
+        import hashlib
+        # Mirrors membot's `cartridge_builder._source_hash`. Deliberately duplicated rather
+        # than imported: the studio must not take a hard import dependency on membot, and a
+        # four-line hash with a test pinning it to the same value is cheaper than the
+        # coupling. `test_document_key_matches_the_builder` is what keeps them honest.
+        return int(hashlib.md5(str(path).encode()).hexdigest()[:8], 16)
+
+    return None
 
 
 def mark_grandfathered(decision: ObjectDecision, cart_now_explicit: bool) -> ObjectDecision:
