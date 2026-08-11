@@ -393,3 +393,72 @@ def test_the_gate_denies_a_document_the_seat_is_excepted_from():
     assert cart_guard.may_read_document(policy, decision, {"source_path": fn}) is False
     assert cart_guard.may_read_document(
         policy, decision, {"source_path": "some-other-doc.txt"}) is True
+
+
+# --------------------------------------------------------------------------
+# DocRef — the reason, not just the absence
+# --------------------------------------------------------------------------
+
+def test_docref_distinguishes_old_carts_from_broken_ones():
+    """`None` used to mean four things at once. The two that matter most are opposite
+    problems: a cart that predates provenance is fine and needs no action, a v3 row whose
+    strings table is missing is a defect somebody should fix."""
+    assert OA.document_ref({}).reason == OA.DOC_NO_PROVENANCE
+    assert OA.document_ref({"source_idx": 7}).reason == OA.DOC_MALFORMED
+    assert OA.document_ref(None).reason == OA.DOC_MALFORMED
+
+
+def test_docref_reports_which_format_produced_the_key():
+    assert OA.document_ref({"source_hash": 12345}).reason == OA.DOC_HASHED
+    assert OA.document_ref({"source_path": "a.txt"}).reason == OA.DOC_FROM_PATH
+
+
+def test_docref_agrees_with_document_key():
+    """Two functions, one answer. If they ever diverge the gate and the UI disagree about
+    which passages are governable, and the UI is the one people trust."""
+    for entry in ({"source_hash": 999}, {"source_path": "x.txt"}, {}, {"source_idx": 2}):
+        assert OA.document_ref(entry).key == OA.document_key(entry)
+
+
+def test_governability_tells_an_owner_a_rule_would_be_inert():
+    """THE REASON THIS EXISTS. An exception on a cart with no provenance can never apply,
+    and before this nothing said so — the owner would set it, see it saved, and demo a
+    restriction that was silently doing nothing."""
+    legacy = OA.cart_governability([{}, {}, {}])
+    assert legacy["keyed"] == 0 and legacy["total"] == 3
+    assert legacy["reasons"][OA.DOC_NO_PROVENANCE] == 3
+
+    good = OA.cart_governability([{"source_hash": 1}, {"source_hash": 2}])
+    assert good["keyed"] == 2
+
+
+def test_governability_counts_a_partially_broken_cart():
+    """Mixed is the interesting case: the cart works, some rows do not, and the owner needs
+    the number rather than a boolean."""
+    g = OA.cart_governability([{"source_hash": 1}, {"source_idx": 4}, {}])
+    assert g["keyed"] == 1 and g["total"] == 3
+    assert g["reasons"][OA.DOC_MALFORMED] == 1
+    assert g["reasons"][OA.DOC_NO_PROVENANCE] == 1
+
+
+def test_search_refusal_carries_a_stable_code_and_is_not_a_verdict():
+    """A user who reads "denied" during an outage asks an admin for access they already
+    have, and the admin cannot reproduce it. The message must read as broken, not forbidden.
+
+    Asserts the MESSAGE, not the source: the first version of this test scanned
+    inspect.getsource() and failed on the word "denied" appearing in the comment explaining
+    why the word must not appear. A test that cannot tell a comment from a string is
+    testing the wrong artifact.
+    """
+    from api.main import VERIFICATION_UNAVAILABLE as V
+    assert V["code"] == "verification_unavailable"
+    assert "not a permissions one" in V["message"]
+    for verdict_word in ("denied", "forbidden", "not allowed", "unauthorized"):
+        assert verdict_word not in V["message"].lower()
+
+
+def test_the_search_route_raises_that_exact_constant():
+    """Hoisting the message only helps if the route still uses it."""
+    import inspect
+    from api import main
+    assert "VERIFICATION_UNAVAILABLE" in inspect.getsource(main.search_endpoint)

@@ -510,6 +510,36 @@ app.include_router(profile_routes.router)
 
 
 # ---------------------------------------------------------------------------
+# Refusal vocabulary
+# ---------------------------------------------------------------------------
+# WHAT WE SAY BACK CAN ITSELF LEAK, so the rule differs by what is being refused:
+#
+#   the CART      -> say so plainly. The caller reached it by name, so its existence is
+#                    already theirs, and "ask its owner for access" is actionable.
+#                    Andy, 08-10: "I don't think it kills us to let someone know a cart
+#                    exists."
+#   a DOCUMENT    -> say NOTHING. Silently absent from results: no count, no badge, no
+#                    placeholder. Telling Betty that two results were hidden tells her
+#                    documents about her own pay exist, which is the exact fact the rule
+#                    was protecting. "No results" is the honest surface.
+#   the SERVICE   -> say so loudly, and make sure it does not read as a verdict. A user
+#                    who sees a denial during a database outage goes and asks an admin for
+#                    permissions they already hold, and the admin cannot reproduce it.
+#
+# The owner-facing view is the deliberate exception to the middle row: whoever manages the
+# cart needs to see the holes, because that list is their punch list. Same fact, two
+# audiences, opposite answers.
+VERIFICATION_UNAVAILABLE = {
+    # Stable code so the UI renders one consistent state rather than pattern-matching prose
+    # that will get reworded.
+    "code": "verification_unavailable",
+    "message": ("Access to this cart's contents can't be verified right now, so the search "
+                "was stopped rather than answered unchecked. This is a service problem, "
+                "not a permissions one — please try again shortly."),
+}
+
+
+# ---------------------------------------------------------------------------
 # Status
 # ---------------------------------------------------------------------------
 
@@ -2329,11 +2359,7 @@ async def search_endpoint(req: SearchRequest, request: Request,
         # unfiltered results would show restricted documents to the person they were hidden
         # from, and returning nothing reads as data loss. Same 503 and same wording the
         # cart-level gate already uses for an unanswerable lookup.
-        raise HTTPException(
-            status_code=503,
-            detail=("Document access could not be verified right now, so the search was "
-                    "refused rather than answered unchecked. This is a service problem, "
-                    "not a permissions one."))
+        raise HTTPException(status_code=503, detail=VERIFICATION_UNAVAILABLE)
 
     from datetime import datetime, timezone
     for rank, r in enumerate(results):

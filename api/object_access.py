@@ -297,6 +297,76 @@ def lookup(client, cart_filename: str) -> ObjectPolicy:
     )
 
 
+# Why a passage does or does not have a document key. `None` used to carry all four of
+# these at once, which mattered for one reason above the rest: AN EXCEPTION SET ON A CART
+# WITH NO PROVENANCE CAN NEVER APPLY, AND NOTHING TOLD ANYONE. The owner would set a rule,
+# see it saved, and demo a restriction that was silently inert. Naming the reason is what
+# lets the management screen say so at the moment she sets it, which is the only moment the
+# information helps.
+DOC_HASHED = "hashed"                  # v1/v2: uint32 source_hash, read directly
+DOC_FROM_PATH = "from_path"            # v3: derived from source_strings via the filename
+DOC_NO_PROVENANCE = "no_provenance"    # cart predates provenance; nothing can apply
+DOC_MALFORMED = "malformed"            # entry present but unusable -- a data defect
+
+
+@dataclass(frozen=True)
+class DocRef:
+    """A passage's document identity, and the reason it does or does not have one."""
+
+    key: int | None
+    reason: str
+
+    @property
+    def governable(self) -> bool:
+        """Whether a document-level rule could possibly bind this passage."""
+        return self.key is not None
+
+
+def document_ref(hippo_entry) -> DocRef:
+    """`document_key` with the reason kept instead of thrown away."""
+    if not isinstance(hippo_entry, dict):
+        return DocRef(None, DOC_MALFORMED)
+
+    h = hippo_entry.get("source_hash")
+    if h is not None:
+        try:
+            return DocRef(int(h), DOC_HASHED)
+        except (TypeError, ValueError):
+            return DocRef(None, DOC_MALFORMED)
+
+    path = hippo_entry.get("source_path")
+    if path:
+        import hashlib
+        return DocRef(int(hashlib.md5(str(path).encode()).hexdigest()[:8], 16),
+                      DOC_FROM_PATH)
+
+    # v3 rows carry a source_idx even when the strings table is missing, so an idx with no
+    # resolvable path is a BROKEN cart, not an old one. Telling those apart is the whole
+    # point of keeping the reason.
+    if hippo_entry.get("source_idx") is not None:
+        return DocRef(None, DOC_MALFORMED)
+
+    return DocRef(None, DOC_NO_PROVENANCE)
+
+
+def cart_governability(hippo_entries) -> dict:
+    """How much of a cart can carry document-level rules. For the management screen.
+
+    Returns `{keyed, total, reasons: {...}}`. A cart reporting `keyed: 0` cannot enforce a
+    single exception, and an owner about to write one deserves to be told that BEFORE she
+    writes it rather than after she demos it.
+    """
+    counts: dict = {}
+    keyed = 0
+    total = 0
+    for e in hippo_entries or []:
+        ref = document_ref(e)
+        counts[ref.reason] = counts.get(ref.reason, 0) + 1
+        keyed += 1 if ref.governable else 0
+        total += 1
+    return {"keyed": keyed, "total": total, "reasons": counts}
+
+
 def document_key(hippo_entry) -> int | None:
     """Which document a passage belongs to, as one number, from EITHER h-block format.
 
