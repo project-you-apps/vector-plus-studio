@@ -1802,28 +1802,39 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  // RETHROWS. Do not swallow — found 2026-08-10 when Andy, signed in as Betty (a viewer),
+  // tombstoned a passage and the UI said "Tombstoned passage #12". The server had refused
+  // it with a 403; this catch ate the error, the await resolved normally, and the caller's
+  // next line logged success unconditionally.
+  //
+  // The permission system was working. The interface said it wasn't, which during a demo is
+  // worse than a bug — a prospect watching that concludes the access control is theatre.
+  // A write that reports success it did not have is the one failure mode this screen must
+  // never have.
   deleteResult: async (idx: number) => {
     try {
       await api.deletePattern(idx)
-      set((s) => ({
-        results: s.results.filter((r) => r.idx !== idx),
-        confirmDeleteIdx: null,
-      }))
-      await get().fetchStatus()
-      await get().fetchDeleted()
     } catch (e) {
       console.error('Delete failed:', e)
+      throw e
     }
+    set((s) => ({
+      results: s.results.filter((r) => r.idx !== idx),
+      confirmDeleteIdx: null,
+    }))
+    await get().fetchStatus()
+    await get().fetchDeleted()
   },
 
   restoreResult: async (idx: number) => {
     try {
       await api.restorePattern(idx)
-      await get().fetchStatus()
-      await get().fetchDeleted()
     } catch (e) {
       console.error('Restore failed:', e)
+      throw e
     }
+    await get().fetchStatus()
+    await get().fetchDeleted()
   },
 
   fetchDeleted: async () => {

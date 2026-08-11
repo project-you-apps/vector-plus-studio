@@ -353,7 +353,13 @@ export default function CRUDScreen() {
           log('update', `Add-new failed: ${addResp.message}`, false)
           return
         }
-        await deleteResult(idx)
+        try {
+          await deleteResult(idx)
+        } catch (e) {
+          // The add already succeeded; say so rather than claiming the whole update did.
+          log('update', `Added new entry, but tombstoning #${idx} was refused: ${e instanceof Error ? e.message : 'unknown'}`, false)
+          return
+        }
         log('update', `Updated pattern #${idx} (new entry + tombstoned old)`, true)
         setUpdateText('')
         setUpdateIdx('')
@@ -418,8 +424,15 @@ export default function CRUDScreen() {
           localCartTombstone(idx)
           log('delete', `Tombstoned local passage #${idx}`, true)
         } else {
-          await deleteResult(idx)
-          log('delete', `Tombstoned passage #${idx}`, true)
+          // Report what actually happened. `deleteResult` rethrows now; logging `true`
+          // beside an unguarded await is what told Andy a viewer had tombstoned a passage
+          // the server had refused.
+          try {
+            await deleteResult(idx)
+            log('delete', `Tombstoned passage #${idx}`, true)
+          } catch (e) {
+            log('delete', `Tombstone refused: ${e instanceof Error ? e.message : 'unknown'}`, false)
+          }
         }
         setDeleteIdx('')
         bumpCartVersion()
@@ -470,8 +483,12 @@ export default function CRUDScreen() {
       localCartRestore(idx)
       log('restore', `Restored local pattern #${idx}`, true)
     } else {
-      await restoreResult(idx)
-      log('restore', `Restored pattern #${idx}`, true)
+      try {
+        await restoreResult(idx)
+        log('restore', `Restored pattern #${idx}`, true)
+      } catch (e) {
+        log('restore', `Restore refused: ${e instanceof Error ? e.message : 'unknown'}`, false)
+      }
     }
     bumpCartVersion()
   }
