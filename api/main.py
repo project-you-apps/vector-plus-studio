@@ -154,6 +154,58 @@ if PUBLIC_HOST:
           "cart access governed per-cart.")
 
 
+def _refuse_path_shaped_filename(filename: str) -> None:
+    """On a public host, refuse a mount target that names a FILESYSTEM LOCATION.
+
+    THE HOLE THIS CLOSES (found 2026-08-12, live on the droplet). `/api/cartridges/mount`
+    did `if os.path.isabs(filename) and os.path.exists(filename)` and then opened the file
+    -- so an unauthenticated stranger could hand it `/etc/passwd`, `../../../etc/passwd`, or
+    `.env`, and the server would open that file and pass it to `pickle.load` / `np.load(...,
+    allow_pickle=True)`. Nothing disclosed, but only because those files are not valid
+    pickles. That is luck, not a control, and unpickling caller-chosen bytes is an
+    arbitrary-code-execution primitive if anything pickle-shaped ever reaches the disk.
+
+    THE DECISION IS OLD; ONLY THE ENFORCEMENT IS NEW. 2026-06-02 we chose to keep the
+    droplet upload-only and recorded the alternative verbatim: *"restrict allowed paths
+    server-side to a safe directory like /opt/vector-plus-studio/cartridges/."* That got
+    implemented in the FRONTEND -- Open Cartridge is hidden when `read_only_mode` -- and
+    never on the server. The 2026-08-06 flag split then wired PUBLIC_HOST into
+    `/api/cartbuilder/carts` and did not sweep this route. Hiding a button is not a control;
+    the server has to say no.
+
+    REFUSES BY SHAPE, NOT BY EXISTENCE. Checking `os.path.exists` first would answer "does
+    this file exist" for any path a stranger names -- a filesystem oracle, and a smaller
+    version of the same leak. Anything path-shaped is refused identically whether it exists
+    or not.
+
+    Bare cart names are untouched, so normal mounting is unaffected, and the local studio
+    (PUBLIC_HOST false) keeps its Open dialog and absolute paths exactly as before.
+    """
+    if not PUBLIC_HOST or not filename:
+        return
+
+    looks_like_path = (os.path.isabs(filename) or "/" in filename
+                       or "\\" in filename or ".." in filename)
+    if not looks_like_path:
+        return
+
+    candidate = os.path.realpath(os.path.abspath(filename))
+    for root in get_cartridge_dirs():
+        root_real = os.path.realpath(root)
+        try:
+            if os.path.commonpath([candidate, root_real]) == root_real:
+                return          # inside a cartridge dir -- legitimate
+        except ValueError:
+            continue            # different drive on Windows; not this root
+
+    print(f"[Mount] REFUSED path-shaped filename on public host: {filename!r}")
+    raise HTTPException(
+        status_code=403,
+        detail=("This server does not open carts by filesystem path. Mount by cart name, "
+                "or upload the cart first."),
+    )
+
+
 def _enforce_writable(idx: int | None = None):
     """Raise 403 if writes are disallowed at any level.
 
@@ -409,7 +461,7 @@ except Exception as _membox_err:
 from .cartridge_io import (
     list_cartridges as _list_cartridges, load_cartridge, load_signatures,
     find_cartridge_path, find_companion_file, validate_brain_manifest,
-    save_brain_manifest, save_signatures, DATA_DIR, parse_hippocampus,
+    save_brain_manifest, save_signatures, DATA_DIR, get_cartridge_dirs, parse_hippocampus,
     load_cart_permissions, cart_permits_write, pattern_permits_write,
     pattern_permits_read,
 )
@@ -1461,6 +1513,10 @@ async def mount_cartridge(req: MountRequest, request: Request,
 
     filename = req.filename
     print(f"[Mount] filename='{filename}' isabs={os.path.isabs(filename)} exists={os.path.exists(filename)}")
+
+    # BEFORE any branch that touches the disk. Every path below this line either opens the
+    # file or stats it, so the refusal has to come first or it is not a refusal.
+    _refuse_path_shaped_filename(filename)
 
     # Support full file paths (from the Open dialog)
     if os.path.isabs(filename) and os.path.exists(filename):
