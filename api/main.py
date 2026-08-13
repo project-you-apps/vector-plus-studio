@@ -459,6 +459,7 @@ except Exception as _membox_err:
     print(f"[VPS] Membox not available: {_membox_err}")
     traceback.print_exc()
 from . import cart_context
+from . import request_cart
 from .cartridge_io import (
     list_cartridges as _list_cartridges, load_cartridge, load_signatures,
     find_cartridge_path, find_companion_file, validate_brain_manifest,
@@ -1516,6 +1517,41 @@ def load_cart_fields(cart_id: str):
     return fields
 
 
+async def bind_caller_cart(request: Request,
+                           user: dict | None = Depends(get_current_user)):
+    """Bind the cart THIS caller named, for the life of the request. Declare it FIRST.
+
+    ⚠ DECLARATION ORDER IS THE CONTROL. `cart_guard.resolve()` reads `engine.mounted_path`,
+    which is context-backed since 2026-08-13 -- so with this dependency declared BEFORE
+    `require_cart_read`, the guard resolves access to the CALLER'S cart and the route body
+    reads that same cart. Bind, guard and body then agree by construction. Declared after the
+    guard, access would be checked against whatever was bound previously, which is the
+    "guarding the wrong object" bug `resolve_named` exists to avoid. Asserted by
+    `test_binding_is_declared_before_the_guard`.
+
+    MUST BE `async def`. FastAPI runs SYNC dependencies in a threadpool, which gets a COPY of
+    the context -- a ContextVar set there would not reach the endpoint, and the binding would
+    silently do nothing while every test that checked the dependency in isolation still
+    passed.
+
+    A caller naming no cart binds nothing and keeps today's behaviour, which is what lets the
+    frontend migrate one screen at a time.
+    """
+    cart_id = request_cart.requested_cart(request)
+    viewer = request_cart.view_key(request, user)
+    try:
+        with request_cart.bound_cart(cart_id, viewer, load_cart_fields) as state:
+            yield state
+    except FileNotFoundError as e:
+        # A cart id from a header that names nothing is a bad request, not a server fault.
+        # Deliberately does NOT say whether the cart exists elsewhere -- the same reticence
+        # /api/status now applies to `mounted_cartridge`.
+        raise HTTPException(status_code=404, detail={
+            "error": "cart_not_found",
+            "message": "That cart is not available on this server.",
+        }) from e
+
+
 async def _dispatch_mount(helper_fn, *args) -> MountResponse:
     """Run a mount helper in a thread and apply cart permissions on success."""
     resp = await asyncio.to_thread(helper_fn, *args)
@@ -2471,7 +2507,11 @@ def _get_mounted_source_paths() -> list[str]:
 
 @app.post("/api/search", response_model=SearchResponse)
 async def search_endpoint(req: SearchRequest, request: Request,
-                          user: dict | None = Depends(get_current_user), _guard=Depends(cart_guard.require_cart_read)):
+                          user: dict | None = Depends(get_current_user),
+                          _bind=Depends(bind_caller_cart),
+                          _guard=Depends(cart_guard.require_cart_read)):
+    # _bind BEFORE _guard, deliberately -- see bind_caller_cart. The guard resolves access to
+    # whatever is bound, so binding second would check the previous caller's cart.
     if not engine.mounted_name:
         return SearchResponse(
             query=req.query, mode="none", elapsed_ms=0,
