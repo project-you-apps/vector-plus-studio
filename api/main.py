@@ -689,19 +689,26 @@ async def get_status(request: Request,
             # other choice is an editor-looking UI for someone who may be a viewer.
             effective_read_only = True
 
+    # A caller who may not know the cart's NAME must not learn its SIZE either. Measured
+    # 2026-08-13: with the name correctly withheld, pattern_count still reported 1405 for one
+    # cart and 1359 for another, which distinguishes them against a cart list anyone can
+    # fetch. Same disclosure as the name, one field over. `deleted_count` goes with it for
+    # the same reason.
+    withheld = mounted_name is None and engine.mounted_name is not None
+
     return StatusResponse(
         engine_ready=engine.engine_ready,
         gpu_available=engine.gpu_available,
         mounted_cartridge=mounted_name,
         mounted_is_sandboxed=mounted_is_sandboxed,
-        pattern_count=len(engine.passages),
+        pattern_count=0 if withheld else len(engine.passages),
         physics_trained=engine.physics_trained,
         training_active=engine.training_active,
         training_progress=engine.training_progress,
         training_total=engine.training_total,
         multimodal=engine.multimodal_mode,
         signatures_loaded=engine.signatures_loaded,
-        deleted_count=len(engine.deleted_ids),
+        deleted_count=0 if withheld else len(engine.deleted_ids),
         dirty=engine.dirty,
         read_only=effective_read_only,
         read_only_mode=READ_ONLY_MODE,
