@@ -33,13 +33,65 @@ import os
 from contextlib import contextmanager
 from typing import Callable, Iterator, Optional
 
-from fastapi import Request
+from fastapi import Depends, HTTPException, Request
 
 from . import cart_context
+from .auth import get_current_user
 from .cart_pool import CartState, pool
 
 __all__ = ["CART_HEADER", "SESSION_HEADER", "requested_cart", "view_key", "access_seat",
-           "bound_cart"]
+           "bound_cart", "bind_caller_cart", "set_loader"]
+
+# The function that turns a cart id into CartFields. Injected by main.py at import time
+# rather than imported from it, because main imports uploads/agents/reports -- so a route
+# module that wants this dependency cannot import main back.
+#
+# The eject route found this: it lives in uploads.py, was the one guarded route of eighteen
+# NOT binding, and could not be fixed by importing main. A registry is the smaller change
+# than moving five mount helpers out of main.
+_loader: Optional[Callable[[str], object]] = None
+
+
+def set_loader(fn: Callable[[str], object]) -> None:
+    """Register the cart loader. Called once by main.py at import."""
+    global _loader
+    _loader = fn
+
+
+async def bind_caller_cart(request: Request,
+                           user: dict | None = Depends(get_current_user)):
+    """Bind the cart THIS caller named, for the life of the request. Declare it FIRST.
+
+    ⚠ DECLARATION ORDER IS THE CONTROL. `cart_guard.resolve()` reads `engine.mounted_path`,
+    which is context-backed since 2026-08-13 -- so with this declared BEFORE
+    `require_cart_read`, the guard resolves access to the CALLER'S cart and the route body
+    reads that same cart. Bind, guard and body then agree by construction. Declared after,
+    access is checked against whatever the previous caller bound: guarding the wrong object.
+    Enforced across every guarded route by `test_every_guarded_route_binds_first`.
+
+    MUST BE `async def`. FastAPI runs SYNC dependencies in a threadpool, which gets a COPY of
+    the context -- a ContextVar set there would not reach the endpoint, and the binding would
+    silently do nothing while every isolated test still passed.
+
+    A caller naming no cart binds nothing and keeps today's behaviour, which is what lets the
+    frontend migrate one screen at a time.
+    """
+    if _loader is None:                                     # pragma: no cover - import order
+        raise RuntimeError("request_cart.set_loader() was never called")
+
+    cart_id = requested_cart(request)
+    viewer = view_key(request, user)
+    try:
+        with bound_cart(cart_id, viewer, _loader) as state:
+            yield state
+    except FileNotFoundError as e:
+        # A cart id from a header that names nothing is a bad request, not a server fault.
+        # Deliberately does NOT say whether the cart exists elsewhere -- the same reticence
+        # /api/status now applies to `mounted_cartridge`.
+        raise HTTPException(status_code=404, detail={
+            "error": "cart_not_found",
+            "message": "That cart is not available on this server.",
+        }) from e
 
 # The caller names its cart here, or as ?cart= for links we want to be pasteable.
 CART_HEADER = "x-vps-cart"

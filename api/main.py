@@ -460,6 +460,7 @@ except Exception as _membox_err:
     traceback.print_exc()
 from . import cart_context
 from . import request_cart
+from .request_cart import bind_caller_cart
 from .cartridge_io import (
     list_cartridges as _list_cartridges, load_cartridge, load_signatures,
     find_cartridge_path, find_companion_file, validate_brain_manifest,
@@ -939,7 +940,7 @@ def _parse_per_pattern_meta_from_npz(cart_path: str) -> list[dict] | None:
 
 
 @app.get("/api/cart/per-pattern-meta", response_model=PerPatternMetaResponse)
-async def get_cart_per_pattern_meta(_guard=Depends(cart_guard.require_cart_read)):
+async def get_cart_per_pattern_meta(_bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_read)):
     """Return the per_pattern_meta.npy sidecar for the currently-mounted cart.
 
     Enables sandbox-mounted carts to reach parity with LocalCart-mounted
@@ -964,7 +965,7 @@ async def get_cart_per_pattern_meta(_guard=Depends(cart_guard.require_cart_read)
 
 
 @app.get("/api/cart/pattern-0", response_model=Pattern0Response)
-async def get_cart_pattern_0(_guard=Depends(cart_guard.require_cart_read)):
+async def get_cart_pattern_0(_bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_read)):
     """Return Pattern-0 metadata + TOC for the currently-mounted cart.
 
     Read-only v1.
@@ -1255,7 +1256,7 @@ def _cosine_candidates(emb_list, pool_size, embeddings, passages):
 
 
 @app.get("/api/cartridges/mounted/embedding/{idx}")
-async def get_embedding_by_index(idx: int, _guard=Depends(cart_guard.require_cart_read)):
+async def get_embedding_by_index(idx: int, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_read)):
     """Return a single embedding + passage from the currently-mounted cart.
 
     Convenience wrapper around the cart_name-keyed route; serves the test
@@ -1270,7 +1271,7 @@ async def get_embedding_by_index(idx: int, _guard=Depends(cart_guard.require_car
 
 
 @app.post("/api/cartridges/mounted/cosine-candidates")
-async def cosine_candidate_pool_mounted(payload: dict, _guard=Depends(cart_guard.require_cart_read)):
+async def cosine_candidate_pool_mounted(payload: dict, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_read)):
     """Cosine pre-filter on the mounted cart. Kept for back-compat with the
     test pages; production UI uses the cart_name-keyed route below."""
     if engine.embeddings is None or not engine.passages:
@@ -1303,7 +1304,7 @@ async def cosine_candidate_pool_for_cart(cart_name: str, payload: dict, _guard=D
 
 @app.post("/api/walk-from")
 async def walk_from_idx(payload: dict,
-                        _guard=Depends(cart_guard.require_cart_read)):
+                        _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_read)):
     """Server-side "Walk from here" — runs Associate using the embedding at
     the given (cart_name, idx) as the query. Mirrors what the WebGPU Walk
     path does in the browser. Server-side path requires the cart be mounted
@@ -1517,39 +1518,10 @@ def load_cart_fields(cart_id: str):
     return fields
 
 
-async def bind_caller_cart(request: Request,
-                           user: dict | None = Depends(get_current_user)):
-    """Bind the cart THIS caller named, for the life of the request. Declare it FIRST.
-
-    ⚠ DECLARATION ORDER IS THE CONTROL. `cart_guard.resolve()` reads `engine.mounted_path`,
-    which is context-backed since 2026-08-13 -- so with this dependency declared BEFORE
-    `require_cart_read`, the guard resolves access to the CALLER'S cart and the route body
-    reads that same cart. Bind, guard and body then agree by construction. Declared after the
-    guard, access would be checked against whatever was bound previously, which is the
-    "guarding the wrong object" bug `resolve_named` exists to avoid. Asserted by
-    `test_binding_is_declared_before_the_guard`.
-
-    MUST BE `async def`. FastAPI runs SYNC dependencies in a threadpool, which gets a COPY of
-    the context -- a ContextVar set there would not reach the endpoint, and the binding would
-    silently do nothing while every test that checked the dependency in isolation still
-    passed.
-
-    A caller naming no cart binds nothing and keeps today's behaviour, which is what lets the
-    frontend migrate one screen at a time.
-    """
-    cart_id = request_cart.requested_cart(request)
-    viewer = request_cart.view_key(request, user)
-    try:
-        with request_cart.bound_cart(cart_id, viewer, load_cart_fields) as state:
-            yield state
-    except FileNotFoundError as e:
-        # A cart id from a header that names nothing is a bad request, not a server fault.
-        # Deliberately does NOT say whether the cart exists elsewhere -- the same reticence
-        # /api/status now applies to `mounted_cartridge`.
-        raise HTTPException(status_code=404, detail={
-            "error": "cart_not_found",
-            "message": "That cart is not available on this server.",
-        }) from e
+# The pool loader, handed to request_cart so any route module can declare
+# `bind_caller_cart` without importing main -- which imports them. The eject route in
+# uploads.py is why: it was the one guarded route of eighteen that could not bind.
+request_cart.set_loader(load_cart_fields)
 
 
 async def _dispatch_mount(helper_fn, *args) -> MountResponse:
@@ -2306,13 +2278,13 @@ async def unmount_cartridge():
 
 
 @app.post("/api/cartridges/lock", response_model=MessageResponse)
-async def lock_cartridge(_guard=Depends(cart_guard.require_cart_write)):
+async def lock_cartridge(_bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write)):
     engine.read_only = True
     return MessageResponse(success=True, message="Cartridge locked (read-only)")
 
 
 @app.post("/api/cartridges/unlock", response_model=MessageResponse)
-async def unlock_cartridge(_guard=Depends(cart_guard.require_cart_write)):
+async def unlock_cartridge(_bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write)):
     _enforce_writable()  # Public demo: refuses unlock so the per-cart lock can't be cleared
     if not engine.mounted_name:
         return MessageResponse(success=False, message="No cartridge mounted")
@@ -2321,7 +2293,7 @@ async def unlock_cartridge(_guard=Depends(cart_guard.require_cart_write)):
 
 
 @app.post("/api/cartridges/save", response_model=MessageResponse)
-async def save_cartridge(_guard=Depends(cart_guard.require_cart_write)):
+async def save_cartridge(_bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write)):
     _enforce_writable()
     if not engine.mounted_name:
         return MessageResponse(success=False, message="No cartridge mounted")
@@ -2508,10 +2480,7 @@ def _get_mounted_source_paths() -> list[str]:
 @app.post("/api/search", response_model=SearchResponse)
 async def search_endpoint(req: SearchRequest, request: Request,
                           user: dict | None = Depends(get_current_user),
-                          _bind=Depends(bind_caller_cart),
-                          _guard=Depends(cart_guard.require_cart_read)):
-    # _bind BEFORE _guard, deliberately -- see bind_caller_cart. The guard resolves access to
-    # whatever is bound, so binding second would check the previous caller's cart.
+                          _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_read)):
     if not engine.mounted_name:
         return SearchResponse(
             query=req.query, mode="none", elapsed_ms=0,
@@ -2629,7 +2598,7 @@ async def search_endpoint(req: SearchRequest, request: Request,
 # ---------------------------------------------------------------------------
 
 @app.delete("/api/patterns/{idx}", response_model=MessageResponse)
-async def delete_pattern(idx: int, _guard=Depends(cart_guard.require_cart_write)):
+async def delete_pattern(idx: int, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write)):
     _enforce_writable(idx=idx)
     if engine.read_only:
         return MessageResponse(success=False, message="Cartridge is read-only. Unlock first.")
@@ -2641,7 +2610,7 @@ async def delete_pattern(idx: int, _guard=Depends(cart_guard.require_cart_write)
 
 @app.put("/api/patterns/{idx}", response_model=MessageResponse)
 async def edit_pattern(idx: int, req: AddPassageRequest,
-                       user: dict | None = Depends(get_current_user), _guard=Depends(cart_guard.require_cart_write)):
+                       user: dict | None = Depends(get_current_user), _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write)):
     """Replace a passage: append the new text, tombstone the old, RECORD THE SUCCESSION.
 
     THE VERB THAT WAS MISSING. Editing was previously two independent calls — POST a new
@@ -2704,7 +2673,7 @@ async def edit_pattern(idx: int, req: AddPassageRequest,
 
 
 @app.post("/api/patterns/{idx}/restore", response_model=MessageResponse)
-async def restore_pattern(idx: int, _guard=Depends(cart_guard.require_cart_write)):
+async def restore_pattern(idx: int, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write)):
     _enforce_writable(idx=idx)
     if engine.read_only:
         return MessageResponse(success=False, message="Cartridge is read-only. Unlock first.")
@@ -2713,7 +2682,7 @@ async def restore_pattern(idx: int, _guard=Depends(cart_guard.require_cart_write
 
 
 @app.get("/api/patterns/deleted", response_model=DeletedListResponse)
-async def list_deleted(_guard=Depends(cart_guard.require_cart_read)):
+async def list_deleted(_bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_read)):
     deleted = []
     for idx in sorted(engine.deleted_ids):
         if idx < len(engine.passages):
@@ -2744,7 +2713,7 @@ async def list_patterns(
     offset: int = 0,
     limit: int = 25,
     q: str | None = None,
-    source: str | None = None, _guard=Depends(cart_guard.require_cart_read)):
+    source: str | None = None, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_read)):
     """Paginated list of active (non-tombstoned) passages with first-line
     title + body preview. Used by the Edit Carts passage browser to give
     users a click-to-populate IDX experience for the Update/Delete panels.
@@ -2832,7 +2801,7 @@ async def list_patterns(
 
 
 @app.get("/api/patterns/{idx}", response_model=PatternResponse)
-async def get_pattern(idx: int, _guard=Depends(cart_guard.require_cart_read)):
+async def get_pattern(idx: int, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_read)):
     """Fetch a single pattern by index, with hippocampus PREV/NEXT links.
 
     For split carts, the in-RAM `engine.passages[idx]` is the 200-char snippet;
@@ -2910,7 +2879,7 @@ async def get_pattern(idx: int, _guard=Depends(cart_guard.require_cart_read)):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/patterns", response_model=MessageResponse)
-async def add_passage(req: AddPassageRequest, _guard=Depends(cart_guard.require_cart_write)):
+async def add_passage(req: AddPassageRequest, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write)):
     _enforce_writable()
     if not engine.mounted_name:
         return MessageResponse(success=False, message="No cartridge mounted")
@@ -3128,7 +3097,7 @@ async def membox_unmount_endpoint(req: MemboxUnmountRequest):
 
 
 @app.post("/api/membox/imprint", response_model=MessageResponse)
-async def membox_imprint(req: MemboxImprintRequest, _guard=Depends(cart_guard.require_cart_write)):
+async def membox_imprint(req: MemboxImprintRequest, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write)):
     _enforce_writable()
     if not _MEMBOX_AVAILABLE:
         return MessageResponse(success=False, message="Membox not available")

@@ -38,7 +38,25 @@ def clean_state():
 
 
 @pytest.fixture
-def fake_loader(monkeypatch):
+def swap_loader():
+    """Replace the registered loader, and put the real one back.
+
+    ⚠ NOT `monkeypatch.setattr(main, "load_cart_fields", ...)`. `request_cart.set_loader()`
+    captures the function ONCE at import, so patching the module attribute afterwards changes
+    nothing the dependency ever reads -- three tests failed exactly that way when the registry
+    landed. Anything that needs a different loader has to go through set_loader.
+    """
+    original = request_cart._loader
+
+    def _swap(fn):
+        request_cart.set_loader(fn)
+
+    yield _swap
+    request_cart.set_loader(original)
+
+
+@pytest.fixture
+def fake_loader(swap_loader):
     """Load a cart without touching disk -- this suite is about BINDING, not loading."""
     loaded = []
 
@@ -58,7 +76,7 @@ def fake_loader(monkeypatch):
             embeddings=emb,
         )
 
-    monkeypatch.setattr(main, "load_cart_fields", _load)
+    swap_loader(_load)
     return loaded
 
 
@@ -84,6 +102,45 @@ def test_binding_is_declared_before_the_guard():
     assert "_bind" in params and "_guard" in params
     assert params.index("_bind") < params.index("_guard"), (
         "the guard would resolve access against the PREVIOUS caller's cart")
+
+
+def test_every_guarded_route_binds_first():
+    """EVERY route, not just search -- route eighteen is the one that bites.
+
+    Same discipline as test_every_route_is_guarded_or_explicitly_exempt: checking the routes
+    someone remembered is how `/api/agents`, `/api/reports` and `/api/llm` sat unguarded
+    while a green test claimed otherwise.
+
+    A guarded route that does NOT bind serves whatever cart the previous request left behind.
+    A guarded route that binds AFTER the guard has its access checked against that same stale
+    cart. Both are silent; both are the bug this phase exists to remove.
+    """
+    from api.cart_guard import require_cart_read, require_cart_write
+
+    guards = {require_cart_read, require_cart_write}
+    offenders = []
+
+    for route in main.app.routes:
+        dependant = getattr(route, "dependant", None)
+        if dependant is None:
+            continue
+        deps = [d.call for d in getattr(dependant, "dependencies", []) or []]
+        if not (guards & set(deps)):
+            continue
+
+        endpoint = getattr(route, "endpoint", None)
+        if endpoint is None:
+            continue
+        params = list(inspect.signature(endpoint).parameters)
+        path = getattr(route, "path", "?")
+
+        if "_bind" not in params:
+            offenders.append(f"{path} -- guarded but never binds the caller's cart")
+        elif "_guard" in params and params.index("_bind") > params.index("_guard"):
+            offenders.append(f"{path} -- binds AFTER the guard; access checked on the "
+                             f"previous caller's cart")
+
+    assert not offenders, "\n  " + "\n  ".join(sorted(offenders))
 
 
 # -- behaviour through the real stack -----------------------------------------
@@ -138,11 +195,11 @@ def test_a_cart_is_loaded_once_and_reused(client, fake_loader):
         f"loaded {len(fake_loader)} times for three viewers of one cart")
 
 
-def test_an_unknown_cart_is_a_404_that_reveals_nothing(client, monkeypatch):
+def test_an_unknown_cart_is_a_404_that_reveals_nothing(client, swap_loader):
     def _missing(cart_id):
         raise FileNotFoundError(cart_id)
 
-    monkeypatch.setattr(main, "load_cart_fields", _missing)
+    swap_loader(_missing)
     r = client.post("/api/search", json={"query": "x"},
                     headers={request_cart.CART_HEADER: "someone-elses-cart"})
 
