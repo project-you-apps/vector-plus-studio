@@ -120,7 +120,26 @@ def test_mount_actually_calls_the_guard_before_touching_disk():
     assert "_refuse_path_shaped_filename(" in src, (
         "mount_cartridge never calls _refuse_path_shaped_filename")
 
+    # The disk work moved into `_mount_plan` on 2026-08-13 (shared with the pool loader), so
+    # this anchors on the CALL to it rather than on the isabs/exists line it used to contain.
+    # It FAILED rather than passing vacuously when the code moved, because `.index()` raises
+    # on a missing anchor -- worth preserving. A boolean `in` check would have gone quiet.
     guard_at = src.index("_refuse_path_shaped_filename(")
-    disk_at = src.index("os.path.isabs(filename) and os.path.exists(filename)")
+    disk_at = src.index("_mount_plan(")
     assert guard_at < disk_at, (
-        "the guard runs AFTER the filesystem branch; it must refuse before any disk access")
+        "the guard runs AFTER the filesystem dispatch; it must refuse before any disk access")
+
+
+def test_the_pool_loader_cannot_be_handed_a_path():
+    """`load_cart_fields` is reachable from a request HEADER, so it takes a name, not a path.
+
+    The mount route is protected by `_refuse_path_shaped_filename`. The pool loader is a
+    second door to the same loaders, and a second door needs its own lock -- it resolves
+    through `find_cartridge_path`, which only searches whitelisted cartridge directories.
+    """
+    import inspect
+
+    src = inspect.getsource(main.load_cart_fields)
+    assert "find_cartridge_path(" in src, (
+        "load_cart_fields does not resolve through find_cartridge_path; a caller-supplied "
+        "cart id could reach an arbitrary path")

@@ -458,6 +458,7 @@ except Exception as _membox_err:
     _MEMBOX_AVAILABLE = False
     print(f"[VPS] Membox not available: {_membox_err}")
     traceback.print_exc()
+from . import cart_context
 from .cartridge_io import (
     list_cartridges as _list_cartridges, load_cartridge, load_signatures,
     find_cartridge_path, find_companion_file, validate_brain_manifest,
@@ -1418,6 +1419,103 @@ def _apply_cart_permissions_after_mount(cart_path: str | None) -> None:
         print(f"[Mount] cart_permissions loaded: default={perms.get('default')!r}")
 
 
+def _mount_plan(filename: str):
+    """Which loader handles this file, and what to call the cart. None if not a real path.
+
+    EXTRACTED 2026-08-13 so the mount route and the POOL LOADER make the same choice. Two
+    copies of this dispatch would mean one cart loading one way through `/api/cartridges/mount`
+    and another way through the pool -- the same object arriving in two shapes, which is the
+    class of drift `_write_blocked` and `_should_include` were both centralised to end.
+
+    Returns `(helper_fn, args)` ready for `_dispatch_mount`, or None when `filename` is a
+    bare cart name rather than an existing path (the caller falls through to the by-name
+    path). Behaviour is unchanged from the inline version it replaces.
+    """
+    if not (os.path.isabs(filename) and os.path.exists(filename)):
+        return None
+
+    basename = os.path.basename(filename)
+    ext = os.path.splitext(basename)[1].lower()
+
+    if ext == '.npz':
+        # Could be Studio signatures (_signatures.npz) or membot cartridge (.cart.npz).
+        # Peek inside to detect format.
+        try:
+            probe = np.load(filename, allow_pickle=True)
+            probe_keys = list(probe.keys())
+            probe.close()
+        except Exception:                                       # noqa: BLE001
+            probe_keys = []
+
+        if 'embeddings' in probe_keys and 'passages' in probe_keys:
+            cart_name = basename.replace('.cart.npz', '').replace('.npz', '')
+            return _mount_membot_npz, (filename, cart_name)
+
+        cart_name = basename
+        for suffix in ('_signatures.npz', '.npz'):
+            if cart_name.endswith(suffix):
+                cart_name = cart_name[:-len(suffix)]
+                break
+        return _mount_brain_by_path, (filename, cart_name)
+
+    if ext == '.npy':
+        cart_name = basename
+        for suffix in ('_brain.npy', '.npy'):
+            if cart_name.endswith(suffix):
+                cart_name = cart_name[:-len(suffix)]
+                break
+        return _mount_brain_by_path, (filename, cart_name)
+
+    return _mount_pkl_by_path, (filename, os.path.splitext(basename)[0])
+
+
+def load_cart_fields(cart_id: str):
+    """Load `cart_id` into a FRESH CartFields. The pool's loader.
+
+    This is where Phase 1b pays for itself: `engine.*` are context-backed properties, so
+    binding an empty CartFields and running the EXISTING mount helpers populates it -- five
+    loader paths and ~212 call sites reused untouched, with no parallel "load for the pool"
+    implementation to keep in agreement.
+
+    Takes a NAME, not a path. `find_cartridge_path` resolves it inside the whitelisted
+    cartridge directories, so a caller-supplied id cannot reach the filesystem generally --
+    the same containment `_refuse_path_shaped_filename` enforces on the mount route, applied
+    here because the pool is reachable from a header.
+
+    Runs the helper SYNCHRONOUSLY. Callers are already off the event loop (pool.acquire is
+    called from a thread or a sync context); wrapping it in to_thread here would bind the
+    context in the wrong task.
+    """
+    from .cart_context import CartFields
+
+    # ⚠ THE NAME THAT IS CHECKED MUST BE THE NAME THAT IS LOADED. These candidates mirror
+    # `cart_guard.resolve_named` exactly -- as given, then the membot-format spelling. If the
+    # two ever tried different orders, a caller could be access-checked against
+    # `finance.cart.npz` and served `finance.pkl`, which is a bypass rather than a bug.
+    # Callers should access-check `os.path.basename(fields.mounted_path)` -- the RESOLVED
+    # name -- for the same reason agents/reports check after `_resolve_cart_ref`.
+    candidates = [cart_id]
+    if not cart_id.endswith((".cart.npz", ".pkl", ".npz")):
+        candidates.append(f"{cart_id}.cart.npz")
+
+    resolved = next((p for p in (find_cartridge_path(c) for c in candidates) if p), None)
+    if not resolved:
+        raise FileNotFoundError(
+            f"no cart named {cart_id!r} in the cartridge directories (tried {candidates})")
+
+    fields = CartFields()
+    with cart_context.use_cart(fields):
+        plan = _mount_plan(str(resolved))
+        if plan is None:
+            raise FileNotFoundError(f"{cart_id!r} resolved to {resolved!r}, which is not loadable")
+        helper, args = plan
+        resp = helper(*args)
+        if not getattr(resp, "success", False):
+            raise RuntimeError(f"loading {cart_id!r} failed: {getattr(resp, 'message', '')}")
+        _apply_cart_permissions_after_mount(fields.mounted_path)
+    return fields
+
+
 async def _dispatch_mount(helper_fn, *args) -> MountResponse:
     """Run a mount helper in a thread and apply cart permissions on success."""
     resp = await asyncio.to_thread(helper_fn, *args)
@@ -1524,44 +1622,10 @@ async def mount_cartridge(req: MountRequest, request: Request,
     # file or stats it, so the refusal has to come first or it is not a refusal.
     _refuse_path_shaped_filename(filename)
 
-    # Support full file paths (from the Open dialog)
-    if os.path.isabs(filename) and os.path.exists(filename):
-        basename = os.path.basename(filename)
-        ext = os.path.splitext(basename)[1].lower()
-
-        if ext == '.npz':
-            # Could be Studio signatures (_signatures.npz) or membot cartridge (.cart.npz)
-            # Peek inside to detect format
-            try:
-                probe = np.load(filename, allow_pickle=True)
-                probe_keys = list(probe.keys())
-                probe.close()
-            except Exception:
-                probe_keys = []
-
-            if 'embeddings' in probe_keys and 'passages' in probe_keys:
-                # Membot-format cartridge: embeddings + passages (like a PKL)
-                cart_name = basename.replace('.cart.npz', '').replace('.npz', '')
-                return await _dispatch_mount(_mount_membot_npz, filename, cart_name)
-            else:
-                # Studio signatures format
-                cart_name = basename
-                for suffix in ('_signatures.npz', '.npz'):
-                    if cart_name.endswith(suffix):
-                        cart_name = cart_name[:-len(suffix)]
-                        break
-                return await _dispatch_mount(_mount_brain_by_path, filename, cart_name)
-
-        if ext == '.npy':
-            cart_name = basename
-            for suffix in ('_brain.npy', '.npy'):
-                if cart_name.endswith(suffix):
-                    cart_name = cart_name[:-len(suffix)]
-                    break
-            return await _dispatch_mount(_mount_brain_by_path, filename, cart_name)
-
-        cart_name = os.path.splitext(basename)[0]
-        return await _dispatch_mount(_mount_pkl_by_path, filename, cart_name)
+    plan = _mount_plan(filename)
+    if plan is not None:
+        helper, args = plan
+        return await _dispatch_mount(helper, *args)
 
     is_brain_only = filename.endswith("(brain only)")
     cart_name = filename.replace(" (brain only)", "").replace(".pkl", "")
