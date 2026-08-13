@@ -185,21 +185,97 @@ def test_clear_survives_a_sidecar_that_raises_on_close():
 
 # -- the drift guard ----------------------------------------------------------
 
-def test_cart_fields_matches_what_engine_unmount_clears():
-    """`EngineManager.unmount()` is the de-facto definition of per-cart state.
+def test_unmount_delegates_rather_than_listing_fields():
+    """`unmount()` must clear via CartFields, not by re-listing the fields itself.
 
-    A field cleared there but missing here would keep its value across a mount -- one cart's
-    tombstones or permissions applied to the next, which is the worst class of bug this
-    module could produce. A field here but not there is dead weight. Either way the two must
-    agree, and remembering is not a mechanism.
+    ⚠ THIS TEST REPLACED A DRIFT GUARD THAT WOULD NOW PASS VACUOUSLY. The old version parsed
+    `unmount()` for `self.X =` assignments and compared them to CartFields. Once unmount
+    delegated to `clear()` it contained no assignments, so the comparison was against an
+    empty set and the test passed for the wrong reason -- green, and checking nothing.
+
+    So it now asserts the property that actually holds: one definition of per-cart state,
+    delegated to. Re-listing fields here would recreate exactly the drift the old test was
+    built to catch.
     """
     from api.engine import EngineManager
 
     src = inspect.getsource(EngineManager.unmount)
-    cleared = set(re.findall(r"self\.(\w+)\s*=", src))
-    declared = set(CartFields.__dataclass_fields__)              # noqa: SLF001
+    assert "clear()" in src, "unmount() no longer delegates to CartFields.clear()"
 
-    missing = cleared - declared
-    assert not missing, (
-        f"engine.unmount() clears these but CartFields does not declare them: "
-        f"{sorted(missing)} -- they would survive a cart switch")
+    reassigned = set(re.findall(r"self\.(\w+)\s*=", src))
+    cart_fields = set(CartFields.__dataclass_fields__)            # noqa: SLF001
+    relisted = reassigned & cart_fields
+    assert not relisted, (
+        f"unmount() re-lists cart fields instead of delegating: {sorted(relisted)}")
+
+
+def test_engine_exposes_exactly_the_cart_fields():
+    """Every CartFields field must reach callers through the request-scoped property.
+
+    A field declared but not exposed is unreachable; one exposed but not declared cannot be
+    per-request. The properties are GENERATED from CartFields, so this cannot drift -- which
+    is the point, and why it replaced a test that merely detected drift.
+    """
+    from api.engine import EngineManager
+
+    for name in CartFields.__dataclass_fields__:                  # noqa: SLF001
+        attr = getattr(EngineManager, name, None)
+        assert isinstance(attr, property), (
+            f"engine.{name} is not a request-scoped property; it would be shared by all seats")
+
+
+def test_engine_reads_and_writes_the_bound_cart():
+    """The end-to-end property: two bindings, two answers, through `engine` itself."""
+    from api.engine import engine
+
+    engine.mounted_name = "gutenberg-poetry"          # unbound -> the process default
+    assert default_fields().mounted_name == "gutenberg-poetry"
+
+    with use_cart(CartFields(mounted_name="redwood-finance")):
+        assert engine.mounted_name == "redwood-finance"
+        engine.passages = ["finance-only"]
+
+    assert engine.mounted_name == "gutenberg-poetry", "the binding leaked past its block"
+    assert default_fields().passages == [], "a bound write reached the process default"
+
+
+def test_susie_and_betty_through_the_real_engine():
+    """THE regression test, at the level the app actually reads: `engine.mounted_name`.
+
+    Interleaved on purpose. With plain attributes -- how this worked until 2026-08-13 -- the
+    second binding would overwrite the first and both seats would read one cart. That is the
+    misattribution bug: Susie sees Revenue's passages under Finance's label.
+
+    Mount is not wired to this yet, so the app still collides. This proves the MECHANISM
+    holds under concurrency before anything depends on it.
+    """
+    from api.engine import engine
+
+    seen: dict[str, set] = {"susie": set(), "betty": set()}
+
+    async def seat(name: str, cart: str):
+        with use_cart(CartFields(mounted_name=cart, passages=[f"{cart}-p0"])):
+            for _ in range(5):
+                await asyncio.sleep(0)          # force interleaving
+                seen[name].add((engine.mounted_name, tuple(engine.passages)))
+
+    async def both():
+        await asyncio.gather(seat("susie", "redwood-finance"),
+                             seat("betty", "redwood-revenue"))
+
+    asyncio.run(both())
+
+    assert seen["susie"] == {("redwood-finance", ("redwood-finance-p0",))}, seen["susie"]
+    assert seen["betty"] == {("redwood-revenue", ("redwood-revenue-p0",))}, seen["betty"]
+
+
+def test_engine_unmount_clears_only_the_bound_cart():
+    """Unmounting inside a request must not wipe the process-wide cart."""
+    from api.engine import engine
+
+    default_fields().mounted_name = "gutenberg-poetry"
+    with use_cart(CartFields(mounted_name="redwood-finance")):
+        engine.unmount()
+        assert engine.mounted_name is None
+    assert default_fields().mounted_name == "gutenberg-poetry", (
+        "unmount() inside a binding cleared the process default too")

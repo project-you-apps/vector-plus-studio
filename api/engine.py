@@ -12,6 +12,8 @@ import time
 import numpy as np
 import zlib
 
+from . import cart_context
+
 # Add current + parent dirs so we can import wrapper, encoder, etc.
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
@@ -200,6 +202,11 @@ class EngineManager:
     """Holds all mutable state: GPU engine, encoders, embedder, loaded cartridge."""
 
     def __init__(self):
+        # ================= MACHINE STATE =================
+        # Loaded once, shared by every cart and every seat. NOT duplicated per mount -- an
+        # estimate on 2026-08-05 assumed it was, which made multi-mount look ten times more
+        # expensive than it is. Anything added here is per-PROCESS; anything per-cart belongs
+        # in cart_context.CartFields instead.
         self.lock = threading.Lock()
         self.ml: MultiLatticeCUDAv7 | None = None
         self.encoder: RegionFillEncoderNomic768 | None = None
@@ -207,54 +214,18 @@ class EngineManager:
         self.training_encoder: TrainingEncoder | None = None
         self.embedder = None  # SentenceTransformer (lazy)
 
-        # Write protection — default read-only, explicit unlock required
-        self.read_only = True
-
-        # Cart-format permissions (Step 2a). Loaded from sidecar at mount.
-        # Schema: {"default": "r"|"rw"|"rwx", "owner"?: str, "description"?: str}.
-        # When None, cart pre-dates Step 2a and defaults to writable for compat.
-        self.cart_permissions: dict | None = None
-
-        # Cartridge state
-        self.mounted_name: str | None = None
-        self.mounted_path: str | None = None  # full path if opened from file picker
-        # Which version of the cart this mount loaded. A save compares it against the
-        # generation on disk and refuses if someone else has saved since -- otherwise a
-        # whole-cart write silently reverts their work. Set by _dispatch_mount.
-        self.cart_generation: int = 0
-        self.embeddings: np.ndarray | None = None
-        self.passages: list[str] = []
-        self.compressed_lens: list[int] = []
-        self.compressed_texts: list = []
-        self.signatures: np.ndarray | None = None
-        self.signatures_loaded = False
-        self.multimodal_mode = False
-        self.brain_only_mode = False
-        self.physics_trained = False
-        self.deleted_ids: set[int] = set()
-        self.dirty = False  # True when in-memory state differs from disk
-
-        # Hippocampus navigation (loaded from .cart.npz hippocampus metadata)
-        self.hippocampus: list[dict] | None = None  # list of {prev, next, source_hash, sequence_num}
-
-        # Split-cart state (parity with membot's NPZ-index-plus-SQLite-sidecar format).
-        # When mounted from a split cart, in-RAM `passages` holds the 200-char snippets
-        # and `sqlite_conn` is opened against the sidecar for full-text retrieval on
-        # demand via /api/patterns/{idx}.
-        self.is_split_cart: bool = False
-        self.sqlite_conn = None  # sqlite3.Connection | None
-        self.sqlite_db_path: str | None = None
-
-        # Background training state
-        self.training_active = False
-        self.training_progress = 0
-        self.training_total = 0
-
         # WebSocket connections for progress broadcasts
         self.ws_connections: list = []
 
         self.gpu_available = False
         self.engine_ready = False
+
+        # ================= CART STATE =================
+        # `mounted_name`, `passages`, `embeddings`, `read_only`, `dirty` and the rest are NOT
+        # attributes any more -- they are properties generated at the bottom of this module
+        # from cart_context.CartFields, and they read and write THE CALLING REQUEST'S cart.
+        # Nothing is initialised here because CartFields owns the defaults; its field
+        # defaults match what this constructor used to assign, one for one.
 
     def boot(self):
         """Initialize the CUDA engine and encoders."""
@@ -315,36 +286,19 @@ class EngineManager:
             self.ml.set_protected_rows([])
 
     def unmount(self):
-        """Clear all cartridge state."""
-        self.mounted_name = None
-        self.mounted_path = None
-        self.cart_generation = 0
-        self.embeddings = None
-        self.passages = []
-        self.compressed_lens = []
-        self.compressed_texts = []
-        self.signatures = None
-        self.signatures_loaded = False
-        self.multimodal_mode = False
-        self.brain_only_mode = False
-        self.physics_trained = False
-        self.deleted_ids = set()
-        self.training_active = False
-        self.training_progress = 0
-        self.training_total = 0
-        self.dirty = False
-        self.read_only = True
-        self.cart_permissions = None
-        self.hippocampus = None
-        # Close split-cart sidecar if we have one
-        if self.sqlite_conn is not None:
-            try:
-                self.sqlite_conn.close()
-            except Exception:
-                pass
-        self.sqlite_conn = None
-        self.sqlite_db_path = None
-        self.is_split_cart = False
+        """Clear THIS REQUEST'S cartridge state, closing a split-cart sidecar if open.
+
+        Delegates to `CartFields.clear()`, which is now the one definition of "what belongs
+        to a cart." It used to be this method's twenty-one assignments, and keeping those in
+        agreement with anything else was a matter of remembering.
+
+        ⚠ SCOPE. This clears the cart the CALLER is bound to. With nothing bound -- startup,
+        CLI, tests, the single-user studio -- that is the process-wide cart, exactly as
+        before. Once the pool lands, "this seat is done with its cart" is `pool.release`,
+        NOT this: two seats can share one CartFields, and wiping it because one of them
+        navigated away would blank the other's screen mid-search.
+        """
+        cart_context.active().clear()
 
     def shutdown(self):
         """Clean shutdown."""
@@ -364,6 +318,42 @@ class EngineManager:
                 dead.append(ws)
         for ws in dead:
             self.ws_connections.remove(ws)
+
+
+# ---------------------------------------------------------------------------
+# Cart state: generated properties, not attributes
+# ---------------------------------------------------------------------------
+#
+# `engine.passages` and its twenty siblings read and write THE CALLING REQUEST'S cart, via
+# the ContextVar in cart_context. With nothing bound they use one process-wide CartFields --
+# byte-identical to the single mounted cart this class used to hold, which is why startup,
+# the CLI, the local studio and every existing test keep working unchanged.
+#
+# WHY GENERATED RATHER THAN TWENTY-ONE HAND-WRITTEN PROPERTIES. The list then cannot drift
+# from CartFields, because it IS CartFields. A hand-written list would need a test to keep
+# the two in agreement, and the equivalent test caught a real omission (the three training_*
+# fields) the first time it ran -- which is the argument for removing the possibility rather
+# than detecting it.
+#
+# THE COST, stated where someone debugging will find it: these do not autocomplete, and a
+# type checker cannot see them. Accepted for the drift-proofing. If you are hunting "wrong
+# passages," the answer is almost certainly which cart is bound -- see cart_context.
+def _cart_property(field_name: str) -> property:
+    def getter(self):
+        return getattr(cart_context.active(), field_name)
+
+    def setter(self, value):
+        setattr(cart_context.active(), field_name, value)
+
+    getter.__name__ = field_name
+    setter.__name__ = field_name
+    return property(getter, setter,
+                    doc=f"Per-request cart state: {field_name}. See api/cart_context.py.")
+
+
+for _field_name in cart_context.CartFields.__dataclass_fields__:
+    setattr(EngineManager, _field_name, _cart_property(_field_name))
+del _field_name
 
 
 # Module-level singleton
