@@ -175,8 +175,21 @@ def test_eject_accepts_no_path_from_the_client():
     """
     sig = inspect.signature(uploads.eject_cartridge)
     assert "cart_path" not in sig.parameters
-    assert not sig.parameters, (
-        f"eject must take nothing from the caller; got {list(sig.parameters)}")
+
+    # NOTHING FROM THE CALLER -- but a server-resolved Depends is not from the caller.
+    # This asserted `not sig.parameters` until 2026-08-12, when eject gained
+    # `Depends(require_cart_write)`: it DELETES the mounted cart and was reachable with no
+    # caller identity, so on a shared server one person could destroy another's upload.
+    # Widening to "no parameters at all" would have meant choosing between the guard and the
+    # test, so it now says what it always meant: every parameter must be server-resolved.
+    from fastapi import params as _fastapi_params
+
+    client_supplied = [
+        name for name, p in sig.parameters.items()
+        if not isinstance(p.default, _fastapi_params.Depends)
+    ]
+    assert not client_supplied, (
+        f"eject must take nothing from the caller; these are not Depends: {client_supplied}")
 
 
 def test_eject_still_refuses_anything_outside_the_sandbox():

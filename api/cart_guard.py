@@ -252,13 +252,34 @@ def resolve_named(request: Request, user: object,
     return last
 
 
-def require_named_cart_read(request: Request, cart_name: str,
-                            user: dict | None = Depends(get_current_user)):
-    """Caller may read the cart named in the path. For by-name routes that never mount."""
+def enforce_named_read(request: Request, user: object, cart_name: str):
+    """Refuse unless this caller may read `cart_name`. CALL THIS; do not Depends() it.
+
+    For routes that name their cart in the REQUEST BODY rather than the path --
+    `/api/agents/run`, `/api/agents/save_to_cart`, `/api/reports/generate` all take a
+    `cart_ref`. FastAPI resolves a `Depends` before the body is parsed, so
+    `require_named_cart_read` cannot see that name and cannot guard those routes. Left
+    unguarded on that technicality, all three answered strangers: measured 2026-08-12, they
+    reached body validation with no caller identity at all.
+
+    Same shape as `_gate_mount` in main.py, for the same reason, and like it these routes are
+    EXEMPT from the dependency check in test_route_guards.py and asserted to call this
+    instead. An exemption nobody verifies is just a hole with a comment on it.
+
+    CALL IT AFTER RESOLVING cart_ref TO A REAL CART, not before -- guarding the string the
+    caller sent rather than the cart it resolves to would check the wrong object, which is
+    the bug `resolve_named` exists to avoid.
+    """
     decision = resolve_named(request, user, cart_name)
     if not decision.allowed:
         raise _refuse(decision)
     return decision
+
+
+def require_named_cart_read(request: Request, cart_name: str,
+                            user: dict | None = Depends(get_current_user)):
+    """Caller may read the cart named in the path. For by-name routes that never mount."""
+    return enforce_named_read(request, user, cart_name)
 
 
 def require_cart_read(request: Request,

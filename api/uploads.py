@@ -45,7 +45,9 @@ import uuid
 import zipfile
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+
+from . import cart_guard
 
 # ---------------------------------------------------------------------------
 # Config
@@ -268,8 +270,15 @@ router = APIRouter(prefix="/api/cartridges", tags=["uploads"])
 
 
 @router.delete("/eject")
-async def eject_cartridge():
+async def eject_cartridge(_guard=Depends(cart_guard.require_cart_write)):
     """Immediately delete the CURRENTLY-MOUNTED sandboxed upload + its permissions sidecar.
+
+    Guarded 2026-08-12. This DELETES the mounted cart and was reachable with no caller
+    identity at all, so on a shared server one person could destroy the cart another had
+    open. `require_cart_write` because destroying a cart is the most destructive write there
+    is; it DEFERS on unregistered carts (2026-08-06) rather than refusing, so an ordinary
+    sandbox upload still ejects normally on a single-user studio and is refused under
+    VPS_READ_ONLY.
 
     Privacy/control feature: users who uploaded a sensitive
     cart shouldn't have to wait up to 1h for TTL eviction. This endpoint

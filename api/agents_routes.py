@@ -47,6 +47,7 @@ Error codes
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 import traceback
@@ -55,8 +56,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
+
+from . import cart_guard
+from .auth import get_current_user
 
 from .agents import (  # noqa: F401  (import side-effects only)
     auto_briefing,
@@ -314,8 +318,15 @@ async def get_agent_list() -> dict[str, Any]:
 @router.post("/run", response_model=RunAgentResponse)
 async def run_agent_route(
     req: RunAgentRequest, request: Request, response: Response,
+    user: dict | None = Depends(get_current_user),
 ) -> RunAgentResponse:
-    """Dispatch an agent against a server-side cart."""
+    """Dispatch an agent against a server-side cart.
+
+    ACCESS IS ENFORCED IN THE BODY, not by a Depends -- see `cart_guard.enforce_named_read`.
+    The cart is named by `req.cart_ref`, which FastAPI has not parsed at dependency-resolution
+    time, so the guard has to run after `_resolve_cart_ref`. Asserted by
+    `test_body_cart_routes_gate_themselves`.
+    """
     slug = (req.agent_slug or "").strip()
 
     # -- 1. Unknown slug → 400 (agents never "coming soon" — either
@@ -369,6 +380,12 @@ async def run_agent_route(
         )
     cart_path = resolution.path
     cart_location = resolution.location
+
+    # -- 3b. May this caller READ that cart? ----------------------------
+    # AFTER resolution, deliberately: guarding `req.cart_ref` as sent would check a string
+    # the caller chose rather than the cart it resolves to. Basename because user_carts
+    # stores the on-disk filename.
+    cart_guard.enforce_named_read(request, user, os.path.basename(str(cart_path)))
 
     # -- 4. Compute remaining neuron budget for the LLM call ------------
     # Convert remaining budget into a max_tokens ceiling so a long-response

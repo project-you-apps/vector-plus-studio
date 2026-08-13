@@ -1,21 +1,38 @@
-"""Every route that touches the mounted cart must declare an access dependency.
+"""EVERY route declares a guard or an explicit, reasoned exemption. No third option.
 
 THIS TEST IS THE POINT OF THE WHOLE EXERCISE.
 
 On 2026-08-05 the mount endpoint was gated and twelve other cart-touching routes were not.
 Betty, with no grant on redwood-finance, reached every cart and could delete and tombstone
 passages. Fixing those twelve by hand would leave thirteen places to keep in agreement, and
-the fourteenth route someone adds next month would silently skip the check.
+the fourteenth route someone adds next month would silently skip the check. So the guarantee
+got enforced here rather than by remembering.
 
-So the guarantee is enforced here rather than by remembering: enumerate the app's routes,
-and fail if any cart-touching one lacks `require_cart_read` or `require_cart_write`. A new
-route that forgets breaks the build with a message naming it.
+⚠ AND THEN THIS TEST FAILED THE SAME WAY IT WAS BUILT TO PREVENT (2026-08-12).
 
-Adding a route that genuinely needs no guard? Put it in EXEMPT with a reason. That makes the
-exemption a deliberate, reviewable act instead of an omission nobody notices.
+It filtered routes through a hand-written path allowlist:
+
+    CART_TOUCHING = re.compile(r"^/api/(search|patterns|cart/|cartridges/…|membox/…)")
+
+Three routers added later -- `/api/agents`, `/api/reports`, `/api/llm` -- simply fell outside
+it. **The test passed, and passing read as "every cart route is guarded."** Measured that day:
+68 routes, 20 guarded. `POST /api/agents/run` was dispatching an agent against a caller-named
+cart with no caller identity at all, and `DELETE /api/cartridges/eject` would delete the
+mounted cart for anyone who asked.
+
+An allowlist can only ever police the routes someone thought of. So it is inverted: enumerate
+EVERYTHING, and require each route to declare a guard or appear in EXEMPT **with a written
+reason**. The next new router fails closed instead of silently.
+
+Three properties keep the list honest, and each exists because the alternative rots:
+  • `test_no_stale_exemptions`      -- a deleted route must not leave its excuse behind
+  • `test_every_exemption_states_a_reason` -- caught "as above." on its first run
+  • the gate-themselves tests       -- an exemption nobody verifies is a hole with a comment
+
+Adding a route? Guard it, or exempt it and say why. Both are one line; only one is a decision.
 """
 
-import re
+
 
 import pytest
 
@@ -32,32 +49,116 @@ from api.cart_guard import (
 # whatever else was open.
 GUARDS = {require_cart_read, require_cart_write, require_named_cart_read}
 
-# Paths that touch cart CONTENT or cart STATE. Matched against the route path.
-CART_TOUCHING = re.compile(
-    r"^/api/("
-    r"search"
-    r"|patterns"
-    r"|cart/"
-    r"|cartridges/(mount|unmount|save|lock|unlock|mounted|\{)"
-    r"|membox/(mount|unmount|imprint)"
-    r")"
-)
+# Cart Builder is a DESKTOP surface: it browses and writes the operator's own filesystem and
+# never reads cart passages through the access layer. On a public host every write path is
+# refused by `_check_writable` / PUBLIC_HOST (verified 2026-08-12: /api/cartbuilder/browse
+# returns 403 there). It is nonetheless DEPLOYED on the droplet, and that control lives in
+# the systemd unit rather than in code -- open question for Andy, tracked in the register.
+_CARTBUILDER = ("desktop surface; filesystem not cart content; write paths refused by "
+                "_check_writable/PUBLIC_HOST. Deployed on the droplet -- see register.")
 
-# Routes that match the pattern but legitimately need no guard, each with a reason.
-EXEMPT = {
-    # Lists carts on disk by filename and size. Exposes no passage content, and the cart
-    # list is how a user discovers what to ask for access TO.
-    ("GET", "/api/cartridges"),
-    # Unmount only drops the process's own handle. Refusing it could strand a caller
-    # holding a cart they may no longer read -- the opposite of useful.
-    ("POST", "/api/cartridges/unmount"),
-    ("POST", "/api/membox/unmount"),
-    # The two MOUNT routes gate the cart being OPENED, not the one already open, so they
-    # cannot use require_cart_read -- that would check the wrong object and would pass
-    # whenever the caller happened to have access to whatever was previously mounted. Both
-    # call `_gate_mount` directly instead. Verified by test_mount_routes_gate_themselves.
-    ("POST", "/api/cartridges/mount"),
-    ("POST", "/api/membox/mount"),
+# EVERY route must appear here or declare a guard. The reason is mandatory: an exemption
+# without one is indistinguishable from an omission six weeks later.
+EXEMPT: dict[tuple[str, str], str] = {
+    # -- infrastructure: says nothing about carts ---------------------------------------
+    ("GET", "/health"): "liveness only; deliberately says nothing about the corpus.",
+    ("GET", "/docs"): "FastAPI docs UI. Describes the API surface, not any cart's content.",
+    ("GET", "/docs/oauth2-redirect"): "FastAPI docs OAuth callback. No cart involvement.",
+    ("GET", "/openapi.json"): "schema of the API surface; no cart content.",
+    ("GET", "/redoc"): "FastAPI docs UI; no cart content.",
+    ("GET", "/api/status"): (
+        "PUBLIC BY NECESSITY -- App.tsx polls it before sign-in and engine_ready boots the "
+        "UI, so a 401 makes the app look dead to every signed-out visitor. Protected "
+        "per-FIELD instead: mounted_cartridge and mounted_path are nulled for callers who "
+        "may not read the mounted cart (f63e8c3)."),
+
+    # -- discovery: names, never passages -----------------------------------------------
+    ("GET", "/api/cartridges"): (
+        "Lists carts by filename and size. No passage content, and the cart list is how a "
+        "user discovers what to ask for access TO."),
+    ("GET", "/api/membox/carts"): "membox cart list; same discovery reasoning as above.",
+    ("GET", "/api/membox/status/{cart_id}"): "mount state of one membox cart; no passages.",
+    ("GET", "/api/reports/list"): "registered report metadata; no cart is read.",
+    ("GET", "/api/reports/carts"): (
+        "Enumerates carts with per-cart report compatibility. Names, not passages; same "
+        "discovery reasoning as /api/cartridges."),
+    ("GET", "/api/agents/list"): "registered agent metadata + cap config; no cart is read.",
+
+    # -- gate themselves, verified by tests below ---------------------------------------
+    ("POST", "/api/cartridges/mount"): (
+        "Gates the cart being OPENED, not the one already open -- require_cart_read would "
+        "check the wrong object and pass whenever the caller had access to whatever was "
+        "previously mounted. Calls _gate_mount. See test_mount_routes_gate_themselves."),
+    ("POST", "/api/membox/mount"): "as above; calls _gate_mount.",
+    ("POST", "/api/agents/run"): (
+        "Cart is named by req.cart_ref in the BODY, which FastAPI has not parsed at "
+        "dependency-resolution time. Calls cart_guard.enforce_named_read after resolving "
+        "the ref. See test_body_cart_routes_gate_themselves."),
+    ("POST", "/api/reports/generate"): "as above; body cart_ref, calls enforce_named_read.",
+
+    # -- unmount: dropping your own handle is not a privileged act -----------------------
+    ("POST", "/api/cartridges/unmount"): (
+        "Only drops the process's own handle. Refusing could strand a caller holding a cart "
+        "they may no longer read -- the opposite of useful."),
+    ("POST", "/api/membox/unmount"): (
+        "Drops this process's membox handle only; same reasoning as /api/cartridges/unmount."),
+
+    # -- identity and grants: governed by Supabase RLS, not by cart_guard ----------------
+    ("GET", "/api/me"): "the caller's own profile; RLS-scoped to auth.uid().",
+    ("GET", "/api/me/carts"): "the caller's own cart list; RLS-scoped.",
+    ("GET", "/api/carts/{cart_id}/grants"): (
+        "Grant administration, governed by SQL: db/004 restricts SELECT to the cart owner. "
+        "cart_guard governs CONTENT access and would be the wrong authority here."),
+    ("POST", "/api/carts/{cart_id}/grants"): (
+        "as above; SQL also enforces grantee_id <> auth.uid() so an admin cannot self-grant."),
+    ("DELETE", "/api/carts/{cart_id}/grants/{grantee_id}"): "as above; owner-only in SQL.",
+
+    # -- compute with no cart content ----------------------------------------------------
+    ("POST", "/api/embed"): (
+        "Embeds a caller-supplied string for browser-side WebGPU Associate. Touches no cart. "
+        "NOTE: unauthenticated server compute -- a rate-limit question, not an access one."),
+    ("POST", "/api/llm/synthesize"): (
+        "Sends a caller-supplied prompt to the configured LLM adapter. Reads no cart. "
+        "NOTE: unauthenticated access to a PAID Cloudflare worker -- cost control needed, "
+        "tracked in the register; not a cart-access guard."),
+    ("GET", "/api/llm/health"): "adapter reachability; no cart, no prompt.",
+
+    # -- creation: new files, no existing cart read or modified --------------------------
+    ("POST", "/api/forge"): (
+        "Creates NEW cart files from uploads; reads no existing cart. Governed by "
+        "_enforce_writable, which refuses under VPS_READ_ONLY."),
+    ("POST", "/api/cartridges/upload"): (
+        "Writes a NEW file to the upload sandbox; reads no existing cart. "
+        "NOTE: reachable unauthenticated and validates only file TYPE -- tracked in the "
+        "register as an open question, not a cart-access gap."),
+
+    # -- stub ----------------------------------------------------------------------------
+    ("POST", "/api/agents/save_to_cart"): (
+        "v1 STUB -- logs the intended save and returns success; writes nothing. MUST take "
+        "require_cart_write (or enforce_named_read) when the real Membot write lands, or it "
+        "becomes the 'reported success for a refused write' bug we closed on 2026-08-10."),
+
+    # -- desktop-only --------------------------------------------------------------------
+    ("GET", "/api/browse"): (
+        "Opens a NATIVE OS file dialog on the server. Desktop-only by nature and inert on "
+        "the headless droplet. Reads no cart. Should also be refused under PUBLIC_HOST -- "
+        "tracked in the register."),
+    ("DELETE", "/api/cartbuilder/cart_folders"): _CARTBUILDER,
+    ("GET", "/api/cartbuilder/browse"): _CARTBUILDER,
+    ("GET", "/api/cartbuilder/build/status"): _CARTBUILDER,
+    ("GET", "/api/cartbuilder/cart_folders"): _CARTBUILDER,
+    ("GET", "/api/cartbuilder/carts"): _CARTBUILDER,
+    ("GET", "/api/cartbuilder/files"): _CARTBUILDER,
+    ("GET", "/api/cartbuilder/has_changes"): _CARTBUILDER,
+    ("GET", "/api/cartbuilder/pattern0"): _CARTBUILDER,
+    ("POST", "/api/cartbuilder/build"): _CARTBUILDER,
+    ("POST", "/api/cartbuilder/build-to-folder"): _CARTBUILDER,
+    ("POST", "/api/cartbuilder/cart_folders"): _CARTBUILDER,
+    ("POST", "/api/cartbuilder/clear_workspace"): _CARTBUILDER,
+    ("POST", "/api/cartbuilder/ingest"): _CARTBUILDER,
+    ("POST", "/api/cartbuilder/load_cart"): _CARTBUILDER,
+    ("POST", "/api/cartbuilder/metadata"): _CARTBUILDER,
+    ("POST", "/api/cartbuilder/upload"): _CARTBUILDER,
 }
 
 
@@ -84,18 +185,46 @@ def _routes():
             yield m, path, deps
 
 
-def test_every_cart_route_is_guarded():
-    unguarded = [
+def test_every_route_is_guarded_or_explicitly_exempt():
+    """EVERY route. Not a curated subset -- that was the 2026-08-12 bug.
+
+    The previous version filtered through a hand-written path allowlist, so three routers
+    added later (`/api/agents`, `/api/reports`, `/api/llm`) were invisible to it. The test
+    passed, and passing read as "every cart route is guarded." `POST /api/agents/run` was
+    dispatching an agent against a named cart with no caller identity at all.
+
+    Enumerating everything makes the next new router fail closed instead of silently.
+    """
+    unaccounted = [
         f"{m} {p}"
         for m, p, deps in _routes()
-        if CART_TOUCHING.match(p) and (m, p) not in EXEMPT and not deps
+        if not deps and (m, p) not in EXEMPT
     ]
-    assert not unguarded, (
-        "These routes touch the mounted cart but declare no access dependency:\n  "
-        + "\n  ".join(sorted(unguarded))
-        + "\n\nAdd Depends(require_cart_read) or Depends(require_cart_write), or add the "
-          "route to EXEMPT in this file WITH A REASON."
+    assert not unaccounted, (
+        "These routes declare no access dependency and are not in EXEMPT:\n  "
+        + "\n  ".join(sorted(unaccounted))
+        + "\n\nEither add Depends(require_cart_read/require_cart_write), or add an EXEMPT "
+          "entry WITH A REASON explaining why this route needs no cart guard."
     )
+
+
+def test_no_stale_exemptions():
+    """An EXEMPT entry for a route that no longer exists is a lie that accumulates.
+
+    Without this, a deleted route leaves its excuse behind and the list slowly stops
+    describing the app.
+    """
+    live = {(m, p) for m, p, _ in _routes()}
+    stale = [f"{m} {p}" for (m, p) in EXEMPT if (m, p) not in live]
+    assert not stale, (
+        "EXEMPT names routes that no longer exist:\n  " + "\n  ".join(sorted(stale)))
+
+
+def test_every_exemption_states_a_reason():
+    """A blank reason is an omission wearing an exemption's clothes."""
+    thin = [f"{m} {p}" for (m, p), why in EXEMPT.items() if len((why or "").strip()) < 20]
+    assert not thin, ("These EXEMPT entries have no real reason:\n  "
+                      + "\n  ".join(sorted(thin)))
 
 
 def test_destructive_routes_require_write_not_merely_read():
@@ -116,9 +245,11 @@ def test_destructive_routes_require_write_not_merely_read():
 
 
 def test_the_guard_list_is_not_silently_empty():
-    """If the matcher stops matching anything, the suite above passes vacuously."""
-    matched = [p for _, p, _ in _routes() if CART_TOUCHING.match(p)]
-    assert len(matched) >= 8, f"expected many cart-touching routes, matched {len(matched)}"
+    """If route enumeration breaks, everything above passes vacuously."""
+    routes = list(_routes())
+    assert len(routes) >= 50, f"expected the full app surface, enumerated {len(routes)}"
+    guarded = [f"{m} {p}" for m, p, deps in routes if deps]
+    assert len(guarded) >= 15, f"expected many guarded routes, found {len(guarded)}"
 
 
 def test_mount_routes_gate_themselves():
@@ -136,6 +267,32 @@ def test_mount_routes_gate_themselves():
         src = inspect.getsource(fn)
         assert "_gate_mount(" in src, f"{fn_name} is EXEMPT from the guard but never calls _gate_mount"
         assert "decision.allowed" in src, f"{fn_name} calls _gate_mount but ignores the answer"
+
+
+def test_body_cart_routes_gate_themselves():
+    """Routes naming their cart in the BODY are EXEMPT from the dependency. Prove they gate.
+
+    FastAPI resolves a Depends before parsing the body, so `require_named_cart_read` cannot
+    see `req.cart_ref`. These call `cart_guard.enforce_named_read` instead -- and this test
+    exists because that technicality is exactly why they were unguarded until 2026-08-12.
+
+    The call must come AFTER `_resolve_cart_ref`: guarding the string the caller sent rather
+    than the cart it resolves to would check the wrong object.
+    """
+    import inspect
+
+    from api import agents_routes, reports_routes
+
+    for mod, fn_name in ((agents_routes, "run_agent_route"),
+                         (reports_routes, "generate_report")):
+        src = inspect.getsource(getattr(mod, fn_name))
+        assert "enforce_named_read(" in src, (
+            f"{fn_name} is EXEMPT from the dependency but never calls enforce_named_read")
+        guard_at = src.index("enforce_named_read(")
+        resolve_at = src.index("_resolve_cart_ref(")
+        assert resolve_at < guard_at, (
+            f"{fn_name} guards before resolving cart_ref -- it is checking the caller's "
+            f"string, not the cart it resolves to")
 
 
 # --------------------------------------------------------------- behaviour, not declaration

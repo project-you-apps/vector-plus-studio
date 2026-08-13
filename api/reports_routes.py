@@ -45,7 +45,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+
+from . import cart_guard
+from .auth import get_current_user
 from pydantic import BaseModel, Field
 
 # Import the report modules so ``@register_report`` fires. Without these
@@ -489,12 +492,18 @@ async def list_report_carts() -> dict[str, Any]:
 
 
 @router.post("/generate", response_model=GenerateReportResponse)
-async def generate_report(req: GenerateReportRequest) -> GenerateReportResponse:
+async def generate_report(req: GenerateReportRequest, request: Request,
+                          user: dict | None = Depends(get_current_user),
+                          ) -> GenerateReportResponse:
     """Dispatch a report against a server-side cart.
 
     Error semantics documented at module top. On success returns the
     :class:`ReportOutput` fields flattened into the response envelope +
     an ``ISO-8601`` ``generated_at`` timestamp for the UI header.
+
+    ACCESS IS ENFORCED IN THE BODY, not by a Depends -- the cart is named by `req.cart_ref`,
+    which FastAPI has not parsed at dependency-resolution time. See
+    `cart_guard.enforce_named_read`; asserted by `test_body_cart_routes_gate_themselves`.
     """
     slug = (req.report_slug or "").strip()
 
@@ -561,6 +570,11 @@ async def generate_report(req: GenerateReportRequest) -> GenerateReportResponse:
 
     cart_path = resolution.path
     cart_location = resolution.location  # 'canonical' | 'sandbox'
+
+    # -- 3b. May this caller READ that cart? --
+    # AFTER resolution, deliberately: guarding `req.cart_ref` as sent would check a string
+    # the caller chose rather than the cart it resolves to.
+    cart_guard.enforce_named_read(request, user, os.path.basename(str(cart_path)))
 
     # -- 4. Dispatch --
     # Options: the registered reports are LLM-free, so max_llm_calls stays

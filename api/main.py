@@ -1300,7 +1300,8 @@ async def cosine_candidate_pool_for_cart(cart_name: str, payload: dict, _guard=D
 
 
 @app.post("/api/walk-from")
-async def walk_from_idx(payload: dict):
+async def walk_from_idx(payload: dict,
+                        _guard=Depends(cart_guard.require_cart_read)):
     """Server-side "Walk from here" — runs Associate using the embedding at
     the given (cart_name, idx) as the query. Mirrors what the WebGPU Walk
     path does in the browser. Server-side path requires the cart be mounted
@@ -1308,6 +1309,11 @@ async def walk_from_idx(payload: dict):
 
     Returns results in the same enriched shape as /api/search so the
     frontend can render them through the standard ResultCard.
+
+    Guarded 2026-08-12: this returns passage TEXT from the mounted cart, exactly as
+    `/api/search` does, and was unguarded because the route-guard test's path allowlist did
+    not include it. `require_cart_read` because the walk runs against whatever is mounted --
+    the `cart_name` in the payload is a label for the response, not a selector.
     """
     from api.search import associate_search
 
