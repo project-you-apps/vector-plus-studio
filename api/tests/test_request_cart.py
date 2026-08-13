@@ -120,3 +120,96 @@ def test_a_path_shaped_cart_id_is_reduced_to_a_name(raw, expected):
 
 def test_whitespace_only_is_treated_as_absent():
     assert requested_cart(FakeRequest({CART_HEADER: "   "})) is None
+
+
+# -- bound_cart ---------------------------------------------------------------
+
+def _fields(name):
+    from api.cart_context import CartFields
+    return CartFields(mounted_name=name, passages=[f"{name}-p0"])
+
+
+@pytest.fixture(autouse=True)
+def empty_pool():
+    """The pool is a process singleton; a leaked cart would cross tests."""
+    from api.cart_pool import pool
+    for state in list(pool):
+        pool.drop(state.cart_id)
+    yield
+    for state in list(pool):
+        pool.drop(state.cart_id)
+
+
+def test_no_cart_named_binds_nothing():
+    """The un-migrated path: engine.* must keep resolving to the process default."""
+    from api import cart_context
+    from api.request_cart import bound_cart
+
+    with bound_cart(None, "seat:susie", _fields) as state:
+        assert state is None
+        assert not cart_context.is_bound()
+
+
+def test_binding_makes_engine_read_that_cart():
+    from api.engine import engine
+    from api.request_cart import bound_cart
+
+    with bound_cart("finance", "seat:susie", _fields):
+        assert engine.mounted_name == "finance"
+    assert engine.mounted_name != "finance", "the binding outlived the request"
+
+
+def test_two_viewers_two_carts():
+    """THE point. Susie on Finance, Betty on Revenue, both live."""
+    from api.engine import engine
+    from api.request_cart import bound_cart
+
+    with bound_cart("finance", "seat:susie", _fields):
+        assert engine.mounted_name == "finance"
+        with bound_cart("revenue", "seat:betty", _fields):
+            assert engine.mounted_name == "revenue"
+        assert engine.mounted_name == "finance", "Betty's request clobbered Susie's"
+
+
+def test_the_cart_stays_pooled_but_unpinned_after_the_request():
+    from api.cart_pool import pool
+    from api.request_cart import bound_cart
+
+    with bound_cart("finance", "seat:susie", _fields):
+        pass
+    assert "finance" in pool, "the cart was unloaded instead of left warm"
+    assert not pool.peek("finance").pinned, "the seat stayed pinned after the request"
+
+
+def test_a_second_viewer_reuses_the_loaded_cart():
+    loads = []
+
+    def counting_loader(name):
+        loads.append(name)
+        return _fields(name)
+
+    from api.request_cart import bound_cart
+
+    with bound_cart("company", "seat:susie", counting_loader):
+        with bound_cart("company", "seat:betty", counting_loader):
+            pass
+    assert loads == ["company"], f"loaded {len(loads)} times for two viewers"
+
+
+def test_the_seat_is_released_even_when_the_request_raises():
+    from api.cart_pool import pool
+    from api.request_cart import bound_cart
+
+    with pytest.raises(ValueError):
+        with bound_cart("finance", "seat:susie", _fields):
+            raise ValueError("boom")
+    assert not pool.peek("finance").pinned, (
+        "a failed request left the cart pinned; it would become unevictable")
+
+
+def test_a_loader_returning_the_wrong_shape_is_refused_loudly():
+    from api.request_cart import bound_cart
+
+    with pytest.raises(TypeError, match="expected CartFields"):
+        with bound_cart("finance", "seat:susie", lambda name: {"not": "cartfields"}):
+            pass

@@ -30,11 +30,16 @@ Design: docs/DESIGN-multi-mount-and-write-path.md §1b, §3
 from __future__ import annotations
 
 import os
-from typing import Optional
+from contextlib import contextmanager
+from typing import Callable, Iterator, Optional
 
 from fastapi import Request
 
-__all__ = ["CART_HEADER", "SESSION_HEADER", "requested_cart", "view_key", "access_seat"]
+from . import cart_context
+from .cart_pool import CartState, pool
+
+__all__ = ["CART_HEADER", "SESSION_HEADER", "requested_cart", "view_key", "access_seat",
+           "bound_cart"]
 
 # The caller names its cart here, or as ?cart= for links we want to be pasteable.
 CART_HEADER = "x-vps-cart"
@@ -113,3 +118,41 @@ def requested_cart(request: Request) -> Optional[str]:
     # Basename only. A cart id is a NAME here; anything path-shaped is either a mistake or an
     # attempt, and neither should reach the loader with its separators intact.
     return os.path.basename(raw)[:256] or None
+
+
+@contextmanager
+def bound_cart(cart_id: Optional[str], viewer: str,
+               loader: Callable[[str], object]) -> Iterator[Optional[CartState]]:
+    """Bind `cart_id` for this request, loading it if nobody has it open.
+
+    NAMING NO CART IS THE UN-MIGRATED PATH, not an error: yields None and binds nothing, so
+    `engine.*` resolves to the process-wide cart exactly as it did before Method B. That is
+    what lets the frontend migrate screen by screen.
+
+    ⚠ ACCESS IS NOT CHECKED HERE, DELIBERATELY. This binds; `cart_guard` decides. Putting the
+    check inside would create a second authority on the same question, which is the drift
+    `_write_blocked` was written to end -- and it would be the WEAKER one, because a caller
+    can name any cart they like. Callers must resolve access BEFORE binding.
+
+    The seat is released on the way out but the cart STAYS POOLED, warm for the next request
+    and for anyone else on it. Whether it leaves memory is eviction's business, not a user's.
+    """
+    if not cart_id:
+        yield None
+        return
+
+    state = pool.acquire(cart_id, lambda: loader(cart_id), seat=viewer)
+    try:
+        fields = state.payload
+        if not isinstance(fields, cart_context.CartFields):
+            raise TypeError(
+                f"pool loader for {cart_id!r} returned {type(fields).__name__}, "
+                f"expected CartFields -- engine.* would silently read the wrong shape")
+        with cart_context.use_cart(fields):
+            yield state
+    finally:
+        # Release even if the request raised. A seat that keeps a cart pinned because its
+        # request 500'd would make the cart unevictable forever, and the pool refuses to
+        # evict pinned carts by design -- so a leak here becomes PoolFull later, far from
+        # the cause.
+        pool.release(cart_id, viewer)
