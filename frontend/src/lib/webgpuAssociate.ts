@@ -30,7 +30,19 @@ let detectionResult: boolean | null = null;
 let enginePromise: Promise<any> | null = null;
 let engineInstance: any = null;
 const brainPromises: Map<string, Promise<void>> = new Map();
-const brainLoaded: Set<string> = new Set();
+
+// ⚠ SINGLE SLOT, NOT A SET. `engine.loadBrain()` writes into ONE pair of GPU buffers
+// (`buffers.state` / `buffers.weights`), so the engine holds exactly one cart's brain at a
+// time. This was a `Set<string>` that only ever grew, which meant:
+//
+//   load A  -> buffers = A, cache = {A}
+//   load B  -> buffers = B, cache = {A, B}
+//   back to A -> cache says "already loaded", returns instantly, buffers STILL HOLD B
+//
+// and Associate on A then ran against B's weights -- silently, with plausible results.
+// Reachable today by anyone who switches carts and switches back. A single slot cannot
+// claim more than the GPU actually holds.
+let loadedBrain: string | null = null;
 
 // Cached imports of the public/ JS modules — populated on first engine init.
 let LatticeEngineCtor: any = null;
@@ -122,9 +134,14 @@ export async function loadBrainForCart(
     cartName: string,
     onProgress?: (p: BrainLoadProgress) => void,
 ): Promise<void> {
-    if (brainLoaded.has(cartName)) return;
+    if (loadedBrain === cartName) return;
     const existing = brainPromises.get(cartName);
     if (existing) return existing;
+
+    // About to overwrite the GPU buffers, so the previous cart's claim dies HERE rather
+    // than on success -- if the load fails halfway the buffers are already dirty, and
+    // claiming the old cart would be worse than claiming nothing.
+    loadedBrain = null;
 
     const promise = (async () => {
         const engine = await getEngine();
@@ -154,7 +171,7 @@ export async function loadBrainForCart(
 
         onProgress?.({ cartName, loaded: npyBuffer.byteLength, total: npyBuffer.byteLength, stage: 'uploading' });
         await engine.loadBrain(state, weights);
-        brainLoaded.add(cartName);
+        loadedBrain = cartName;
         onProgress?.({ cartName, loaded: npyBuffer.byteLength, total: npyBuffer.byteLength, stage: 'done' });
     })();
 
@@ -319,9 +336,13 @@ export async function runWebGpuAssociate(opts: RunAssociateOptions): Promise<Sea
 }
 
 /**
- * Convenience: true if a cart's brain is already cached in the engine.
+ * Convenience: true if THIS cart's brain is the one currently in GPU memory.
  * Lets the UI hide "Loading brain…" when the answer will be instant.
+ *
+ * Only one cart can be loaded at a time -- see the note on `loadedBrain`. This used to ask
+ * a Set that never forgot, so it answered true for a cart whose weights had been overwritten
+ * and the UI skipped a "Loading brain…" that was genuinely about to happen.
  */
 export function isBrainLoadedFor(cartName: string): boolean {
-    return brainLoaded.has(cartName);
+    return loadedBrain === cartName;
 }
