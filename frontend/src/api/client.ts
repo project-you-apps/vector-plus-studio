@@ -12,6 +12,8 @@ import {
 
 // Set VITE_API_BASE at build time for hosted deploys (e.g. '/vps/api'). Local
 // dev uses '/api' which the Vite proxy routes to localhost:8000.
+import { tabSessionId, viewingCart, setViewingCart } from '../lib/tabSession'
+
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) || '/api'
 
 // ---------------------------------------------------------------------------
@@ -67,10 +69,36 @@ function authHeaders(): Record<string, string> {
   return session ? { Authorization: `Bearer ${session.access_token}` } : {}
 }
 
+/**
+ * Which cart this tab is looking at, and which tab is asking.
+ *
+ * Sent on EVERY call rather than per-endpoint: the server treats a missing cart header as
+ * "whatever you have mounted", which is the pre-2026-08-13 behaviour, so a call that does
+ * not need it is unharmed by carrying it. Adding it per-endpoint would mean eighteen places
+ * to keep in agreement, and the nineteenth would be the one that silently read the wrong
+ * cart.
+ *
+ * The tab id is bookkeeping, never identity — see lib/tabSession.ts.
+ */
+function cartHeaders(): Record<string, string> {
+  const h: Record<string, string> = { 'X-VPS-Session': tabSessionId() }
+  const cart = viewingCart()
+  if (cart) h['X-VPS-Cart'] = cart
+  return h
+}
+
 async function fetchJSON<T>(url: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${url}`, {
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     ...opts,
+    // AFTER the spread, deliberately. It used to sit before `...opts`, so any caller
+    // passing its own `headers` would have silently dropped auth AND these. No caller does
+    // today; merging here means none ever can.
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(),
+      ...cartHeaders(),
+      ...(opts?.headers as Record<string, string> | undefined),
+    },
   })
   if (!res.ok) {
     const text = await res.text()
@@ -161,10 +189,18 @@ export async function mountCartridge(filename: string) {
   }>(
     '/cartridges/mount',
     { method: 'POST', body: JSON.stringify({ filename }) }
-  )
+  ).then((r) => {
+    // AFTER success only. Claiming a cart we failed to open would point every later
+    // request at something the server refuses.
+    if (r?.success) setViewingCart(r.name || filename)
+    return r
+  })
 }
 
 export async function unmountCartridge() {
+  // Clear the tab's cart FIRST. If the request fails we are still not viewing it, and a
+  // stale claim would send later requests at a cart this tab has walked away from.
+  setViewingCart(null)
   return fetchJSON<{ success: boolean; message: string }>(
     '/cartridges/unmount',
     { method: 'POST' }

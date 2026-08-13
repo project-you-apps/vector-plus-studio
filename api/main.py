@@ -617,7 +617,8 @@ async def health():
 
 @app.get("/api/status", response_model=StatusResponse)
 async def get_status(request: Request,
-                     user: dict | None = Depends(get_current_user)):
+                     user: dict | None = Depends(get_current_user),
+                     _bind=Depends(bind_caller_cart)):
     """Server state for the UI's 2s poll. PUBLIC BY NECESSITY, so it is need-to-know.
 
     App.tsx polls this unconditionally on mount, before auth is consulted — `engine_ready`
