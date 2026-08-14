@@ -20,6 +20,7 @@ import {
 } from '../cart-builder-v2'
 import { useCartBuilderStore } from '../store/cartBuilderStore'
 import * as cb from '../api/cartbuilder'
+import { apiHeaders } from '../api/client'
 
 // CRUDScreen — first mockup for Andy to react to.
 //
@@ -314,7 +315,9 @@ export default function CRUDScreen() {
     setUpdateLoading(true)
     try {
       const apiBase = (import.meta.env.VITE_API_BASE as string | undefined) || '/api'
-      const res = await fetch(`${apiBase}/patterns/${idx}`)
+      // apiHeaders: this reads the MOUNTED cart, so without the cart header it
+      // fetched from the process default instead of this tab's cart.
+      const res = await fetch(`${apiBase}/patterns/${idx}`, { headers: apiHeaders() })
       if (!res.ok) throw new Error(`Pattern #${idx} not found`)
       const p = await res.json()
       setUpdateText(p.full_text || '')

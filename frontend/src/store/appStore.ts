@@ -10,6 +10,7 @@ import { probeReportBuilder } from '../api/reportBuilder'
 import { _registerReportBuilderStateReader } from '../api/client'
 import { detectWebGPU, runWebGpuAssociate, loadBrainForCart, isBrainLoadedFor } from '../lib/webgpuAssociate'
 import { parseCartFile, cosineSearchLocal } from '../lib/localCart'
+import { apiHeaders } from '../api/client'
 
 // Pattern-0 metadata baked into a browser-built cart. Mirrors the shape of
 // api.getCartPattern0's Pattern0Response so Pattern0TocPanel can consume it
@@ -1057,7 +1058,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const apiBase = (import.meta.env.VITE_API_BASE as string | undefined) || '/api'
       const embResp = await fetch(`${apiBase}/embed`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...apiHeaders() },
         body: JSON.stringify({ query: trimmedText }),
       })
       if (!embResp.ok) {
@@ -1187,6 +1188,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
         const embResp = await fetch(
           `${import.meta.env.VITE_API_BASE || '/api'}/cartridges/${encodeURIComponent(mountedName)}/embedding/${idx}`,
+          { headers: apiHeaders() },
         )
         if (!embResp.ok) throw new Error(`Embedding fetch failed: ${embResp.status}`)
         const embData = await embResp.json()
@@ -1215,9 +1217,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       } else {
         // Server-side walk via /api/walk-from
         const t0 = performance.now()
+        // walk-from runs Associate against the MOUNTED cart -- headerless, it walked
+        // the process default rather than this tab's cart.
         const resp = await fetch(`${import.meta.env.VITE_API_BASE || '/api'}/walk-from`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...apiHeaders() },
           body: JSON.stringify({ cart_name: mountedName, idx, top_k: topK }),
         })
         if (!resp.ok) throw new Error(`Walk-from failed: ${resp.status}`)
@@ -1739,7 +1743,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         const apiBase = (import.meta.env.VITE_API_BASE as string | undefined) || '/api'
         const embResp = await fetch(`${apiBase}/embed`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...apiHeaders() },
           body: JSON.stringify({ query }),
         })
         if (!embResp.ok) throw new Error(`Embed failed: ${embResp.status}`)

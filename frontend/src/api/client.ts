@@ -80,6 +80,22 @@ function authHeaders(): Record<string, string> {
  *
  * The tab id is bookkeeping, never identity — see lib/tabSession.ts.
  */
+export function apiHeaders(extra?: Record<string, string>): Record<string, string> {
+  // The full set every call to OUR api must carry: auth, which cart this tab is viewing,
+  // and which tab is asking.
+  //
+  // EXPORTED because seven call sites use raw `fetch` rather than `fetchJSON` -- the WebGPU
+  // paths, walk-from, and the pattern fetch in Edit Carts. They were sending NO headers, so
+  // they bound no cart and read the process default instead of the caller's, and each one
+  // also registered a phantom `tab-noheader` presence entry that showed up as an extra
+  // "guest" in the occupancy pill. Andy spotted the phantom on 2026-08-13; the wrong-cart
+  // reads were the larger half.
+  //
+  // Do NOT use for the Desktop Helper, Image Builder or Report Builder: those are other
+  // people's services on other origins, and our auth token has no business there.
+  return { ...authHeaders(), ...cartHeaders(), ...(extra || {}) }
+}
+
 function cartHeaders(): Record<string, string> {
   const h: Record<string, string> = { 'X-VPS-Session': tabSessionId() }
   const cart = viewingCart()
