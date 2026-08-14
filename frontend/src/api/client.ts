@@ -117,7 +117,15 @@ async function fetchJSON<T>(url: string, opts?: RequestInit): Promise<T> {
     },
   })
   if (!res.ok) {
-    throw new Error(await refusalMessage(res))
+    const refusal = await refusalOf(res)
+    // SELF-HEAL A CART THAT IS NO LONGER THERE. `bind_caller_cart` refuses before the
+    // endpoint runs, so a tab claiming a cart the server cannot load 404s on EVERYTHING --
+    // including the /api/status poll that would otherwise tell it what happened. Without
+    // this the tab is bricked until someone thinks to clear sessionStorage, and the only
+    // symptom is a wall of 404s (Andy, 2026-08-14). Dropping the claim costs the tab its
+    // mounted cart, which it has already lost, and the next poll succeeds.
+    if (res.status === 404 && refusal.code === 'cart_not_found') setViewingCart(null)
+    throw new Error(refusal.message)
   }
   return res.json()
 }
@@ -135,17 +143,26 @@ async function fetchJSON<T>(url: string, opts?: RequestInit): Promise<T> {
  * -- which contains the right sentence and reads like a stack trace. The whole point of
  * naming the holder (Andy, 2026-08-12) is that a person can act on it, and that is lost if
  * it arrives wrapped in braces. Falls back to the status line when the body is not ours.
+ *
+ * Returns the machine-readable code alongside it, because some refusals are the tab's to
+ * ACT on and not merely to display -- `cart_not_found` means drop the stale cart claim.
+ *
+ * ⚠ READS THE BODY, WHICH CAN ONLY HAPPEN ONCE. Everything that needs anything out of a
+ * refusal goes through this one function; a second `res.json()` throws on an
+ * already-consumed body, turning a handled refusal into an unhandled one.
  */
-async function refusalMessage(res: Response): Promise<string> {
+async function refusalOf(res: Response): Promise<{ code: string | null; message: string }> {
   try {
     const body = await res.json()
     const d = body?.detail
-    if (typeof d === 'string' && d.trim()) return d
-    if (d && typeof d.message === 'string' && d.message.trim()) return d.message
+    if (typeof d === 'string' && d.trim()) return { code: null, message: d }
+    if (d && typeof d.message === 'string' && d.message.trim()) {
+      return { code: typeof d.error === 'string' ? d.error : null, message: d.message }
+    }
   } catch {
     /* not JSON, or already consumed -- fall through to the status */
   }
-  return `API error ${res.status}`
+  return { code: null, message: `API error ${res.status}` }
 }
 
 export async function getStatus(): Promise<StatusResponse> {

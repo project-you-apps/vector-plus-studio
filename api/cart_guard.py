@@ -47,6 +47,7 @@ from typing import Optional
 from fastapi import Depends, HTTPException, Request
 
 from . import cart_access
+from . import cartridge_io
 from . import object_access
 from .auth import get_current_user
 from .engine import engine
@@ -224,11 +225,9 @@ def resolve_named(request: Request, user: object,
                                   seat=None, enforced=False)
 
     seat = _seat_from_token(user)
-    # Callers pass a bare cart name; user_carts stores the on-disk filename. Try the name as
-    # given first, then the membot-format basename, so both spellings resolve.
-    candidates = [cart_name]
-    if not cart_name.endswith((".cart.npz", ".pkl", ".npz")):
-        candidates.append(f"{cart_name}.cart.npz")
+    # Callers pass a bare cart name; user_carts stores the on-disk filename. Shared with
+    # main.load_cart_fields so the name that is CHECKED is the name that is LOADED.
+    candidates = cartridge_io.name_candidates(cart_name)
 
     last = None
     for cand in candidates:

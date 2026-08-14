@@ -705,6 +705,31 @@ def validate_brain_manifest(brain_path, embeddings):
         return False, f"Manifest error: {e}"
 
 
+# The suffixes a bare cart name may be stored under, in PRECEDENCE ORDER. Newest format
+# first, so a cart saved in both spellings resolves to the .cart.npz -- which is what
+# mounting by name has always done.
+CART_SUFFIXES = (".cart.npz", ".pkl")
+
+
+def name_candidates(cart_name: str) -> list[str]:
+    """The on-disk spellings of a bare cart name, most-preferred first.
+
+    ⚠ ONE DEFINITION, TWO CALLERS, AND THEY MUST NOT DRIFT. `cart_guard.resolve_named`
+    decides ACCESS from this list and `main.load_cart_fields` decides WHAT TO LOAD from it.
+    If the two ever tried different orders a caller could be access-checked against
+    `finance.cart.npz` and served `finance.pkl` -- a bypass rather than a bug. They were
+    separate copies until 2026-08-14, and the copies had already drifted from reality: both
+    omitted `.pkl`, so every `.pkl` cart 404'd the moment a tab named it in a header, and
+    `wiki_nomic_100k` could be mounted but never rebound. Pinned by
+    test_cart_name_resolution.py.
+
+    A name that already carries a known suffix is returned as-is: it is not a bare name.
+    """
+    if cart_name.endswith((".cart.npz", ".pkl", ".npz")):
+        return [cart_name]
+    return [cart_name] + [f"{cart_name}{suffix}" for suffix in CART_SUFFIXES]
+
+
 def find_cartridge_path(filename: str) -> str | None:
     """Find full path for a cartridge filename across all dirs."""
     for d in get_cartridge_dirs():

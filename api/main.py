@@ -463,7 +463,7 @@ from . import request_cart
 from .request_cart import bind_caller_cart
 from .cartridge_io import (
     list_cartridges as _list_cartridges, load_cartridge, load_signatures,
-    find_cartridge_path, find_companion_file, validate_brain_manifest,
+    find_cartridge_path, find_companion_file, validate_brain_manifest, name_candidates,
     save_brain_manifest, save_signatures, DATA_DIR, get_cartridge_dirs, parse_hippocampus,
     load_cart_permissions, cart_permits_write, pattern_permits_write,
     pattern_permits_read,
@@ -1513,15 +1513,13 @@ def load_cart_fields(cart_id: str):
     """
     from .cart_context import CartFields
 
-    # ⚠ THE NAME THAT IS CHECKED MUST BE THE NAME THAT IS LOADED. These candidates mirror
-    # `cart_guard.resolve_named` exactly -- as given, then the membot-format spelling. If the
-    # two ever tried different orders, a caller could be access-checked against
-    # `finance.cart.npz` and served `finance.pkl`, which is a bypass rather than a bug.
+    # ⚠ THE NAME THAT IS CHECKED MUST BE THE NAME THAT IS LOADED, so this list is SHARED
+    # with `cart_guard.resolve_named` rather than mirrored. Two copies drifted from reality
+    # in exactly the same way -- both omitted `.pkl` -- and every `.pkl` cart 404'd on every
+    # request the moment a tab named it in a header.
     # Callers should access-check `os.path.basename(fields.mounted_path)` -- the RESOLVED
     # name -- for the same reason agents/reports check after `_resolve_cart_ref`.
-    candidates = [cart_id]
-    if not cart_id.endswith((".cart.npz", ".pkl", ".npz")):
-        candidates.append(f"{cart_id}.cart.npz")
+    candidates = name_candidates(cart_id)
 
     resolved = next((p for p in (find_cartridge_path(c) for c in candidates) if p), None)
     if not resolved:
