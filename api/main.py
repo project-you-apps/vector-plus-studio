@@ -696,11 +696,26 @@ async def get_status(request: Request,
     # the same reason.
     withheld = mounted_name is None and engine.mounted_name is not None
 
+    # WHO ELSE is in this cart. Same gate as the NAME, deliberately: if you may not know a
+    # cart is open, you may not know who has it open. Occupancy is personnel information --
+    # "Betty is in redwood-finance right now" is a fact about Betty, not just about the cart.
+    occupants: list[str] = []
+    if not withheld:
+        try:
+            occupants = request_cart.occupants_of(
+                request_cart.requested_cart(request),
+                exclude=request_cart.view_key(request, user),
+            )
+        except Exception as e:                                  # noqa: BLE001
+            # Status is the UI's heartbeat; a presentation nicety must never break the poll.
+            print(f"[VPS] occupancy lookup failed: {type(e).__name__}: {e}")
+
     return StatusResponse(
         engine_ready=engine.engine_ready,
         gpu_available=engine.gpu_available,
         mounted_cartridge=mounted_name,
         mounted_is_sandboxed=mounted_is_sandboxed,
+        cart_occupants=occupants,
         pattern_count=0 if withheld else len(engine.passages),
         physics_trained=engine.physics_trained,
         training_active=engine.training_active,

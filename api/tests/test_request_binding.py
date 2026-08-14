@@ -28,13 +28,18 @@ from api.cart_pool import pool
 
 @pytest.fixture(autouse=True)
 def clean_state():
-    cart_context.reset_default()
-    for state in list(pool):
-        pool.drop(state.cart_id)
+    # Presence and the name cache are module-level like the pool. Forgetting them leaked one
+    # test's viewers into the next and failed two occupancy tests for the wrong reason.
+    def _wipe():
+        cart_context.reset_default()
+        request_cart._presence.clear()
+        request_cart._display_names.clear()
+        for state in list(pool):
+            pool.drop(state.cart_id)
+
+    _wipe()
     yield
-    cart_context.reset_default()
-    for state in list(pool):
-        pool.drop(state.cart_id)
+    _wipe()
 
 
 @pytest.fixture
@@ -226,3 +231,44 @@ def test_a_failed_request_does_not_leave_the_cart_pinned(client, monkeypatch, fa
     state = pool.peek("redwood-finance")
     if state is not None:
         assert not state.pinned, "a failed request left the cart pinned"
+
+
+# -- occupancy: who else is in this cart --------------------------------------
+
+def test_occupancy_names_the_other_viewer_not_their_key(client, fake_loader):
+    """A seat uuid on screen is noise to a person and a disclosure to everyone else."""
+    request_cart.remember_display_name("anon:tab-betty", "Betty Alvarez")
+
+    client.post("/api/search", json={"query": "p"}, headers={
+        request_cart.CART_HEADER: "company", request_cart.SESSION_HEADER: "tab-betty"})
+
+    r = client.get("/api/status", headers={
+        request_cart.CART_HEADER: "company", request_cart.SESSION_HEADER: "tab-susie"})
+
+    occupants = r.json()["cart_occupants"]
+    assert "Betty Alvarez" in occupants
+    assert not any("tab-betty" in o or "anon:" in o for o in occupants)
+
+
+def test_you_are_not_your_own_occupant(client, fake_loader):
+    r = client.get("/api/status", headers={
+        request_cart.CART_HEADER: "company", request_cart.SESSION_HEADER: "tab-susie"})
+    assert r.json()["cart_occupants"] == []
+
+
+def test_an_unnamed_viewer_shows_as_someone(client, fake_loader):
+    """Anonymous must not leak a tab id just because it has no display name."""
+    client.post("/api/search", json={"query": "p"}, headers={
+        request_cart.CART_HEADER: "company", request_cart.SESSION_HEADER: "tab-ghost"})
+
+    r = client.get("/api/status", headers={
+        request_cart.CART_HEADER: "company", request_cart.SESSION_HEADER: "tab-susie"})
+    assert r.json()["cart_occupants"] == ["Someone"]
+
+
+def test_occupancy_is_empty_for_a_different_cart(client, fake_loader):
+    client.post("/api/search", json={"query": "p"}, headers={
+        request_cart.CART_HEADER: "company", request_cart.SESSION_HEADER: "tab-betty"})
+    r = client.get("/api/status", headers={
+        request_cart.CART_HEADER: "revenue", request_cart.SESSION_HEADER: "tab-susie"})
+    assert r.json()["cart_occupants"] == []

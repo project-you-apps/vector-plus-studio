@@ -30,6 +30,7 @@ Design: docs/DESIGN-multi-mount-and-write-path.md §1b, §3
 from __future__ import annotations
 
 import os
+import time
 from contextlib import contextmanager
 from typing import Callable, Iterator, Optional
 
@@ -82,6 +83,8 @@ async def bind_caller_cart(request: Request,
 
     cart_id = requested_cart(request)
     viewer = view_key(request, user)
+    remember_display_name(viewer, display_name_for(user))
+    touch_presence(cart_id, viewer)
     try:
         with bound_cart(cart_id, viewer, _loader) as state:
             yield state
@@ -197,6 +200,73 @@ def display_name_for(user: object) -> Optional[str]:
     if isinstance(email, str) and email.strip():
         return email.strip()
     return None
+
+
+# view_key -> a name a person recognises. Presentation only: the pool tracks WHO by key and
+# has no business knowing what anyone is called, so the mapping lives here instead of
+# widening CartState.
+#
+# Bounded because it is a cache, not a record. Nothing depends on an entry surviving.
+_display_names: dict[str, str] = {}
+_MAX_NAMES = 512
+
+# cart_id -> {view_key: last_seen}. Matches the write lease window so "who is here"
+# and "who could be editing" cannot tell two different stories.
+_presence: dict[str, dict[str, float]] = {}
+PRESENCE_WINDOW_SECONDS = 90.0
+
+
+def remember_display_name(view: str, name: Optional[str]) -> None:
+    """Record what to call this viewer. Called on every bind; last write wins."""
+    if not name:
+        return
+    if len(_display_names) >= _MAX_NAMES and view not in _display_names:
+        _display_names.clear()          # crude, and fine: it is a cache
+    _display_names[view] = name
+
+
+def touch_presence(cart_id: Optional[str], view: str) -> None:
+    """Record that this viewer is looking at this cart, now."""
+    if not cart_id:
+        return
+    seen = _presence.setdefault(cart_id, {})
+    seen[view] = time.monotonic()
+
+
+def occupants_of(cart_id: Optional[str], exclude: Optional[str] = None,
+                 window: float = PRESENCE_WINDOW_SECONDS) -> list[str]:
+    """Who else is looking at this cart, by display name.
+
+    ⚠ PRESENCE, NOT `CartPool.holders`. I reached for holders first and the tests caught it:
+    `bound_cart` releases the seat in its `finally`, so holders is who is MID-REQUEST -- a
+    window measured in microseconds, empty almost always. It is a correctness pin, not a
+    presence list, and reading it as one would have shown an empty cart to everybody.
+
+    So presence is its own thing: last-seen per cart per viewer, and anyone seen inside the
+    window counts as here. The window matches the write lease (90s) so "who is in this cart"
+    and "who could be editing it" agree rather than telling two stories.
+
+    ⚠ NAMES ONLY, NEVER KEYS. A `seat:<uuid>` on screen is noise to a person and a seat
+    disclosure to everyone else -- same reason the busy-cart refusal says "Someone else".
+    Anonymous viewers collapse to "Someone" rather than exposing a tab id.
+
+    Callers must still gate on whether the viewer may READ the cart. Occupancy is personnel
+    information and this function does not know who is asking.
+    """
+    if not cart_id:
+        return []
+    seen = _presence.get(cart_id)
+    if not seen:
+        return []
+
+    cutoff = time.monotonic() - window
+    stale = [v for v, at in seen.items() if at < cutoff]
+    for v in stale:                                  # opportunistic prune; no sweeper
+        del seen[v]
+
+    return [_display_names.get(v) or "Someone"
+            for v in sorted(seen)
+            if exclude is None or v != exclude]
 
 
 async def require_write_lease(request: Request,

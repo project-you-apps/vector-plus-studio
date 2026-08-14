@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Activity, Cpu, Lock, LockOpen, Moon, Save, Sun, X, Zap } from 'lucide-react'
+import { Activity, Cpu, Lock, LockOpen, Moon, Save, Sun, Users, X, Zap } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import AuthChip from './AuthChip'
 
@@ -128,6 +128,25 @@ export default function Header() {
           }
           return null
         })()}
+
+        {/* WHO ELSE is in this cart. Added 2026-08-13 with multi-mount: two people can now
+            hold one cart, and a shared Save commits whatever is in it -- so "who else is
+            here" is not decoration, it is the information that makes a shared cart honest.
+            Names only; the server never sends seat keys. Sits OUTSIDE the mount pill because
+            it is about people, not about the cart, and it must not become a click target. */}
+        {!!status?.cart_occupants?.length && (
+          <span
+            className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs"
+            title={`Also in this cart: ${status.cart_occupants.join(', ')}`}
+          >
+            <Users size={12} className="shrink-0" />
+            <span className="font-medium">
+              {status.cart_occupants.length === 1
+                ? `${status.cart_occupants[0]} is also here`
+                : `${status.cart_occupants.length} others here`}
+            </span>
+          </span>
+        )}
 
         {/* Save button -- visible when there are unsaved changes */}
         {status?.mounted_cartridge && status.dirty && (

@@ -123,6 +123,11 @@ class StatusResponse(BaseModel):
     # sandbox (cartridges/_session_uploads/). UI uses this to surface an
     # "Eject" button that immediately purges the user's uploaded cart.
     mounted_is_sandboxed: bool = False
+    # WHO ELSE is looking at the mounted cart, by display name, excluding the caller.
+    # Empty when nobody else is, when the cart is withheld, or when the caller may not read
+    # it -- occupancy is personnel information and rides the same gate as the cart's NAME.
+    # Display names only: a seat uuid is noise to a person and a disclosure to everyone else.
+    cart_occupants: list[str] = []
     # NO mounted_path. It was here so the frontend could pass the absolute path back to
     # /api/cartridges/eject, which meant /api/status -- an endpoint the app polls every 2s
     # BEFORE sign-in, so it cannot be behind auth -- handed the full server path to anyone
