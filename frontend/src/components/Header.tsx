@@ -49,6 +49,7 @@ export default function Header() {
       : 'CPU mode -- lattice physics search not available'
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
+  const [showOccupants, setShowOccupants] = useState(false)
   const [theme, setTheme] = useState(() =>
     document.documentElement.classList.contains('light') ? 'light' : 'dark'
   )
@@ -135,19 +136,50 @@ export default function Header() {
             Names only; the server never sends seat keys. Sits OUTSIDE the mount pill because
             it is about people, not about the cart, and it must not become a click target. */}
         {!!status?.cart_occupants?.length && (
-          <span
-            className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs"
-            title={`Also in this cart: ${status.cart_occupants.join(', ')}`}
-          >
-            <Users size={12} className="shrink-0" />
-            {/* "Someone is also here" read like a horror film (Andy, 2026-08-13). A
-                presence LIST is informative; a warning about an unnamed presence is not. */}
-            <span className="font-medium">
-              {status.cart_occupants.length <= 2
-                ? `Also here: ${status.cart_occupants.join(' & ')}`
-                : `Also here: ${status.cart_occupants.length} others`}
-            </span>
-          </span>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowOccupants((v) => !v)}
+              className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-200 hover:bg-amber-500/20 transition-colors text-xs"
+              title="Who else is in this cart"
+            >
+              <Users size={12} className="shrink-0" />
+              {/* "Someone is also here" read like a horror film (Andy, 2026-08-13). A
+                  presence LIST is informative; a warning about an unnamed presence is not.
+                  Two names fit; beyond that the count is the summary and the list is one
+                  click away -- a header that reflows as people arrive is worse than a click. */}
+              <span className="font-medium">
+                {status.cart_occupants.length <= 2
+                  ? `Also here: ${status.cart_occupants.join(' & ')}`
+                  : `Also here: ${status.cart_occupants.length} others`}
+              </span>
+            </button>
+
+            {showOccupants && (
+              <>
+                {/* Click-away catcher. Cheaper and more reliable than a document listener,
+                    and it cannot leak past unmount. */}
+                <div className="fixed inset-0 z-40" onClick={() => setShowOccupants(false)} />
+                <div className="absolute right-0 top-full mt-2 z-50 min-w-[13rem] max-h-72 overflow-y-auto rounded-lg border border-amber-500/30 bg-[var(--chrome-bg)] shadow-xl py-1.5">
+                  <div className="px-3 pb-1.5 text-[10px] uppercase tracking-wider text-slate-500">
+                    In this cart now
+                  </div>
+                  {status.cart_occupants.map((who, i) => (
+                    <div
+                      key={`${who}-${i}`}
+                      className="flex items-center gap-2 px-3 py-1 text-xs text-slate-200"
+                    >
+                      <span className="h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />
+                      <span className="truncate">{who}</span>
+                    </div>
+                  ))}
+                  <div className="px-3 pt-1.5 text-[10px] text-slate-500 border-t border-slate-800 mt-1">
+                    Active in the last 90 seconds
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         )}
 
         {/* Save button -- visible when there are unsaved changes */}
