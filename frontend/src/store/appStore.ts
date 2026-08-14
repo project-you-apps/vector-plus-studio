@@ -520,6 +520,31 @@ interface AppState {
   navigateToPattern: (idx: number) => Promise<void>
 }
 
+/**
+ * Throw when a 200 carries `success: false`.
+ *
+ * ⚠ THE 2026-08-10 BUG, SURVIVING IN A SECOND FORM. That fix made `deleteResult` RETHROW so
+ * a 403 could not be swallowed. But 22 endpoints refuse with **HTTP 200 and success:false**
+ * -- "Cartridge is read-only. Unlock first." among them -- and a 200 does not throw. So the
+ * await resolved, the catch never ran, and the store removed the passage from the UI while
+ * the server had done nothing. It came back on refresh.
+ *
+ * Found 2026-08-13 by Andy unlocking a cart as Susie, acting as Betty, then re-locking:
+ * exactly the window where the UI is stale and the server refuses.
+ *
+ * We fixed the instance last time and not the class. This is the class: any awaited write
+ * whose result is not inspected goes through here.
+ */
+function refuseIfUnsuccessful<T extends { success?: boolean; message?: string }>(
+  resp: T,
+  what: string,
+): T {
+  if (resp && resp.success === false) {
+    throw new Error(resp.message || `The server refused to ${what}.`)
+  }
+  return resp
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   activeScreen: 'search' as ActiveScreen,
   setActiveScreen: (screen) => set({ activeScreen: screen }),
@@ -1661,13 +1686,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const isLocked = get().status?.read_only ?? true
       if (isLocked) {
-        await api.unlockCartridge()
+        refuseIfUnsuccessful(await api.unlockCartridge(), 'unlock this cart')
       } else {
-        await api.lockCartridge()
+        refuseIfUnsuccessful(await api.lockCartridge(), 'lock this cart')
       }
       await get().fetchStatus()
     } catch (e) {
+      // RETHROWS, like deleteResult. A lock toggle that silently does nothing leaves the
+      // pill showing a state the server does not agree with -- and with two seats sharing a
+      // cart, the other person is looking at the truth.
       console.error('Lock toggle failed:', e)
+      await get().fetchStatus()
+      throw e
     }
   },
 
@@ -1813,7 +1843,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   // never have.
   deleteResult: async (idx: number) => {
     try {
-      await api.deletePattern(idx)
+      refuseIfUnsuccessful(await api.deletePattern(idx), 'tombstone that passage')
     } catch (e) {
       console.error('Delete failed:', e)
       throw e
@@ -1828,7 +1858,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   restoreResult: async (idx: number) => {
     try {
-      await api.restorePattern(idx)
+      refuseIfUnsuccessful(await api.restorePattern(idx), 'restore that passage')
     } catch (e) {
       console.error('Restore failed:', e)
       throw e
