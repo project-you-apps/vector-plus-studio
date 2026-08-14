@@ -1588,6 +1588,33 @@ async def _dispatch_mount(helper_fn, *args) -> MountResponse:
                     save_target)["generation"]
             except Exception as e:                      # noqa: BLE001
                 print(f"[VPS] could not read cart generation: {type(e).__name__}: {e}")
+
+        # ⚠ HAND THE MOUNTED CART TO THE POOL, AND DO NOT LEAVE IT IN THE DEFAULT.
+        #
+        # The five mount helpers write into whatever CartFields is bound. On a tab's FIRST
+        # mount nothing is bound yet -- the browser has no cart to name -- so they wrote
+        # into the process-wide default, and the pool never saw the cart at all. Andy,
+        # 2026-08-14: he mounted wiki_nomic_100k in one browser, and a second user signing
+        # in fresh ARRIVED already holding it. A third user with a cart of her own was
+        # unaffected, which is the tell: only callers falling back to the default inherited
+        # it.
+        #
+        # So publish the loaded state under the cart's own id -- the same id the client
+        # sends back as X-VPS-Cart on its next request, so the cart is found warm rather
+        # than re-read -- and clear the default if that is where we landed.
+        try:
+            fields = cart_context.active()
+            if fields.mounted_name:
+                request_cart.pool.publish(fields.mounted_name, fields)
+                if not cart_context.is_bound():
+                    # We wrote into the shared default. The pool now owns that state, so
+                    # give the default a clean object rather than leaving a cart in it for
+                    # the next headerless caller to inherit.
+                    cart_context.default_fields().clear()
+        except Exception as e:                              # noqa: BLE001
+            # A mount that succeeded must not fail because publishing failed; the caller's
+            # own view is already correct either way.
+            print(f"[VPS] could not publish mount to the pool: {type(e).__name__}: {e}")
     return resp
 
 

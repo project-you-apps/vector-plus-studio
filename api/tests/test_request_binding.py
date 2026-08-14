@@ -302,3 +302,41 @@ def test_occupancy_is_empty_for_a_different_cart(client, fake_loader):
     r = client.get("/api/status", headers={
         request_cart.CART_HEADER: "revenue", request_cart.SESSION_HEADER: "tab-susie"})
     assert r.json()["cart_occupants"] == []
+
+
+# -- mounting must not leak into the process default --------------------------
+
+def test_a_first_mount_goes_to_the_pool_not_the_process_default(client, monkeypatch):
+    """Andy, 2026-08-14: mounted a cart in one browser; a second user signing in fresh
+    ARRIVED already holding it. A third user with a cart of her own was unaffected.
+
+    A tab's FIRST mount carries no X-VPS-Cart -- the browser has nothing to name yet -- so
+    the mount helpers wrote into the process-wide default, and the pool never saw the cart.
+    Every headerless caller then inherited it. That is the single-global bug this whole
+    feature removes, surviving in the one route that creates mounts.
+    """
+    import api.main as m
+
+    def fake_dispatch_target():
+        f = cart_context.active()
+        f.mounted_name = "wiki_nomic_100k"
+        f.mounted_path = "/carts/wiki_nomic_100k.pkl"
+        f.passages = ["w0"]
+        return m.MountResponse(success=True, message="ok", name="wiki_nomic_100k",
+                               pattern_count=1)
+
+    monkeypatch.setattr(m, "_mount_plan", lambda fn: (lambda *a: fake_dispatch_target(), ()))
+    monkeypatch.setattr(m, "_refuse_path_shaped_filename", lambda fn: None)
+
+    r = client.post("/api/cartridges/mount", json={"filename": "/carts/wiki_nomic_100k.pkl"},
+                    headers={request_cart.SESSION_HEADER: "andys-firefox"})
+    assert r.status_code == 200, r.text
+
+    assert cart_context.default_fields().mounted_name is None, (
+        "the mount landed in the process default; every headerless caller inherits it")
+    assert "wiki_nomic_100k" in pool, "the mounted cart never reached the pool"
+
+    # A different seat, no cart named, must see nothing.
+    s = client.get("/api/status", headers={request_cart.SESSION_HEADER: "susies-chrome"})
+    assert s.json()["mounted_cartridge"] is None, (
+        "a fresh sign-in inherited someone else's mount")

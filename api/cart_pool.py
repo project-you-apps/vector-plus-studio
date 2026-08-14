@@ -171,6 +171,28 @@ class CartPool:
             self._evict_locked(protect=cart_id)
             return state
 
+    def publish(self, cart_id: str, payload: object, *, nbytes: int = 0) -> CartState:
+        """Put an ALREADY-LOADED cart into the pool, replacing any copy under that id.
+
+        For the mount route, which loads a cart through five specialised helpers rather than
+        through `acquire`'s loader. Without this, a mount populated whatever CartFields
+        happened to be bound -- the PROCESS DEFAULT on a tab's first mount -- and the pool
+        never saw the cart at all. Andy found it on 2026-08-14: he mounted a cart in one
+        browser and a second user, signing in fresh, arrived already holding it.
+
+        Replaces rather than merges: the caller has just re-read this cart from disk, so
+        their copy is the newer truth. Existing holders keep the OLD object, which is
+        correct -- their request is mid-flight against the state they started with, and
+        yanking it out from under them is the bug this module exists to end.
+        """
+        now = self._clock()
+        with self._lock:
+            state = CartState(cart_id=cart_id, payload=payload, loaded_at=now,
+                              last_access=now, nbytes=nbytes)
+            self._carts[cart_id] = state
+            self._evict_locked(protect=cart_id)
+            return state
+
     def release(self, cart_id: str, seat: str) -> None:
         """Unbind a seat. The cart STAYS mounted -- unpinned, so now evictable.
 
