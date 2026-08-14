@@ -1603,14 +1603,17 @@ async def _dispatch_mount(helper_fn, *args) -> MountResponse:
         # sends back as X-VPS-Cart on its next request, so the cart is found warm rather
         # than re-read -- and clear the default if that is where we landed.
         try:
+            bound = cart_context.is_bound()
             fields = cart_context.active()
             if fields.mounted_name:
+                if not bound:
+                    # ⚠ DETACH, NEVER CLEAR. `active()` returns the default OBJECT itself
+                    # when nothing is bound, so publishing it and then calling `.clear()`
+                    # emptied the very cart the pool had just taken -- mount said success
+                    # and every search found nothing. Swapping the object hands the loaded
+                    # arrays to the pool and gives the default a genuinely fresh one.
+                    fields = cart_context.detach_default()
                 request_cart.pool.publish(fields.mounted_name, fields)
-                if not cart_context.is_bound():
-                    # We wrote into the shared default. The pool now owns that state, so
-                    # give the default a clean object rather than leaving a cart in it for
-                    # the next headerless caller to inherit.
-                    cart_context.default_fields().clear()
         except Exception as e:                              # noqa: BLE001
             # A mount that succeeded must not fail because publishing failed; the caller's
             # own view is already correct either way.

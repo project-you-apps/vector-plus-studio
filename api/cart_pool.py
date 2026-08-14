@@ -184,6 +184,13 @@ class CartPool:
         their copy is the newer truth. Existing holders keep the OLD object, which is
         correct -- their request is mid-flight against the state they started with, and
         yanking it out from under them is the bug this module exists to end.
+
+        ⚠ THE POOL TAKES OWNERSHIP OF `payload`. It is stored by reference, not copied, so
+        whatever the caller does to that object afterwards happens to the pooled cart. The
+        first caller published `cart_context.active()` and then cleared the default -- the
+        same object -- and emptied the cart it had just handed over: mount said success and
+        every search found nothing. If you need the original back in a clean state, hand
+        the object over (`cart_context.detach_default()`) rather than clearing it.
         """
         now = self._clock()
         with self._lock:

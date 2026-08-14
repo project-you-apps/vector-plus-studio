@@ -35,7 +35,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Iterator, Optional
 
-__all__ = ["CartFields", "active", "use_cart", "default_fields", "is_bound", "reset_default"]
+__all__ = ["CartFields", "active", "use_cart", "default_fields", "is_bound",
+           "reset_default", "detach_default"]
 
 
 @dataclass
@@ -108,6 +109,24 @@ _active: contextvars.ContextVar[Optional[CartFields]] = contextvars.ContextVar(
 def default_fields() -> CartFields:
     """The process-wide cart used when nothing is bound. For startup and CLI callers."""
     return _default
+
+
+def detach_default() -> CartFields:
+    """Hand the current process-wide cart to a new owner and install a fresh one.
+
+    ⚠ EXISTS BECAUSE CLEARING IT IN PLACE DESTROYED IT. The mount route publishes the loaded
+    cart into the pool and then wants the default empty again. `active()` returns THIS OBJECT
+    when nothing is bound, so publishing a reference and then calling `.clear()` emptied the
+    very object the pool had just taken -- mount reported success and every search found
+    nothing (2026-08-14).
+
+    Swapping the object is also cheaper than copying: no array is touched, the new owner keeps
+    the loaded embeddings, and the default starts genuinely empty.
+    """
+    global _default
+    previous = _default
+    _default = CartFields()
+    return previous
 
 
 def reset_default() -> None:
