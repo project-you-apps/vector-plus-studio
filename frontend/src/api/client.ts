@@ -101,10 +101,35 @@ async function fetchJSON<T>(url: string, opts?: RequestInit): Promise<T> {
     },
   })
   if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`API error ${res.status}: ${text}`)
+    throw new Error(await refusalMessage(res))
   }
   return res.json()
+}
+
+/**
+ * The human sentence out of a refusal, not the JSON around it.
+ *
+ * Our refusals carry `{detail: {error, message}}` (cart_busy, cart_not_found) or a plain
+ * `{detail: "Sign in to use this cart."}` from cart_guard. Thrown verbatim, the first shape
+ * reached the user as
+ *
+ *   API error 409: {"detail":{"error":"cart_busy","message":"Betty Alvarez is editing this
+ *   cart.","seconds_left":88}}
+ *
+ * -- which contains the right sentence and reads like a stack trace. The whole point of
+ * naming the holder (Andy, 2026-08-12) is that a person can act on it, and that is lost if
+ * it arrives wrapped in braces. Falls back to the status line when the body is not ours.
+ */
+async function refusalMessage(res: Response): Promise<string> {
+  try {
+    const body = await res.json()
+    const d = body?.detail
+    if (typeof d === 'string' && d.trim()) return d
+    if (d && typeof d.message === 'string' && d.message.trim()) return d.message
+  } catch {
+    /* not JSON, or already consumed -- fall through to the status */
+  }
+  return `API error ${res.status}`
 }
 
 export async function getStatus(): Promise<StatusResponse> {

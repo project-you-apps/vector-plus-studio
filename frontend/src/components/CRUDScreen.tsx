@@ -1056,7 +1056,16 @@ export default function CRUDScreen() {
         )}
         {!isLocalMount && !permissionReadOnly && (
           <button
-            onClick={toggleLock}
+            // toggleLock RETHROWS since 2026-08-13. An unhandled rejection here would be
+            // invisible to the user -- the pill would simply not change, which is the
+            // "silently did nothing" failure this whole week has been about.
+            onClick={async () => {
+              try {
+                await toggleLock()
+              } catch (e) {
+                log('update', `Lock change refused: ${e instanceof Error ? e.message : 'unknown'}`, false)
+              }
+            }}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
               lockReadOnly
                 ? 'bg-rose-500/20 border border-rose-500/40 text-rose-300 hover:bg-rose-500/30'
