@@ -2,9 +2,23 @@ import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react'
 import { useCartBuilderStore } from '../store/cartBuilderStore'
 import type { Toast } from '../store/cartBuilderStore'
 
-// Toaster — fixed bottom-right stack of transient notifications.
+// Toaster — TOP-CENTRE stack of transient notifications, where a JS alert would appear.
 // Triggered from cartBuilderStore.pushToast(). Cart Builder owns the slice
 // today; other screens can borrow by importing the same store.
+//
+// MOVED FROM BOTTOM-RIGHT, 2026-08-13. Andy: "it pops up almost out of the corner of one's
+// eye down at the bottom right." A refusal nobody sees is the same as no refusal, which is
+// the failure this whole week has been about — and it matters more now that a write can be
+// refused because someone ELSE holds the cart.
+//
+// TOP-centre, not dead centre, and that is deliberate: the thing being read is in the middle
+// of the screen, so a centred toast lands on top of it — worse as they stack, and worse
+// again for the transient ones nobody asked to dismiss. Top-centre sits in the reading path
+// without covering the text. It is also Andy's own earlier call, 2026-02-28, for the
+// draggable panels: "middle top where a javascript Alert would pop up."
+//
+// `pointer-events-none` on the stack with `pointer-events-auto` on each toast stays: the
+// gaps between toasts must not eat clicks aimed at the content underneath.
 
 export default function Toaster() {
   const toasts = useCartBuilderStore((s) => s.toasts)
@@ -13,7 +27,7 @@ export default function Toaster() {
   if (toasts.length === 0) return null
 
   return (
-    <div className="fixed bottom-20 right-4 z-50 flex flex-col gap-2 max-w-sm pointer-events-none">
+    <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2 w-full max-w-md px-4 pointer-events-none">
       {toasts.map((t) => (
         <ToastItem key={t.id} toast={t} onDismiss={() => dismiss(t.id)} />
       ))}
