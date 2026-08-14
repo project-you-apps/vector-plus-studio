@@ -84,7 +84,7 @@ async def bind_caller_cart(request: Request,
     cart_id = requested_cart(request)
     viewer = view_key(request, user)
     remember_display_name(viewer, display_name_for(user))
-    touch_presence(cart_id, viewer)
+    touch_presence(cart_id, presence_key(request), display_name_for(user))
     try:
         with bound_cart(cart_id, viewer, _loader) as state:
             yield state
@@ -212,7 +212,8 @@ _MAX_NAMES = 512
 
 # cart_id -> {view_key: last_seen}. Matches the write lease window so "who is here"
 # and "who could be editing" cannot tell two different stories.
-_presence: dict[str, dict[str, float]] = {}
+# cart_id -> {tab_key: (last_seen, display_name|None)}
+_presence: dict[str, dict[str, tuple[float, Optional[str]]]] = {}
 PRESENCE_WINDOW_SECONDS = 90.0
 
 
@@ -225,33 +226,55 @@ def remember_display_name(view: str, name: Optional[str]) -> None:
     _display_names[view] = name
 
 
-def touch_presence(cart_id: Optional[str], view: str) -> None:
-    """Record that this viewer is looking at this cart, now."""
+def presence_key(request: Request) -> str:
+    """Identifies a TAB, not an identity.
+
+    ⚠ DELIBERATELY NOT `view_key`. Presence keyed by identity leaks ghosts: log out and your
+    key changes from `seat:<uuid>` to `anon:<tab>`, so the old entry lingers for the whole
+    window and a person who left is still shown as present. Andy hit exactly that on
+    2026-08-13 -- logged out of Betty, opened another browser, and Betty was still "here".
+
+    One tab is one presence. Changing who you are signed in as REPLACES your entry.
+
+    The lease still keys on `view_key`, and must: a person's two tabs are one writer and must
+    not refuse each other.
+    """
+    raw = (request.headers.get(SESSION_HEADER) or "").strip()
+    if raw:
+        cleaned = "".join(ch for ch in raw if ch.isalnum() or ch in "-_")[:_MAX_SESSION_KEY]
+        if cleaned:
+            return f"tab:{cleaned}"
+    client = getattr(request, "client", None)
+    return f"tab-noheader:{getattr(client, 'host', None) or 'unknown'}"
+
+
+def touch_presence(cart_id: Optional[str], tab: str, name: Optional[str]) -> None:
+    """Record that this TAB is looking at this cart, now, and what to call it."""
     if not cart_id:
         return
     seen = _presence.setdefault(cart_id, {})
-    seen[view] = time.monotonic()
+    seen[tab] = (time.monotonic(), name or None)
 
 
 def occupants_of(cart_id: Optional[str], exclude: Optional[str] = None,
                  window: float = PRESENCE_WINDOW_SECONDS) -> list[str]:
-    """Who else is looking at this cart, by display name.
+    """Who else is looking at this cart, by display name. Excludes the caller's own tab.
 
     ⚠ PRESENCE, NOT `CartPool.holders`. I reached for holders first and the tests caught it:
     `bound_cart` releases the seat in its `finally`, so holders is who is MID-REQUEST -- a
     window measured in microseconds, empty almost always. It is a correctness pin, not a
     presence list, and reading it as one would have shown an empty cart to everybody.
 
-    So presence is its own thing: last-seen per cart per viewer, and anyone seen inside the
-    window counts as here. The window matches the write lease (90s) so "who is in this cart"
-    and "who could be editing it" agree rather than telling two stories.
+    The window matches the write lease (90s) so "who is in this cart" and "who could be
+    editing it" agree rather than telling two stories. Refreshed by ordinary polling, which
+    means a BACKGROUNDED tab eventually drops off -- correct, since nobody is looking at it,
+    but it is why the pill can vanish while a browser is still open behind another window.
 
     ⚠ NAMES ONLY, NEVER KEYS. A `seat:<uuid>` on screen is noise to a person and a seat
-    disclosure to everyone else -- same reason the busy-cart refusal says "Someone else".
-    Anonymous viewers collapse to "Someone" rather than exposing a tab id.
+    disclosure to everyone else. An unnamed viewer -- signed out, or a token with no email --
+    reads as "a guest", which is honest and not ominous.
 
-    Callers must still gate on whether the viewer may READ the cart. Occupancy is personnel
-    information and this function does not know who is asking.
+    Callers must still gate on whether the viewer may READ the cart.
     """
     if not cart_id:
         return []
@@ -260,13 +283,12 @@ def occupants_of(cart_id: Optional[str], exclude: Optional[str] = None,
         return []
 
     cutoff = time.monotonic() - window
-    stale = [v for v, at in seen.items() if at < cutoff]
-    for v in stale:                                  # opportunistic prune; no sweeper
-        del seen[v]
+    for tab in [t for t, (at, _) in seen.items() if at < cutoff]:
+        del seen[tab]                                # opportunistic prune; no sweeper
 
-    return [_display_names.get(v) or "Someone"
-            for v in sorted(seen)
-            if exclude is None or v != exclude]
+    return [name or "a guest"
+            for tab, (_, name) in sorted(seen.items())
+            if exclude is None or tab != exclude]
 
 
 async def require_write_lease(request: Request,

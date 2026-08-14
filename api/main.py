@@ -704,7 +704,7 @@ async def get_status(request: Request,
         try:
             occupants = request_cart.occupants_of(
                 request_cart.requested_cart(request),
-                exclude=request_cart.view_key(request, user),
+                exclude=request_cart.presence_key(request),
             )
         except Exception as e:                                  # noqa: BLE001
             # Status is the UI's heartbeat; a presentation nicety must never break the poll.

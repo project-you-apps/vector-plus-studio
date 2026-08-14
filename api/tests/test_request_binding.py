@@ -237,17 +237,44 @@ def test_a_failed_request_does_not_leave_the_cart_pinned(client, monkeypatch, fa
 
 def test_occupancy_names_the_other_viewer_not_their_key(client, fake_loader):
     """A seat uuid on screen is noise to a person and a disclosure to everyone else."""
-    request_cart.remember_display_name("anon:tab-betty", "Betty Alvarez")
-
-    client.post("/api/search", json={"query": "p"}, headers={
-        request_cart.CART_HEADER: "company", request_cart.SESSION_HEADER: "tab-betty"})
+    # Presence is recorded per TAB with the name attached, so seed it the way a request does.
+    request_cart.touch_presence("company", "tab:betty-tab", "Betty Alvarez")
 
     r = client.get("/api/status", headers={
-        request_cart.CART_HEADER: "company", request_cart.SESSION_HEADER: "tab-susie"})
+        request_cart.CART_HEADER: "company", request_cart.SESSION_HEADER: "susie-tab"})
 
     occupants = r.json()["cart_occupants"]
-    assert "Betty Alvarez" in occupants
-    assert not any("tab-betty" in o or "anon:" in o for o in occupants)
+    assert occupants == ["Betty Alvarez"]
+    assert not any("tab:" in o or "seat:" in o for o in occupants)
+
+
+def test_the_same_account_in_two_tabs_sees_itself(client, fake_loader):
+    """One account, two browsers = two TABS, so they are visible to each other.
+
+    Deliberate: it is the multi-device signal Andy asked about, and it arrives free from
+    keying presence by tab. Keyed by identity, both would have excluded each other as "self"
+    and a person signed in twice would see nobody.
+    """
+    request_cart.touch_presence("company", "tab:susie-edge", "Susie Nakamura")
+
+    r = client.get("/api/status", headers={
+        request_cart.CART_HEADER: "company", request_cart.SESSION_HEADER: "susie-chrome"})
+    assert r.json()["cart_occupants"] == ["Susie Nakamura"]
+
+
+def test_changing_identity_replaces_a_tab_rather_than_haunting_the_cart(client, fake_loader):
+    """Log out and the departed identity must not linger for the whole window.
+
+    Found 2026-08-13: presence was keyed by view_key, which CHANGES on logout
+    (seat:<uuid> -> anon:<tab>), so Betty stayed "here" after Andy signed out of her.
+    """
+    request_cart.touch_presence("company", "tab:andys-tab", "Betty Alvarez")
+    request_cart.touch_presence("company", "tab:andys-tab", None)      # signed out
+
+    r = client.get("/api/status", headers={
+        request_cart.CART_HEADER: "company", request_cart.SESSION_HEADER: "other-tab"})
+    occupants = r.json()["cart_occupants"]
+    assert occupants == ["a guest"], f"Betty haunted the cart: {occupants}"
 
 
 def test_you_are_not_your_own_occupant(client, fake_loader):
@@ -256,14 +283,17 @@ def test_you_are_not_your_own_occupant(client, fake_loader):
     assert r.json()["cart_occupants"] == []
 
 
-def test_an_unnamed_viewer_shows_as_someone(client, fake_loader):
-    """Anonymous must not leak a tab id just because it has no display name."""
+def test_an_unnamed_viewer_reads_as_a_guest(client, fake_loader):
+    """Anonymous must not leak a tab id, and must not sound ominous.
+
+    Andy on the first cut: "'Someone is also here' seems so ominous. lol"
+    """
     client.post("/api/search", json={"query": "p"}, headers={
-        request_cart.CART_HEADER: "company", request_cart.SESSION_HEADER: "tab-ghost"})
+        request_cart.CART_HEADER: "company", request_cart.SESSION_HEADER: "ghost-tab"})
 
     r = client.get("/api/status", headers={
-        request_cart.CART_HEADER: "company", request_cart.SESSION_HEADER: "tab-susie"})
-    assert r.json()["cart_occupants"] == ["Someone"]
+        request_cart.CART_HEADER: "company", request_cart.SESSION_HEADER: "susie-tab"})
+    assert r.json()["cart_occupants"] == ["a guest"]
 
 
 def test_occupancy_is_empty_for_a_different_cart(client, fake_loader):

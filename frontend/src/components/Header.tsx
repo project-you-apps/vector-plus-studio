@@ -140,10 +140,12 @@ export default function Header() {
             title={`Also in this cart: ${status.cart_occupants.join(', ')}`}
           >
             <Users size={12} className="shrink-0" />
+            {/* "Someone is also here" read like a horror film (Andy, 2026-08-13). A
+                presence LIST is informative; a warning about an unnamed presence is not. */}
             <span className="font-medium">
-              {status.cart_occupants.length === 1
-                ? `${status.cart_occupants[0]} is also here`
-                : `${status.cart_occupants.length} others here`}
+              {status.cart_occupants.length <= 2
+                ? `Also here: ${status.cart_occupants.join(' & ')}`
+                : `Also here: ${status.cart_occupants.length} others`}
             </span>
           </span>
         )}
