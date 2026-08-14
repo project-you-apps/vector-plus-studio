@@ -36,6 +36,7 @@ from typing import Callable, Iterator, Optional
 from fastapi import Depends, HTTPException, Request
 
 from . import cart_context
+from . import cart_lock
 from .auth import get_current_user
 from .cart_pool import CartState, pool
 
@@ -170,6 +171,61 @@ def requested_cart(request: Request) -> Optional[str]:
     # Basename only. A cart id is a NAME here; anything path-shaped is either a mistake or an
     # attempt, and neither should reach the loader with its separators intact.
     return os.path.basename(raw)[:256] or None
+
+
+def display_name_for(user: object) -> Optional[str]:
+    """A name to put on a refusal. `user_<uuid>` is useless to an office manager.
+
+    Best effort from the token, in decreasing order of how a person would introduce
+    themselves. Returns None rather than a uuid when nothing human is available -- the
+    refusal then says "Someone else is editing this cart", which is honest, where a uuid
+    would be noise that also leaks a seat id.
+
+    TODO: the profile table has real display names. Reading it here means a lookup on the
+    refusal path, which is a place we do not currently do lookups -- deliberate, and filed
+    rather than smuggled in.
+    """
+    if not isinstance(user, dict):
+        return None
+    meta = user.get("user_metadata")
+    if isinstance(meta, dict):
+        for key in ("full_name", "name", "display_name"):
+            val = meta.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    email = user.get("email")
+    if isinstance(email, str) and email.strip():
+        return email.strip()
+    return None
+
+
+async def require_write_lease(request: Request,
+                              user: dict | None = Depends(get_current_user)):
+    """Hold this cart's write claim for the request. Declare it AFTER the access guard.
+
+    ⚠ ORDER: `_bind`, then `_guard`, then `_lock`. A caller who may not write must be refused
+    for THAT reason, not told a cart is busy -- and taking a claim on a cart you cannot write
+    would let a viewer block an editor by clicking around.
+
+    A refusal is `409 Conflict` naming the holder, per Andy 2026-08-12: *"'Betty is editing
+    this cart' is better."* Not a spinner, not a queue.
+
+    With no cart bound -- the un-migrated path and every single-user studio -- the claim is
+    taken on a process-wide sentinel. One writer, re-entrant, never refused: today's
+    behaviour exactly.
+    """
+    cart_id = requested_cart(request) or "__process_default__"
+    holder = view_key(request, user)
+    lock = cart_lock.locks.for_cart(cart_id)
+    try:
+        with lock.write(holder, display_name_for(user)):
+            yield
+    except cart_lock.CartBusy as busy:
+        raise HTTPException(status_code=409, detail={
+            "error": "cart_busy",
+            "message": str(busy),
+            "seconds_left": round(busy.seconds_left),
+        }) from busy
 
 
 @contextmanager

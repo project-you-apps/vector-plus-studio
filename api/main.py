@@ -2286,13 +2286,13 @@ async def unmount_cartridge():
 
 
 @app.post("/api/cartridges/lock", response_model=MessageResponse)
-async def lock_cartridge(_bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write)):
+async def lock_cartridge(_bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _lock=Depends(request_cart.require_write_lease)):
     engine.read_only = True
     return MessageResponse(success=True, message="Cartridge locked (read-only)")
 
 
 @app.post("/api/cartridges/unlock", response_model=MessageResponse)
-async def unlock_cartridge(_bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write)):
+async def unlock_cartridge(_bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _lock=Depends(request_cart.require_write_lease)):
     _enforce_writable()  # Public demo: refuses unlock so the per-cart lock can't be cleared
     if not engine.mounted_name:
         return MessageResponse(success=False, message="No cartridge mounted")
@@ -2301,7 +2301,7 @@ async def unlock_cartridge(_bind=Depends(bind_caller_cart), _guard=Depends(cart_
 
 
 @app.post("/api/cartridges/save", response_model=MessageResponse)
-async def save_cartridge(_bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write)):
+async def save_cartridge(_bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _lock=Depends(request_cart.require_write_lease)):
     _enforce_writable()
     if not engine.mounted_name:
         return MessageResponse(success=False, message="No cartridge mounted")
@@ -2606,7 +2606,7 @@ async def search_endpoint(req: SearchRequest, request: Request,
 # ---------------------------------------------------------------------------
 
 @app.delete("/api/patterns/{idx}", response_model=MessageResponse)
-async def delete_pattern(idx: int, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write)):
+async def delete_pattern(idx: int, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _lock=Depends(request_cart.require_write_lease)):
     _enforce_writable(idx=idx)
     if engine.read_only:
         return MessageResponse(success=False, message="Cartridge is read-only. Unlock first.")
@@ -2618,7 +2618,7 @@ async def delete_pattern(idx: int, _bind=Depends(bind_caller_cart), _guard=Depen
 
 @app.put("/api/patterns/{idx}", response_model=MessageResponse)
 async def edit_pattern(idx: int, req: AddPassageRequest,
-                       user: dict | None = Depends(get_current_user), _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write)):
+                       user: dict | None = Depends(get_current_user), _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _lock=Depends(request_cart.require_write_lease)):
     """Replace a passage: append the new text, tombstone the old, RECORD THE SUCCESSION.
 
     THE VERB THAT WAS MISSING. Editing was previously two independent calls — POST a new
@@ -2681,7 +2681,7 @@ async def edit_pattern(idx: int, req: AddPassageRequest,
 
 
 @app.post("/api/patterns/{idx}/restore", response_model=MessageResponse)
-async def restore_pattern(idx: int, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write)):
+async def restore_pattern(idx: int, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _lock=Depends(request_cart.require_write_lease)):
     _enforce_writable(idx=idx)
     if engine.read_only:
         return MessageResponse(success=False, message="Cartridge is read-only. Unlock first.")
@@ -2887,7 +2887,7 @@ async def get_pattern(idx: int, _bind=Depends(bind_caller_cart), _guard=Depends(
 # ---------------------------------------------------------------------------
 
 @app.post("/api/patterns", response_model=MessageResponse)
-async def add_passage(req: AddPassageRequest, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write)):
+async def add_passage(req: AddPassageRequest, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _lock=Depends(request_cart.require_write_lease)):
     _enforce_writable()
     if not engine.mounted_name:
         return MessageResponse(success=False, message="No cartridge mounted")
@@ -3105,7 +3105,7 @@ async def membox_unmount_endpoint(req: MemboxUnmountRequest):
 
 
 @app.post("/api/membox/imprint", response_model=MessageResponse)
-async def membox_imprint(req: MemboxImprintRequest, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write)):
+async def membox_imprint(req: MemboxImprintRequest, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _lock=Depends(request_cart.require_write_lease)):
     _enforce_writable()
     if not _MEMBOX_AVAILABLE:
         return MessageResponse(success=False, message="Membox not available")

@@ -48,6 +48,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from . import cart_guard
+from . import request_cart
 from .request_cart import bind_caller_cart
 
 # ---------------------------------------------------------------------------
@@ -272,7 +273,8 @@ router = APIRouter(prefix="/api/cartridges", tags=["uploads"])
 
 @router.delete("/eject")
 async def eject_cartridge(_bind=Depends(bind_caller_cart),
-                          _guard=Depends(cart_guard.require_cart_write)):
+                          _guard=Depends(cart_guard.require_cart_write),
+                          _lock=Depends(request_cart.require_write_lease)):
     """Immediately delete the CURRENTLY-MOUNTED sandboxed upload + its permissions sidecar.
 
     Guarded 2026-08-12. This DELETES the mounted cart and was reachable with no caller
