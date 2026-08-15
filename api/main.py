@@ -2799,10 +2799,27 @@ async def list_patterns(
     # engine version exposes it, we'll prefer that path.
     engine_source_paths = getattr(engine, 'source_paths', None) or []
 
-    def _source_of(i: int, text: str) -> str | None:
-        if i < len(engine_source_paths):
-            return engine_source_paths[i]
-        # Fall back to label-line parsing.
+    # ⚠ NOT EVERY CART LABELS ITS CHUNKS. The label-line strategy below assumes the chunker
+    # prepended `<filename>` to each chunk's text, which is true for LocalCart and the wiki
+    # carts and NOT true for anything built by experiments/enterprise-seats/build_office.py.
+    # Those carts store the filename nowhere in the text -- the only per-passage provenance
+    # is the 32-bit `source_hash` in the h-row. So the TOC honestly listed a file as "6p"
+    # and clicking it filtered on a name no passage carried: "No passages found for this
+    # file" on a file that has six (Andy, 2026-08-14).
+    #
+    # Hence a LADDER, not one rule. Each rung is more precise than the next, and the hash is
+    # last because it is one-way: we cannot read a name out of it, only ask whether a name
+    # hashes to it. A 32-bit space means a false match is possible in principle -- with a
+    # few hundred sources the odds are ~1e-5 -- and it is the last rung precisely so no cart
+    # that can answer exactly ever has to rely on it.
+    hippo = engine.hippocampus or []
+    want_hash = None
+    if source_needle:
+        import hashlib
+        # Must match membot/cartridge_builder.py:_source_hash exactly. Do not improve it.
+        want_hash = int(hashlib.md5(source_needle.encode()).hexdigest()[:8], 16)
+
+    def _label_line(text: str) -> str | None:
         if not text:
             return None
         first_nl = text.find('\n')
@@ -2813,16 +2830,38 @@ async def list_patterns(
             return first_line[:marker].strip()
         return first_line.strip() or None
 
+    def _matches_source(i: int, text: str) -> bool:
+        # 1. An explicit per-passage table, if a later engine version exposes one.
+        if i < len(engine_source_paths):
+            return engine_source_paths[i] == source_needle
+
+        entry = hippo[i] if i < len(hippo) else None
+
+        # 2. v3 h-rows resolve their source through the strings table, so the real name is
+        #    right there and no guessing is needed.
+        if entry:
+            resolved = entry.get('source_path')
+            if resolved:
+                return resolved == source_needle
+
+        # 3. The chunker's label line, for carts that carry one.
+        if _label_line(text) == source_needle:
+            return True
+
+        # 4. v1/v2: the hash is all that survived. Reached only when nothing above matched,
+        #    so this can add results where there were none and cannot take any away.
+        if entry and want_hash is not None:
+            return entry.get('source_hash', 0) == want_hash
+        return False
+
     matching: list[tuple[int, str]] = []
     for i, text in enumerate(engine.passages):
         if i in deleted:
             continue
         if needle and needle not in (text or "").lower():
             continue
-        if source_needle:
-            src = _source_of(i, text or "")
-            if src != source_needle:
-                continue
+        if source_needle and not _matches_source(i, text or ""):
+            continue
         matching.append((i, text or ""))
 
     total = len(matching)
