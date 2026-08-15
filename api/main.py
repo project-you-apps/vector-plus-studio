@@ -206,8 +206,40 @@ def _refuse_path_shaped_filename(filename: str) -> None:
     )
 
 
+async def refuse_when_read_only():
+    """The server-wide write refusal, as a DEPENDENCY so it runs BEFORE the write lease.
+
+    ⚠ DECLARATION ORDER IS THE CONTROL, AGAIN. `_enforce_writable()` is called in the route
+    BODY, which is too late: FastAPI has already run `require_write_lease` and claimed a
+    90-second lease in the caller's name. The lease is deliberately renewed on the way out,
+    so it OUTLIVES the failed request.
+
+    On the public demo that was a denial of the demo by anyone, with no account: the guard
+    defers on unregistered carts by design ("legacy carts readable by anyone"), so an
+    anonymous caller reached the lease, got their 403 from the body, and left every other
+    visitor looking at "Someone is editing this cart" for 90 seconds -- refreshable
+    indefinitely. Nothing could be *changed*, which is why it survived review; the demo could
+    simply be switched off for everyone else.
+
+    Declare as `_ro` BETWEEN `_guard` and `_lock`. Pinned by
+    test_read_only_refuses_before_the_lease.py.
+
+    NOT applied to `uploads.eject`: ejecting your own sandbox upload has to keep working on
+    the read-only public box, which is the whole point of the sandbox.
+    """
+    if READ_ONLY_MODE:
+        raise HTTPException(
+            status_code=403,
+            detail="Server is in read-only mode. Writes disabled for the public demo.",
+        )
+
+
 def _enforce_writable(idx: int | None = None):
     """Raise 403 if writes are disallowed at any level.
+
+    ⚠ Called from the route BODY, so it runs AFTER dependencies. The server-wide half is
+    therefore ALSO declared as `refuse_when_read_only` on every route that takes a write
+    lease -- see that function for why the body call alone was not enough.
 
     Three layers compose, checked in priority order:
       1. Server-wide VPS_READ_ONLY env var (Step 1) — public-deploy gate.
@@ -2329,13 +2361,13 @@ async def unmount_cartridge():
 
 
 @app.post("/api/cartridges/lock", response_model=MessageResponse)
-async def lock_cartridge(_bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _lock=Depends(request_cart.require_write_lease)):
+async def lock_cartridge(_bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _ro=Depends(refuse_when_read_only), _lock=Depends(request_cart.require_write_lease)):
     engine.read_only = True
     return MessageResponse(success=True, message="Cartridge locked (read-only)")
 
 
 @app.post("/api/cartridges/unlock", response_model=MessageResponse)
-async def unlock_cartridge(_bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _lock=Depends(request_cart.require_write_lease)):
+async def unlock_cartridge(_bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _ro=Depends(refuse_when_read_only), _lock=Depends(request_cart.require_write_lease)):
     _enforce_writable()  # Public demo: refuses unlock so the per-cart lock can't be cleared
     if not engine.mounted_name:
         return MessageResponse(success=False, message="No cartridge mounted")
@@ -2344,7 +2376,7 @@ async def unlock_cartridge(_bind=Depends(bind_caller_cart), _guard=Depends(cart_
 
 
 @app.post("/api/cartridges/save", response_model=MessageResponse)
-async def save_cartridge(_bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _lock=Depends(request_cart.require_write_lease)):
+async def save_cartridge(_bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _ro=Depends(refuse_when_read_only), _lock=Depends(request_cart.require_write_lease)):
     _enforce_writable()
     if not engine.mounted_name:
         return MessageResponse(success=False, message="No cartridge mounted")
@@ -2649,7 +2681,7 @@ async def search_endpoint(req: SearchRequest, request: Request,
 # ---------------------------------------------------------------------------
 
 @app.delete("/api/patterns/{idx}", response_model=MessageResponse)
-async def delete_pattern(idx: int, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _lock=Depends(request_cart.require_write_lease)):
+async def delete_pattern(idx: int, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _ro=Depends(refuse_when_read_only), _lock=Depends(request_cart.require_write_lease)):
     _enforce_writable(idx=idx)
     if engine.read_only:
         return MessageResponse(success=False, message="Cartridge is read-only. Unlock first.")
@@ -2661,7 +2693,7 @@ async def delete_pattern(idx: int, _bind=Depends(bind_caller_cart), _guard=Depen
 
 @app.put("/api/patterns/{idx}", response_model=MessageResponse)
 async def edit_pattern(idx: int, req: AddPassageRequest,
-                       user: dict | None = Depends(get_current_user), _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _lock=Depends(request_cart.require_write_lease)):
+                       user: dict | None = Depends(get_current_user), _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _ro=Depends(refuse_when_read_only), _lock=Depends(request_cart.require_write_lease)):
     """Replace a passage: append the new text, tombstone the old, RECORD THE SUCCESSION.
 
     THE VERB THAT WAS MISSING. Editing was previously two independent calls — POST a new
@@ -2724,7 +2756,7 @@ async def edit_pattern(idx: int, req: AddPassageRequest,
 
 
 @app.post("/api/patterns/{idx}/restore", response_model=MessageResponse)
-async def restore_pattern(idx: int, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _lock=Depends(request_cart.require_write_lease)):
+async def restore_pattern(idx: int, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _ro=Depends(refuse_when_read_only), _lock=Depends(request_cart.require_write_lease)):
     _enforce_writable(idx=idx)
     if engine.read_only:
         return MessageResponse(success=False, message="Cartridge is read-only. Unlock first.")
@@ -2969,7 +3001,7 @@ async def get_pattern(idx: int, _bind=Depends(bind_caller_cart), _guard=Depends(
 # ---------------------------------------------------------------------------
 
 @app.post("/api/patterns", response_model=MessageResponse)
-async def add_passage(req: AddPassageRequest, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _lock=Depends(request_cart.require_write_lease)):
+async def add_passage(req: AddPassageRequest, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _ro=Depends(refuse_when_read_only), _lock=Depends(request_cart.require_write_lease)):
     _enforce_writable()
     if not engine.mounted_name:
         return MessageResponse(success=False, message="No cartridge mounted")
@@ -3187,7 +3219,7 @@ async def membox_unmount_endpoint(req: MemboxUnmountRequest):
 
 
 @app.post("/api/membox/imprint", response_model=MessageResponse)
-async def membox_imprint(req: MemboxImprintRequest, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _lock=Depends(request_cart.require_write_lease)):
+async def membox_imprint(req: MemboxImprintRequest, _bind=Depends(bind_caller_cart), _guard=Depends(cart_guard.require_cart_write), _ro=Depends(refuse_when_read_only), _lock=Depends(request_cart.require_write_lease)):
     _enforce_writable()
     if not _MEMBOX_AVAILABLE:
         return MessageResponse(success=False, message="Membox not available")
