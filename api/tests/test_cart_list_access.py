@@ -59,12 +59,48 @@ def test_a_refused_cart_is_not_named(monkeypatch):
         "a cart this caller cannot open is still named to them")
 
 
-def test_a_guard_that_raises_hides_the_cart(monkeypatch):
-    """Fail CLOSED. A grant lookup that blows up must not publish the cart it could not
-    check -- the same direction cart_access.lookup_failed() already chose."""
+@pytest.fixture
+def one_private_cart(monkeypatch):
     monkeypatch.setattr(main, "_list_cartridges", lambda: [
         {"name": "private-cart", "filename": "private-cart.cart.npz", "size_mb": 1.0,
          "has_brain": False, "has_signatures": False, "has_manifest": False}])
+
+
+def test_a_public_host_hides_a_cart_it_could_not_check(monkeypatch, one_private_cart):
+    """Fail CLOSED where it matters. A lookup outage must not become an amnesty on every
+    name at once, which is the same direction cart_access.lookup_failed() already chose."""
+    monkeypatch.setattr(main, "PUBLIC_HOST", True)
+    monkeypatch.setattr(cart_guard, "resolve_named",
+                        lambda request, user, name: cart_access.lookup_failed())
+    assert _names_from(main.get_cartridges) == []
+
+
+def test_a_local_studio_keeps_a_cart_it_could_not_check(monkeypatch, one_private_cart):
+    """⚠ "COULD NOT CHECK" IS NOT "MAY NOT SEE". Andy, 2026-08-15, an hour after the filter
+    shipped: Susie could not see her own carts in the dropdown on her own machine, while
+    "Open from my computer" still found them. Hiding an owner's carts because Supabase
+    blinked is a worse outcome than briefly naming a cart on a single-user box."""
+    monkeypatch.setattr(main, "PUBLIC_HOST", False)
+    monkeypatch.setattr(cart_guard, "resolve_named",
+                        lambda request, user, name: cart_access.lookup_failed())
+    assert _names_from(main.get_cartridges) == ["private-cart"]
+
+
+def test_a_definitive_refusal_hides_the_cart_even_locally(monkeypatch, one_private_cart):
+    """The distinction is COULD-NOT-CHECK vs MAY-NOT-SEE, not public vs local. An actual
+    no-grant answer hides the cart everywhere, or the local studio becomes a way to
+    enumerate carts you were told you cannot open."""
+    monkeypatch.setattr(main, "PUBLIC_HOST", False)
+    monkeypatch.setattr(cart_guard, "resolve_named",
+                        lambda request, user, name: cart_access.decide(
+                            registered=True, owner_id="someone-else",
+                            grant_level=None, seat="susie"))
+    assert _names_from(main.get_cartridges) == []
+
+
+def test_a_raising_guard_still_hides_on_a_public_host(monkeypatch, one_private_cart):
+    """An exception is even less of an answer than lookup_failed."""
+    monkeypatch.setattr(main, "PUBLIC_HOST", True)
 
     def _boom(request, user, name):
         raise RuntimeError("supabase unreachable")

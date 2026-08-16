@@ -1162,16 +1162,34 @@ async def get_cartridges(request: Request, user: dict | None = Depends(get_curre
     carts = _list_cartridges()
     items = []
     known_names = set()
+    dropped: list = []
     for c in carts:
         try:
-            if not cart_guard.resolve_named(request, user, c["name"]).allowed:
-                continue
+            decision = cart_guard.resolve_named(request, user, c["name"])
         except Exception as e:                                  # noqa: BLE001
-            # A guard that cannot answer must not publish the cart. Skipping is the same
-            # direction lookup_failed() picks: refuse, do not fail open.
-            print(f"[VPS] cart list: access check failed for {c['name']!r}: "
+            print(f"[VPS] cart list: access check RAISED for {c['name']!r}: "
                   f"{type(e).__name__}: {e}")
-            continue
+            if PUBLIC_HOST:
+                continue
+            decision = None                                     # local: do not hide
+
+        if decision is not None and not decision.allowed:
+            # ⚠ "COULD NOT CHECK" IS NOT "MAY NOT SEE", AND ONLY ONE OF THEM SHOULD HIDE A
+            # CART FROM ITS OWN OWNER.
+            #
+            # ANONYMOUS and NO_GRANT are answers: this caller may not have it, hide it
+            # everywhere. LOOKUP_FAILED is the absence of an answer -- Supabase unreachable,
+            # an expired service JWT, a network blip. On the public droplet that still has
+            # to hide the cart, because a lookup outage must not become an amnesty on every
+            # name at once. On a local studio it must NOT: a transient hiccup would make
+            # Susie's own carts vanish from her own machine while "Open from my computer"
+            # still finds them -- which is exactly what Andy hit on 2026-08-15, an hour
+            # after this filter shipped.
+            if decision.reason == cart_access.DECISION_LOOKUP_FAILED and not PUBLIC_HOST:
+                pass                                            # keep it; we simply do not know
+            else:
+                dropped.append(f"{c['name']}({decision.reason})")
+                continue
         known_names.add(c["name"])
         items.append(CartridgeInfo(
             name=c["name"],
@@ -1201,6 +1219,15 @@ async def get_cartridges(request: Request, user: dict | None = Depends(get_curre
             has_signatures=engine.signatures_loaded,
             has_manifest=False,
         ))
+
+    if dropped:
+        # ⚠ SAY WHY, ALWAYS. The first version of this filter dropped carts silently, so
+        # "Susie cannot see her own carts" and "Susie has no grant on them" and "Supabase
+        # did not answer" were the same observation from the outside. One line per request
+        # naming the reason is what turns the next report of this into a diagnosis instead
+        # of a hypothesis.
+        print(f"[VPS] cart list: hid {len(dropped)} of {len(carts)} from "
+              f"seat={cart_guard._seat_from_token(user) or 'anonymous'}: {', '.join(dropped)}")
 
     return CartridgeListResponse(cartridges=items)
 
