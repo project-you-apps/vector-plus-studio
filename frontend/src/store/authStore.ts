@@ -60,6 +60,23 @@ function stampReturnApp(): void {
   try { localStorage.setItem(RETURN_APP_KEY, APP_ID) } catch { /* ignore */ }
 }
 
+/**
+ * Re-ask the server which carts this identity may see.
+ *
+ * ⚠ IMPORTED LAZILY, ON PURPOSE. `appStore` is a large module and neither store imports the
+ * other today; a static import here would create the first edge of a cycle the next time
+ * appStore needs anything from auth. The dynamic import keeps that edge out of module
+ * evaluation entirely.
+ *
+ * Failures are swallowed: this is a refresh of a list the screens already handle being
+ * stale, and an unhandled rejection during auth bootstrap is worse than a stale dropdown.
+ */
+function refetchCartsForNewIdentity(): void {
+  import('./appStore')
+    .then((m) => m.useAppStore.getState().fetchCartridges())
+    .catch(() => { /* the screens' own mount effect remains the fallback */ })
+}
+
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
   session: null,
@@ -79,6 +96,18 @@ export const useAuthStore = create<AuthState>((set) => ({
       initialized: true,
       loading: false,
     })
+    // ⚠ THE CART LIST IS NOW AUTH-DEPENDENT, AND THIS RESOLVES AFTER THE SCREENS MOUNT.
+    // SearchToolbar/OverviewScreen/CRUDScreen each call fetchCartridges() once in a mount
+    // effect, which races this await and usually wins -- so the list was fetched with no
+    // token, the server correctly answered "carts an anonymous caller may see", and nothing
+    // ever refetched. Susie signed in and still could not see her own carts in the dropdown
+    // (Andy, 2026-08-15), while "Open from My Computer" worked because it never asks the
+    // server at all.
+    //
+    // The race predates the filter; it was harmless only because the list used to be the
+    // same for everybody. Refetching centrally here rather than adding `session` to three
+    // mount effects, so a fourth screen cannot reintroduce it.
+    refetchCartsForNewIdentity()
 
     // Stamp app usage if we have ANY session on init. Covers two cases that
     // SIGNED_IN-only handling misses:
@@ -96,6 +125,11 @@ export const useAuthStore = create<AuthState>((set) => ({
 
     supabase.auth.onAuthStateChange((event, session) => {
       set({ session, user: session?.user ?? null })
+
+      // Sign-in, sign-out and token refresh all change WHICH carts the server will name,
+      // so the list has to be re-asked. Signing out especially: without this, Susie's carts
+      // stay listed in a signed-out tab until the page is reloaded.
+      refetchCartsForNewIdentity()
 
       // Also re-stamp on SIGNED_IN events that happen post-init (e.g. user
       // signs out + signs back in without a page reload).
