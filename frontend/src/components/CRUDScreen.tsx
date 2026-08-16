@@ -317,7 +317,7 @@ export default function CRUDScreen() {
       const apiBase = (import.meta.env.VITE_API_BASE as string | undefined) || '/api'
       // apiHeaders: this reads the MOUNTED cart, so without the cart header it
       // fetched from the process default instead of this tab's cart.
-      const res = await fetch(`${apiBase}/patterns/${idx}`, { headers: apiHeaders() })
+      const res = await fetch(`${apiBase}/patterns/${idx}`, { headers: await apiHeaders() })
       if (!res.ok) throw new Error(`Pattern #${idx} not found`)
       const p = await res.json()
       setUpdateText(p.full_text || '')

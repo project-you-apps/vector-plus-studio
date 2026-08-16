@@ -5,6 +5,7 @@ import type {
   CartPermissions,
 } from './types'
 import { useAuthStore } from '../store/authStore'
+import { supabase } from '../lib/supabase'
 import {
   REPORT_BUILDER_DEFAULT_ORIGIN,
   readReportBuilderToken,
@@ -61,11 +62,46 @@ function reportBuilderTarget(cartRef: string | null | undefined): RouterTarget |
   }
 }
 
-// Reads the current Supabase access token from the auth store (kept in sync via
-// onAuthStateChange in authStore.init). Returns an empty object when signed out
-// so anonymous endpoints (sandbox uploads, public mounts) still work.
-function authHeaders(): Record<string, string> {
-  const session = useAuthStore.getState().session
+// A token is "fresh enough" if it still has this long to live. Anything shorter and we ask
+// Supabase for a new one before spending it on a request.
+const TOKEN_FRESHNESS_MARGIN_MS = 60_000
+
+/**
+ * The Authorization header, with a token that is actually still valid.
+ *
+ * ⚠ REFRESH ON USE, NOT ON A TIMER. `supabase-js` auto-refreshes in the background, but the
+ * refresh is timer-driven and browsers throttle timers in backgrounded tabs. A tab left
+ * sitting therefore holds an EXPIRED access_token, and the old SYNCHRONOUS version of this
+ * function handed it over anyway: the server could not verify it, `get_current_user` returned None,
+ * and the request was treated as ANONYMOUS.
+ *
+ * That was invisible until 2026-08-15, when the cart list became auth-dependent. Then it
+ * looked like a permissions bug -- Betty was refused Finance (correctly, with her seat in
+ * the log) and the very next request, listing carts, came through as `seat=anonymous` and
+ * her carts vanished from the dropdown. Two lines apart, same tab, same second.
+ *
+ * `getSession()` refreshes an expired token before returning, so asking it at request time
+ * is what makes the token good. We only pay for that near expiry -- calling it on every
+ * request would put a storage read (and sometimes a network round trip) in front of the 2s
+ * status poll.
+ *
+ * A refresh that fails returns whatever we have. Sending a stale token and getting a clean
+ * 401 is better than sending none and being silently downgraded to anonymous, which is the
+ * failure mode this whole function exists to end.
+ */
+async function authHeaders(): Promise<Record<string, string>> {
+  let session = useAuthStore.getState().session
+  const expiresAtMs = session?.expires_at ? session.expires_at * 1000 : 0
+  const stale = !session || expiresAtMs - Date.now() < TOKEN_FRESHNESS_MARGIN_MS
+
+  if (stale) {
+    try {
+      const { data } = await supabase.auth.getSession()
+      if (data.session) session = data.session
+    } catch {
+      /* keep what we have; a 401 is a better signal than a silent anonymous request */
+    }
+  }
   return session ? { Authorization: `Bearer ${session.access_token}` } : {}
 }
 
@@ -80,7 +116,7 @@ function authHeaders(): Record<string, string> {
  *
  * The tab id is bookkeeping, never identity — see lib/tabSession.ts.
  */
-export function apiHeaders(extra?: Record<string, string>): Record<string, string> {
+export async function apiHeaders(extra?: Record<string, string>): Promise<Record<string, string>> {
   // The full set every call to OUR api must carry: auth, which cart this tab is viewing,
   // and which tab is asking.
   //
@@ -93,7 +129,7 @@ export function apiHeaders(extra?: Record<string, string>): Record<string, strin
   //
   // Do NOT use for the Desktop Helper, Image Builder or Report Builder: those are other
   // people's services on other origins, and our auth token has no business there.
-  return { ...authHeaders(), ...cartHeaders(), ...(extra || {}) }
+  return { ...(await authHeaders()), ...cartHeaders(), ...(extra || {}) }
 }
 
 function cartHeaders(): Record<string, string> {
@@ -111,7 +147,7 @@ async function fetchJSON<T>(url: string, opts?: RequestInit): Promise<T> {
     // today; merging here means none ever can.
     headers: {
       'Content-Type': 'application/json',
-      ...authHeaders(),
+      ...(await authHeaders()),
       ...cartHeaders(),
       ...(opts?.headers as Record<string, string> | undefined),
     },
@@ -208,7 +244,7 @@ export async function uploadCartridge(file: File): Promise<UploadResponse> {
   const res = await fetch(`${BASE}/cartridges/upload`, {
     method: 'POST',
     body: form,
-    headers: authHeaders(),
+    headers: await authHeaders(),
   })
   if (!res.ok) {
     let detail = `${res.status}`
@@ -224,7 +260,7 @@ export async function uploadCartridge(file: File): Promise<UploadResponse> {
 export async function ejectCartridge(): Promise<{ success: boolean; ejected: string }> {
   const res = await fetch(
     `${BASE}/cartridges/eject`,
-    { method: 'DELETE', headers: authHeaders() }
+    { method: 'DELETE', headers: await authHeaders() }
   )
   if (!res.ok) {
     let detail = `${res.status}`
@@ -490,7 +526,7 @@ export async function generateReport(
   const url = target ? `${target.base}/reports/generate` : `${BASE}/reports/generate`
   const headers = target
     ? { 'Content-Type': 'application/json', ...target.headers }
-    : { 'Content-Type': 'application/json', ...authHeaders() }
+    : { 'Content-Type': 'application/json', ...await authHeaders() }
   const res = await fetch(url, {
     method: 'POST',
     headers,
@@ -610,7 +646,7 @@ export async function runAgent(
   const url = target ? `${target.base}/agents/run` : `${BASE}/agents/run`
   const headers = target
     ? { 'Content-Type': 'application/json', ...target.headers }
-    : { 'Content-Type': 'application/json', ...authHeaders() }
+    : { 'Content-Type': 'application/json', ...await authHeaders() }
   const res = await fetch(url, {
     method: 'POST',
     headers,
@@ -692,7 +728,7 @@ export async function forgeCartridge(name: string, files: File[]) {
   const res = await fetch(`${BASE}/forge`, {
     method: 'POST',
     body: form,
-    headers: authHeaders(),
+    headers: await authHeaders(),
   })
   if (!res.ok) throw new Error(`Forge failed: ${res.status}`)
   return res.json() as Promise<{ success: boolean; message: string }>

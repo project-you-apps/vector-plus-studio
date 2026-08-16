@@ -1058,7 +1058,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const apiBase = (import.meta.env.VITE_API_BASE as string | undefined) || '/api'
       const embResp = await fetch(`${apiBase}/embed`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+        headers: { 'Content-Type': 'application/json', ...(await apiHeaders()) },
         body: JSON.stringify({ query: trimmedText }),
       })
       if (!embResp.ok) {
@@ -1188,7 +1188,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
         const embResp = await fetch(
           `${import.meta.env.VITE_API_BASE || '/api'}/cartridges/${encodeURIComponent(mountedName)}/embedding/${idx}`,
-          { headers: apiHeaders() },
+          { headers: await apiHeaders() },
         )
         if (!embResp.ok) throw new Error(`Embedding fetch failed: ${embResp.status}`)
         const embData = await embResp.json()
@@ -1221,7 +1221,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         // the process default rather than this tab's cart.
         const resp = await fetch(`${import.meta.env.VITE_API_BASE || '/api'}/walk-from`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+          headers: { 'Content-Type': 'application/json', ...(await apiHeaders()) },
           body: JSON.stringify({ cart_name: mountedName, idx, top_k: topK }),
         })
         if (!resp.ok) throw new Error(`Walk-from failed: ${resp.status}`)
@@ -1743,7 +1743,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         const apiBase = (import.meta.env.VITE_API_BASE as string | undefined) || '/api'
         const embResp = await fetch(`${apiBase}/embed`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+          headers: { 'Content-Type': 'application/json', ...(await apiHeaders()) },
           body: JSON.stringify({ query }),
         })
         if (!embResp.ok) throw new Error(`Embed failed: ${embResp.status}`)

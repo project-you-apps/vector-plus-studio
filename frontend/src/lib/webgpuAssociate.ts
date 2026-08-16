@@ -236,7 +236,7 @@ export async function runWebGpuAssociate(opts: RunAssociateOptions): Promise<Sea
         onStatus?.('Embedding query…');
         const embResp = await fetch(`${API_BASE}/embed`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+            headers: { 'Content-Type': 'application/json', ...(await apiHeaders()) },
             body: JSON.stringify({ query }),
         });
         if (!embResp.ok) {
@@ -250,7 +250,7 @@ export async function runWebGpuAssociate(opts: RunAssociateOptions): Promise<Sea
     onStatus?.('Fetching candidate pool…');
     const candResp = await fetch(`${API_BASE}/cartridges/${encodeURIComponent(cartName)}/cosine-candidates`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+        headers: { 'Content-Type': 'application/json', ...(await apiHeaders()) },
         body: JSON.stringify({ embedding: Array.from(queryEmb), pool_size: poolSize }),
     });
     if (!candResp.ok) {
