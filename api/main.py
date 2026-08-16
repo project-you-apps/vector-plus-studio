@@ -1135,11 +1135,43 @@ async def get_cart_pattern_0(_bind=Depends(bind_caller_cart), _guard=Depends(car
 # ---------------------------------------------------------------------------
 
 @app.get("/api/cartridges", response_model=CartridgeListResponse)
-async def get_cartridges():
+async def get_cartridges(request: Request, user: dict | None = Depends(get_current_user)):
+    """Carts THIS caller may open. Not every cart on disk.
+
+    ⚠ THIS ROUTE TOOK NO USER AT ALL until 2026-08-15, so it enumerated every cart on the
+    box to everybody. Andy, from the droplet: *"when not signed in the redwood company carts
+    are all visible. Luckily they can't be mounted."* The mount gate was doing its job -- and
+    it was the ONLY thing doing it. A signed-out visitor still learned that an account on
+    this server keeps carts called `redwood-finance` and `redwood-revenue`, which is a fact
+    about someone's business, not about our demo.
+
+    Listing and opening are now decided by the SAME authority. `cart_guard.resolve_named` is
+    the one that already governs mount, so a cart cannot appear in the list and then refuse
+    to open -- and, more importantly, cannot be hidden from mount while still being named
+    here.
+
+    COST: one grant lookup per cart, behind cart_guard's 30-second cache. Unregistered carts
+    short-circuit inside `decide()` without any lookup at all, which is what the whole public
+    demo set is.
+
+    ⚠ A GRANT-LOOKUP OUTAGE EMPTIES THE LIST. `lookup_failed()` refuses, deliberately, so a
+    database blip cannot become an amnesty on every cart at once. The demo looks empty rather
+    than open. That is the same trade the mount gate already makes; if it is ever the wrong
+    one, change it in cart_access.decide so both move together.
+    """
     carts = _list_cartridges()
     items = []
     known_names = set()
     for c in carts:
+        try:
+            if not cart_guard.resolve_named(request, user, c["name"]).allowed:
+                continue
+        except Exception as e:                                  # noqa: BLE001
+            # A guard that cannot answer must not publish the cart. Skipping is the same
+            # direction lookup_failed() picks: refuse, do not fail open.
+            print(f"[VPS] cart list: access check failed for {c['name']!r}: "
+                  f"{type(e).__name__}: {e}")
+            continue
         known_names.add(c["name"])
         items.append(CartridgeInfo(
             name=c["name"],
@@ -1159,7 +1191,11 @@ async def get_cartridges():
             size_mb = 0.0
         items.insert(0, CartridgeInfo(
             name=engine.mounted_name,
-            filename=engine.mounted_path,
+            # ⚠ BASENAME. The scanned branch above was fixed earlier today and this one was
+            # missed -- it publishes `engine.mounted_path` verbatim, so mounting anything
+            # outside the scanned dirs (a sandbox upload, most obviously) put an absolute
+            # server path straight back into the list the fix had just cleaned.
+            filename=os.path.basename(engine.mounted_path),
             size_mb=size_mb,
             has_brain=engine.physics_trained,
             has_signatures=engine.signatures_loaded,
