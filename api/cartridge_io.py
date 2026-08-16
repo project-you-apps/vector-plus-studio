@@ -442,7 +442,21 @@ def list_cartridges() -> list[dict]:
                 sig_path = os.path.join(d, f"{name}_signatures.npz")
             results.append({
                 "name": name,
-                "filename": path,  # absolute — frontend passes through to mount
+                # ⚠ BASENAME, NOT THE ABSOLUTE PATH. This field is serialised straight out
+                # of /api/cartridges to every anonymous caller, and it published the deploy
+                # root -- `/opt/vector-plus-studio/cartridges/redwood-finance.cart.npz` --
+                # for 8 of 10 carts on the public demo. The same disclosure we closed on
+                # /api/status, one endpoint over; that sweep fixed status and never came
+                # here (2026-08-15).
+                #
+                # The .pkl branch above has always sent a basename, which is why the leak
+                # was inconsistent rather than obvious. `path` stays absolute for internal
+                # callers -- the response model does not serialise it.
+                #
+                # The client mounts by this value, so the server must accept a bare
+                # `.cart.npz` name: see the resolution step in `_mount_plan`, without which
+                # this change turns every npz mount into a 500.
+                "filename": os.path.basename(path),
                 "path": path,
                 "size_mb": round(size_mb, 1),
                 "has_brain": False,  # .cart.npz is embeddings + passages, no brain

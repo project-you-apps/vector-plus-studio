@@ -1476,6 +1476,22 @@ def _apply_cart_permissions_after_mount(cart_path: str | None) -> None:
         print(f"[Mount] cart_permissions loaded: default={perms.get('default')!r}")
 
 
+def _mount_origin(cart_dir: str) -> list:
+    """The `from <dir>` fragment of a mount message -- nothing on a public host.
+
+    All three mount helpers reported `24 patterns | from /opt/vector-plus-studio/cartridges`,
+    which handed the deploy root to any anonymous caller who mounted a demo cart. Third and
+    smallest of the same disclosure: /api/status published it, /api/cartridges published it
+    in `filename`, and this published it in prose (2026-08-15).
+
+    Kept ON for the local studio, where it is genuinely useful -- a cart can come from
+    sample_data, cartridges/ or an Open dialog, and which one is the answer to "why is this
+    the wrong version." Returns a list so call sites splat it and simply have one fewer
+    fragment when it is empty.
+    """
+    return [] if PUBLIC_HOST else [f"from {cart_dir}"]
+
+
 def _mount_plan(filename: str):
     """Which loader handles this file, and what to call the cart. None if not a real path.
 
@@ -1489,7 +1505,31 @@ def _mount_plan(filename: str):
     path). Behaviour is unchanged from the inline version it replaces.
     """
     if not (os.path.isabs(filename) and os.path.exists(filename)):
-        return None
+        # ⚠ A BARE NAME IS STILL A FORMAT. Dispatch used to happen only for absolute paths,
+        # so a bare `redwood-finance.cart.npz` fell past every branch below and landed in
+        # `_mount_pkl` -> `pickle.load` -> UnpicklingError. A 500 on the public demo, and an
+        # npz handed to the pickle loader, which is the wrong reader for caller-named bytes
+        # even when the file is one of ours (2026-08-15).
+        #
+        # Resolution goes through `find_cartridge_path`, which only looks inside the
+        # whitelisted cartridge dirs -- the same containment `_refuse_path_shaped_filename`
+        # gives the route -- and only for names carrying no separator, so nothing
+        # path-shaped is quietly rehabilitated here.
+        #
+        # `.pkl` IS DELIBERATELY EXCLUDED. Bare .pkl names already work, and they work
+        # through `_mount_pkl`, which finds companions with `find_companion_file` -- all
+        # cart dirs PLUS DATA_DIR. `_mount_pkl_by_path` looks only beside the file, so
+        # routing them here would silently drop the brain for `wiki_nomic_100k.pkl`, whose
+        # .pkl is in sample_data and whose _brain.npy is in cartridges/. Same mount, no
+        # brain, no error.
+        bare = filename and not (os.path.isabs(filename) or "/" in filename
+                                 or "\\" in filename or ".." in filename)
+        if not (bare and filename.lower().endswith((".cart.npz", ".npz", ".npy"))):
+            return None
+        resolved = find_cartridge_path(filename)
+        if not resolved:
+            return None
+        filename = resolved
 
     basename = os.path.basename(filename)
     ext = os.path.splitext(basename)[1].lower()
@@ -1815,7 +1855,7 @@ def _mount_membot_npz(full_path: str, cart_name: str) -> MountResponse:
         else:
             print(f"[mount] Split cart sidecar not found at {db_path}")
 
-    message_parts = [f"{len(txt)} patterns", f"from {cart_dir}"]
+    message_parts = [f"{len(txt)} patterns", *_mount_origin(cart_dir)]
     if engine.is_split_cart:
         message_parts.append("split-cart (SQLite sidecar)")
     if hippo is not None:
@@ -1876,7 +1916,7 @@ def _mount_pkl_by_path(full_path: str, cart_name: str) -> MountResponse:
 
     brain_loaded = False
     sigs_loaded = False
-    message_parts = [f"{len(txt)} patterns", f"from {cart_dir}"]
+    message_parts = [f"{len(txt)} patterns", *_mount_origin(cart_dir)]
 
     if engine.gpu_available and os.path.exists(brain_path):
         valid, msg = validate_brain_manifest(brain_path, emb)
@@ -1976,7 +2016,7 @@ def _mount_brain_by_path(picked_path: str, cart_name: str) -> MountResponse:
     engine.deleted_ids = set()
 
     brain_loaded = False
-    message_parts = [f"{n_patterns} patterns", f"from {cart_dir}"]
+    message_parts = [f"{n_patterns} patterns", *_mount_origin(cart_dir)]
 
     if has_brain and engine.gpu_available:
         with engine.lock:
