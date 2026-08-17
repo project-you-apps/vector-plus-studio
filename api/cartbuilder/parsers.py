@@ -673,6 +673,57 @@ def parse_file(filepath: Path) -> list[dict]:
     return [{"text": filepath.read_text(errors="replace"), "page": None, "source": filepath.name}]
 
 
+def chunk_lines(text: str, chunk_size: int = 300, overlap: int = 50) -> list[str]:
+    """Split text into word-budgeted chunks WITHOUT destroying its line structure.
+
+    ⚠ THE ONE IMPLEMENTATION. There were three: this logic (correct, line-aware), and two
+    copies in `cartridge_builder.chunk_text` and `forge.chunk_text` that did
+    `" ".join(text.split())` and flattened every newline. Only the Cart Builder path had been
+    fixed, so a cart's formatting depended on which script happened to build it -- the redwood
+    demo carts came out of `build_office.py` -> `cartridge_builder.chunk_text` and arrived as
+    a wall of text: 1709 of 1712 passages with zero newlines (2026-08-16).
+
+    WHY IT MATTERS BEYOND TIDINESS. Markdown is LINE-BASED. Headings, bullets, and GFM tables
+    all need line breaks to parse, and `PassageModal` renders with react-markdown +
+    remark-gfm. Flattening leaves `#` and `|` sitting inline as literal punctuation, which is
+    exactly the "jumbled together unformatted" the modal shows. Andy asked for indented
+    bulleted lists on 2026-05-12; the display side has been able to do it since.
+
+    ⚠ THE OLD VERSION LOOKED FINE ON SHORT INPUT. Under `chunk_size` it returned the text
+    unmodified, so anything below the threshold kept its formatting and only long documents
+    broke. That is why it read as an intermittent display problem rather than a chunker bug.
+
+    Boundaries fall BETWEEN lines, never mid-line, so a table row or list item is never split.
+    A single line longer than `chunk_size` is taken atomically -- one oversize chunk beats a
+    mangled table row.
+    """
+    lines = text.split("\n")
+    line_wc = [len(l.split()) for l in lines]
+    n = len(lines)
+    chunks: list[str] = []
+    i = 0
+    while i < n:
+        j = i
+        budget = 0
+        while j < n and (budget == 0 or budget + line_wc[j] <= chunk_size):
+            budget += line_wc[j]
+            j += 1
+        chunk = "\n".join(lines[i:j]).strip()
+        if chunk:
+            chunks.append(chunk)
+        if j >= n:
+            break
+        # Walk backward from j to build an `overlap`-word tail that becomes the next chunk's
+        # prefix. Guard: always advance at least one line so pathological inputs terminate.
+        back = j
+        overlap_wc = 0
+        while back > i + 1 and overlap_wc < overlap:
+            back -= 1
+            overlap_wc += line_wc[back]
+        i = back
+    return chunks
+
+
 def chunk_texts(sections: list[dict], chunk_size: int = 300, overlap: int = 50) -> list[dict]:
     """Split parsed sections into overlapping word-budgeted chunks.
 
@@ -690,43 +741,14 @@ def chunk_texts(sections: list[dict], chunk_size: int = 300, overlap: int = 50) 
     chunks = []
     for section in sections:
         section_text = scrub_lone_surrogates(section["text"])
-        words = section_text.split()
-        if len(words) <= chunk_size:
+        if len(section_text.split()) <= chunk_size:
             chunks.append({**section, "text": section_text})
             continue
-        # Line-aware chunker. Take whole lines only; each chunk fills to
-        # roughly `chunk_size` words. Single lines longer than `chunk_size`
-        # are taken atomically (rare on real documents; better one oversize
-        # chunk than a mangled table row).
-        lines = section_text.split("\n")
-        line_wc = [len(l.split()) for l in lines]
-        n = len(lines)
-        i = 0
-        part = 0
-        while i < n:
-            j = i
-            budget = 0
-            while j < n and (budget == 0 or budget + line_wc[j] <= chunk_size):
-                budget += line_wc[j]
-                j += 1
-            chunk_text = "\n".join(lines[i:j]).strip()
-            if chunk_text:
-                chunks.append({
-                    "text": chunk_text,
-                    "page": section.get("page"),
-                    "source": section["source"],
-                    "part": part,
-                })
-                part += 1
-            if j >= n:
-                break
-            # Walk backward from j to build an `overlap`-word tail that
-            # becomes the next chunk's prefix. Guard: always advance at
-            # least one line so pathological inputs still terminate.
-            back = j
-            overlap_wc = 0
-            while back > i + 1 and overlap_wc < overlap:
-                back -= 1
-                overlap_wc += line_wc[back]
-            i = back
+        for part, piece in enumerate(chunk_lines(section_text, chunk_size, overlap)):
+            chunks.append({
+                "text": piece,
+                "page": section.get("page"),
+                "source": section["source"],
+                "part": part,
+            })
     return chunks

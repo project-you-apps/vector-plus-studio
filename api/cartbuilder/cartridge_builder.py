@@ -172,20 +172,17 @@ def chunk_text(text: str, chunk_size: int = 300, overlap: int = 50) -> list[str]
         passages = [p.strip() for p in text.split("---PASSAGE_BREAK---")]
         return [p for p in passages if p]
 
-    words = text.split()
-    if len(words) <= chunk_size:
+    # ⚠ WAS `" ".join(text.split())`, WHICH FLATTENED EVERY NEWLINE. This is the path
+    # `build_office.py` uses, which is why the redwood demo carts arrived as a wall of text --
+    # 1709 of 1712 passages with zero newlines. Markdown is line-based, so the modal's
+    # react-markdown had nothing left to render and showed `#` and `|` as inline punctuation.
+    # The line-aware implementation already existed in `parsers.chunk_lines`; it had simply
+    # never been applied here or in `forge.py`. Three copies, one correct. See that function.
+    from .parsers import chunk_lines
+
+    if len(text.split()) <= chunk_size:
         return [text.strip()]
-
-    chunks = []
-    start = 0
-    while start < len(words):
-        end = start + chunk_size
-        chunk = " ".join(words[start:end])
-        if chunk.strip():
-            chunks.append(chunk.strip())
-        start += chunk_size - overlap
-
-    return chunks
+    return chunk_lines(text, chunk_size=chunk_size, overlap=overlap)
 
 
 # ============================================================

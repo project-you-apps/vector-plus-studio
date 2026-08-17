@@ -41,20 +41,18 @@ def extract_text_from_file(filename: str, content: bytes) -> str | None:
 
 
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]:
-    """Split text into overlapping chunks by word count."""
-    words = text.split()
-    if len(words) <= chunk_size:
-        return [text]
+    """Split text into overlapping chunks, keeping line structure intact.
 
-    chunks = []
-    start = 0
-    while start < len(words):
-        end = start + chunk_size
-        chunk = " ".join(words[start:end])
-        if chunk.strip():
-            chunks.append(chunk)
-        start = end - overlap
-    return chunks
+    ⚠ The third copy of this logic, and the second one that flattened newlines with
+    `" ".join(text.split())`. Delegates to `parsers.chunk_lines` so a cart's formatting no
+    longer depends on which builder happened to produce it. Keeps forge's larger 500-word
+    default, which is a deliberate difference, not drift.
+    """
+    from .cartbuilder.parsers import chunk_lines
+
+    if len(text.split()) <= chunk_size:
+        return [text]
+    return chunk_lines(text, chunk_size=chunk_size, overlap=overlap)
 
 
 def forge_cartridge(name: str, files: list[tuple[str, bytes]],
