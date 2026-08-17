@@ -13,9 +13,24 @@
 -- SAFE TO RUN TWICE. Both statements are ON CONFLICT DO NOTHING and neither touches a
 -- redwood-* row. Nothing here revokes, updates or deletes anything.
 --
--- ⚠ RUN THIS *AFTER* copying the four .cart.npz files to the droplet. A registered cart whose
--- file is missing is a cart the UI offers and the mount gate then refuses -- the confusing
--- direction. Cart files first, rows second.
+-- ⚠ ROWS FIRST, THEN THE FILES. This is the opposite of what it first seemed.
+--
+-- An UNREGISTERED cart is visible to everyone, including signed-out callers -- that is the
+-- legacy fall-through in `cart_access.decide` ("legacy carts readable by anyone"). So dropping
+-- the reddwood files into the cartridge directory before these rows exist would leave them
+-- publicly listed AND mountable, carrying the same content their redwood twins restrict.
+--
+-- Registering first fails the safe way instead: the carts are owned and granted, so anonymous
+-- cannot see them at all, and the only symptom is that a granted user clicking one gets a
+-- refusal until the files land.
+--
+-- The files are therefore parked OUTSIDE the cartridge dir at
+-- /opt/vector-plus-studio/_staging-reddwood (2026-08-17), where nginx and `list_cartridges`
+-- cannot reach them. After running this, move them in -- no restart needed, the cart list
+-- rescans the directory on every request:
+--
+--   mv /opt/vector-plus-studio/_staging-reddwood/* /opt/vector-plus-studio/cartridges/
+--   rmdir /opt/vector-plus-studio/_staging-reddwood
 --
 -- Context: 2026-08-17. reddwood-* are the same 300 source files per cart as redwood-*, rebuilt
 -- with the line-aware chunker so passages keep their markdown. Measured retrieval cost of that
