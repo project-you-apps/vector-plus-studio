@@ -492,7 +492,7 @@ except Exception as _membox_err:
     traceback.print_exc()
 from . import cart_context
 from . import request_cart
-from .request_cart import bind_caller_cart
+from .request_cart import bind_caller_cart, bind_caller_cart_if_pooled
 from .cartridge_io import (
     list_cartridges as _list_cartridges, load_cartridge, load_signatures,
     find_cartridge_path, find_companion_file, validate_brain_manifest, name_candidates,
@@ -650,7 +650,7 @@ async def health():
 @app.get("/api/status", response_model=StatusResponse)
 async def get_status(request: Request,
                      user: dict | None = Depends(get_current_user),
-                     _bind=Depends(bind_caller_cart)):
+                     _bind=Depends(bind_caller_cart_if_pooled)):
     """Server state for the UI's 2s poll. PUBLIC BY NECESSITY, so it is need-to-know.
 
     App.tsx polls this unconditionally on mount, before auth is consulted — `engine_ready`

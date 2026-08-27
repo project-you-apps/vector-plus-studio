@@ -42,7 +42,7 @@ from .auth import get_current_user
 from .cart_pool import CartState, pool
 
 __all__ = ["CART_HEADER", "SESSION_HEADER", "requested_cart", "view_key", "access_seat",
-           "bound_cart", "bind_caller_cart", "set_loader"]
+           "bound_cart", "bind_caller_cart", "bind_caller_cart_if_pooled", "set_loader"]
 
 # The function that turns a cart id into CartFields. Injected by main.py at import time
 # rather than imported from it, because main imports uploads/agents/reports -- so a route
@@ -96,6 +96,49 @@ async def bind_caller_cart(request: Request,
             "error": "cart_not_found",
             "message": "That cart is not available on this server.",
         }) from e
+
+async def bind_caller_cart_if_pooled(request: Request,
+                                     user: dict | None = Depends(get_current_user)):
+    """Like `bind_caller_cart`, but NEVER loads a cart. For polling routes only.
+
+    ⚠ USE THIS ONLY WHERE NOT-LOADED IS AN ACCEPTABLE ANSWER. `/api/status` is the case it
+    was written for: it runs every 2-10 seconds, and with the loading dependency a cold cart
+    meant every queued poll started its own load. Measured 2026-08-27 on `wiki_nomic_25k`:
+    2.1 minutes, ~25 polls blocked, released together.
+
+    Binding nothing is not a degraded answer here. The explicit mount route PUBLISHES its
+    loaded cart into the pool, so after a real mount this finds it and reports normally. The
+    only case that yields None is a cart this server never opened -- which status has nothing
+    to say about anyway.
+
+    ⚠ NOT A SUBSTITUTE FOR `bind_caller_cart` on a route that reads cart DATA: it would
+    silently serve the process-wide cart instead of the caller's. Access is still resolved by
+    `cart_guard`, which is unaffected by which of these bound.
+    """
+    if _loader is None:                                     # pragma: no cover - import order
+        raise RuntimeError("request_cart.set_loader() was never called")
+
+    cart_id = requested_cart(request)
+    viewer = view_key(request, user)
+    remember_display_name(viewer, display_name_for(user))
+    touch_presence(cart_id, presence_key(request), display_name_for(user))
+
+    if not cart_id:
+        yield None
+        return
+
+    # `pool.peek` — NOT `acquire`, NOT `get`. It was written for exactly this ("For status
+    # and admin views") and then status was wired to the loading path anyway. It takes no
+    # holder and does not touch `last_access`, both deliberate: a poll must not pin a cart,
+    # and an anonymous caller must not be able to hold a private cart open forever by
+    # resetting its idle timer. Nothing to release, because nothing was acquired.
+    state = pool.peek(cart_id)
+    if state is None or not isinstance(state.payload, cart_context.CartFields):
+        yield None
+        return
+    with cart_context.use_cart(state.payload):
+        yield state
+
 
 # The caller names its cart here, or as ?cart= for links we want to be pasteable.
 CART_HEADER = "x-vps-cart"
