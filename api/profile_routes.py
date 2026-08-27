@@ -232,6 +232,18 @@ async def upsert_grant(request: Request, body: GrantRequest,
         log.warning("grant failed on %s by %s: %s", cart_id, seat, e)
         raise HTTPException(status_code=403,
                             detail="not permitted to grant access on this cart")
+
+    # ⚠ WITHOUT THIS THE GRANT DOES NOT TAKE EFFECT FOR UP TO CACHE_TTL_SECONDS.
+    # `cart_guard` caches decisions per (seat, cart) and its docstring names this call as the
+    # thing that makes that trade safe -- but it had NO CALLERS until 2026-08-27. So a
+    # promotion or revocation silently lagged, which is a security bug in the revoke
+    # direction and a demo-breaking one in the grant direction ("try it again" -- and it
+    # still says no).
+    # Imported HERE, not at module scope: `cart_guard` imports THIS module (inside a
+    # function, for the same reason). Keeping both lazy leaves the cycle unformed at
+    # import time rather than relying on which module loads first.
+    from . import cart_guard
+    cart_guard.invalidate(body.grantee_id)
     return GrantResponse(cart_id=cart_id, grantee_id=body.grantee_id, access_level=level)
 
 
@@ -254,4 +266,13 @@ async def revoke_grant(request: Request, cart_id: str = PathParam(...),
         log.warning("revoke failed on %s by %s: %s", cart_id, seat_id(user), e)
         raise HTTPException(status_code=403,
                             detail="not permitted to revoke access on this cart")
+
+    # Revocation is the direction where the stale cache is a SECURITY bug, not a nuisance:
+    # without this, someone whose access was just pulled keeps reading for up to
+    # CACHE_TTL_SECONDS. See the note in upsert_grant.
+    # Imported HERE, not at module scope: `cart_guard` imports THIS module (inside a
+    # function, for the same reason). Keeping both lazy leaves the cycle unformed at
+    # import time rather than relying on which module loads first.
+    from . import cart_guard
+    cart_guard.invalidate(grantee_id)
     return {"cart_id": cart_id, "grantee_id": grantee_id, "revoked": True}

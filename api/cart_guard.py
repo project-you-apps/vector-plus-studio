@@ -54,7 +54,20 @@ from .engine import engine
 
 log = logging.getLogger(__name__)
 
-CACHE_TTL_SECONDS = 30.0
+# ⚠ RAISED 30s -> 300s ON 2026-08-27, AND ONLY BECAUSE `invalidate()` FINALLY HAS CALLERS.
+# The docstring above always described the trade correctly -- cache decisions, clear them on
+# write -- but `invalidate()` had NO callers until today, so the TTL was the only thing
+# bounding a stale grant. Raising it then would have been a straight security regression.
+# With `upsert_grant` and `revoke_grant` clearing the grantee's entries, a change now takes
+# effect immediately and the TTL only bounds the case nothing told us about.
+#
+# 30s was ALSO too short to work as a cache: a cold cart-list request took 33 seconds, so its
+# earliest entries expired before its last ones were written and it could never fully warm.
+# A TTL shorter than the request it accelerates is not a cache.
+#
+# ⚠ PER-PROCESS. `invalidate()` clears the worker that handled the write. One worker today;
+# check before adding more, because the second worker would keep serving the old answer.
+CACHE_TTL_SECONDS = 300.0
 
 # (seat_or_None, cart_basename) -> (expires_at, MountDecision)
 _cache: dict[tuple[Optional[str], str], tuple[float, cart_access.MountDecision]] = {}
@@ -230,6 +243,7 @@ def resolve_named(request: Request, user: object,
     candidates = cartridge_io.name_candidates(cart_name)
 
     last = None
+    client = None                   # built at most ONCE per call, on the first cache miss
     for cand in candidates:
         key = (seat, cand)
         now = time.monotonic()
@@ -239,7 +253,12 @@ def resolve_named(request: Request, user: object,
         else:
             try:
                 from . import profile_routes
-                client = profile_routes._supabase(profile_routes._token(request))
+                # ⚠ HOISTED OUT OF THE LOOP. This was `profile_routes._supabase(...)` inline,
+                # so a fresh client was constructed per CANDIDATE per CART -- ~70 of them for
+                # one cart-list request. Building it lazily keeps the fully-cached path from
+                # constructing one at all.
+                if client is None:
+                    client = profile_routes._supabase(profile_routes._token(request))
                 last = cart_access.lookup(client, cand, seat)
             except Exception as e:                          # noqa: BLE001
                 log.warning("cart access lookup failed: %s: %s", type(e).__name__, e)

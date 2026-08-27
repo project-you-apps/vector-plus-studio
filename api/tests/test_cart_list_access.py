@@ -45,7 +45,17 @@ def test_a_refused_cart_is_not_named(monkeypatch):
     monkeypatch.setattr(main, "_list_cartridges", lambda: listed)
 
     def _decide(request, user, name):
-        if name == "redwood-finance":          # registered, no grant for this caller
+        # ⚠ KEYED ON THE FILENAME. The route passes `c["filename"]`, not `c["name"]`, since
+        # 2026-08-27: `resolve_named` expands a bare name through `name_candidates()` into up
+        # to four separate Supabase RPCs, and `user_carts` stores the FILENAME -- so the bare
+        # name could never match and every unregistered cart cost four round-trips. Measured
+        # 33s for 22 carts, >120s under a concurrent poller.
+        #
+        # This stub keyed on the bare name and so silently took the "unregistered legacy
+        # cart" branch, i.e. the ALLOW branch, after the route was fixed. A stub that does
+        # not speak the caller's vocabulary fails open, which is the wrong direction for a
+        # test whose whole job is proving a refused cart stays hidden.
+        if name == "redwood-finance.cart.npz":  # registered, no grant for this caller
             return cart_access.decide(registered=True, owner_id="someone-else",
                                       grant_level=None, seat=None)
         return cart_access.decide(registered=False, owner_id=None,   # legacy demo cart

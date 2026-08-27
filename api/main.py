@@ -1165,7 +1165,23 @@ async def get_cartridges(request: Request, user: dict | None = Depends(get_curre
     dropped: list = []
     for c in carts:
         try:
-            decision = cart_guard.resolve_named(request, user, c["name"])
+            # ⚠ THE FILENAME, NOT THE BARE NAME. `resolve_named` takes a bare name and calls
+            # `name_candidates()`, which tries `foo`, `foo.cart.npz`, `foo.pkl`, `foo.npz` in
+            # turn -- each one a SEPARATE Supabase RPC, stopping only at a registered match.
+            # So an unregistered cart cost four round-trips, and this loop cost ~70 for 22
+            # carts. Measured 2026-08-27: 33s cold, and over 120s once a browser was polling
+            # concurrently, because each request holds a worker for the whole storm.
+            #
+            # We ALREADY KNOW the on-disk spelling -- `_list_cartridges` returns it as
+            # `filename` right beside the name we were throwing away. `name_candidates`
+            # returns a name carrying a known suffix as-is, so passing the filename collapses
+            # four RPCs to one WITHOUT changing which name is checked.
+            #
+            # ⚠ The name CHECKED must stay the name LOADED. `load_cart_fields` resolves
+            # through the same `name_candidates`, and a filename resolves to itself, so both
+            # still land on the same cart. That invariant is what `name_candidates` exists to
+            # protect -- do not "simplify" this to a different string.
+            decision = cart_guard.resolve_named(request, user, c["filename"])
         except Exception as e:                                  # noqa: BLE001
             print(f"[VPS] cart list: access check RAISED for {c['name']!r}: "
                   f"{type(e).__name__}: {e}")
@@ -1226,8 +1242,18 @@ async def get_cartridges(request: Request, user: dict | None = Depends(get_curre
         # did not answer" were the same observation from the outside. One line per request
         # naming the reason is what turns the next report of this into a diagnosis instead
         # of a hypothesis.
+        #
+        # ⚠ BUT NOT THE NAMES. This line used to print the very cart names it had just
+        # decided the caller may not see (Andy, 2026-08-26: "if the server console displays
+        # the names of the files that are hidden from a user then they're not really
+        # hidden, are they?"). A console is a log, a log gets pasted into bug reports and
+        # shipped to whoever hosts it, and cart names are customer data -- `redwood-finance`
+        # leaks that Redwood exists and has a finance cart before any grant is checked. The
+        # COUNT is the diagnostic; it distinguishes all three failures above equally well.
+        # Set VPS_LOG_CART_NAMES=1 to get the names back on a machine where that is safe.
+        detail = f": {', '.join(dropped)}" if os.environ.get("VPS_LOG_CART_NAMES") else ""
         print(f"[VPS] cart list: hid {len(dropped)} of {len(carts)} from "
-              f"seat={cart_guard._seat_from_token(user) or 'anonymous'}: {', '.join(dropped)}")
+              f"seat={cart_guard._seat_from_token(user) or 'anonymous'}{detail}")
 
     return CartridgeListResponse(cartridges=items)
 
