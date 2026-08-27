@@ -1848,6 +1848,53 @@ def _sqlite_fetch_passages(conn: sqlite3.Connection, indices: list) -> dict:
     return {r[0]: {"passage": r[1], "title": r[2], "paper_id": r[3]} for r in rows}
 
 
+def _note_companion_brain(brain_path: str, cart_name: str, emb,
+                          message_parts: list, *, validate: bool = True) -> bool:
+    """Record that this cart HAS a brain. **Does not load it.**
+
+    THE ONE PLACE THAT DECIDES A CART HAS PHYSICS. There were five copies of this, and the
+    version here on 2026-08-26 loaded the brain eagerly, which broke the application:
+
+    > Mounting `wiki_nomic_25k` took **2.1 minutes** with every other request frozen behind
+    > it. `pool.acquire` deliberately runs its loader OUTSIDE the pool lock ("a wasted load,
+    > not a correctness problem") -- true when a load meant numpy into RAM, false once the
+    > loader touched `engine.ml`. Roughly 25 queued `/api/status` polls each ran the loader,
+    > each pulling a 134 MB brain and a 365 MB signatures file, serialised on `engine.lock`.
+
+    So the split, which `physics_trained` vs `physics_resident` already implied and this now
+    honours:
+
+    - **HAS a brain** -- a 69-byte manifest read plus a fingerprint of embeddings already in
+      RAM. Free. Decided here, at mount.
+    - **Brain IS in the GPU** -- 134 MB. `engine.ensure_brain_resident()`, deferred to
+      whoever actually needs the shared lattice.
+
+    **Associate never needs it** (`_associate_search_two_sided` builds its own lattice and
+    loads the brain by path), and Associate is the mode a mount is usually a prelude to. Only
+    Smart mode, saving, and incremental training touch `engine.ml`.
+
+    `validate=False` is for the brain-only mount path, which checked the manifest itself and
+    has no embeddings array to check against.
+
+    Returns True if this cart has a usable brain.
+    """
+    if not engine.gpu_available or engine.ml is None or not os.path.exists(brain_path):
+        return False
+
+    if validate:
+        valid, msg = validate_brain_manifest(brain_path, emb)
+        if not valid:
+            message_parts.append(f"Brain rejected: {msg}")
+            return False
+
+    size_mb = os.path.getsize(brain_path) / (1024 * 1024)
+    engine.brain_file = brain_path
+    engine.physics_trained = True
+    resident = engine.brain_loaded_for == cart_name
+    message_parts.append(f"Brain: {size_mb:.1f}MB" + (" (resident)" if resident else " (on demand)"))
+    return True
+
+
 def _mount_membot_npz(full_path: str, cart_name: str) -> MountResponse:
     """Mount a membot-format .cart.npz (embeddings + passages, like a PKL).
 
@@ -1932,19 +1979,53 @@ def _mount_membot_npz(full_path: str, cart_name: str) -> MountResponse:
     ]
     for sig_path in sig_candidates:
         if os.path.exists(sig_path):
-            sig_data = load_signatures(sig_path)
+            # lazy=True: the big array stays on disk. See load_signatures' docstring --
+            # 6.10 GB for wiki_nomic_25k, 8.1s of a 13s mount, for a mode almost no session
+            # uses. `engine.ensure_signatures_loaded()` reads it when Pure Brain asks.
+            sig_data = load_signatures(sig_path, lazy=True)
             if sig_data and sig_data['n_patterns'] == len(emb):
-                engine.signatures = sig_data['signatures']
+                engine.signatures = sig_data['signatures']     # None under lazy
+                engine.signatures_file = sig_path
                 engine.signatures_loaded = True
-                message_parts.append("Sigs loaded")
+                # ⚠ THE SAME OMISSION AS THE BRAIN, IN THE SAME FUNCTION. The .pkl path has
+                # read these from the signature file since forever; this one never did, so
+                # `compressed_lens` stayed [] for every .cart.npz cart -- and Smart mode
+                # tests `len(compressed_lens) > 0`, so it has silently answered
+                # "Cosine (no compressed lens)" on npz carts since the cart unification
+                # (2026-05-30, the same day Associate broke, for the same reason).
+                # Both keys are small and already read by the lazy load; only the 6 GB
+                # `signatures` array is deferred.
+                if sig_data.get('compressed_lens') is not None:
+                    engine.compressed_lens = list(sig_data['compressed_lens'])
+                if sig_data.get('compressed_texts') is not None:
+                    engine.compressed_texts = sig_data['compressed_texts']
+                message_parts.append("Sigs available")
                 break
+
+    # ── Companion brain ────────────────────────────────────────────────
+    # A .cart.npz carries no brain inside it, but a legacy `<name>_brain.npy`
+    # sitting next to it is still perfectly valid — `find_companion_file` and
+    # `associate_search` both resolve it by NAME, independent of cart format.
+    #
+    # The signature lookup directly above was carried over from
+    # `_mount_pkl_by_path` at the cart unification (2026-05-30). This one was
+    # not, and `physics_trained` was left hardcoded False — which silently
+    # disabled Associate mode for every npz cart with a brain beside it.
+    # `wiki_nomic_25k.cart.npz` and `wiki_nomic_25k_brain.npy` have been in the
+    # same directory since May 30 (2026-08-26).
+    #
+    # Mirrors the .pkl path exactly, INCLUDING validate_brain_manifest: the npz
+    # may have been rebuilt after the brain was trained, and a stale brain must
+    # be reported rather than silently enabling a broken mode.
+    brain_path = os.path.join(cart_dir, f"{cart_name}_brain.npy")
+    brain_loaded = _note_companion_brain(brain_path, cart_name, emb, message_parts)
 
     return MountResponse(
         success=True,
         name=cart_name,
         pattern_count=len(txt),
         multimodal=False,
-        brain_loaded=False,
+        brain_loaded=brain_loaded,
         signatures_loaded=engine.signatures_loaded,
         message=" | ".join(message_parts),
     )
@@ -1981,28 +2062,24 @@ def _mount_pkl_by_path(full_path: str, cart_name: str) -> MountResponse:
     sigs_loaded = False
     message_parts = [f"{len(txt)} patterns", *_mount_origin(cart_dir)]
 
-    if engine.gpu_available and os.path.exists(brain_path):
-        valid, msg = validate_brain_manifest(brain_path, emb)
-        if valid:
-            with engine.lock:
-                engine.ml.load_brain(brain_path)
-            engine.physics_trained = True
-            brain_loaded = True
-            size_mb = os.path.getsize(brain_path) / (1024 * 1024)
-            message_parts.append(f"Brain: {size_mb:.1f}MB")
-            engine.training_progress = len(emb)
-            engine.training_total = len(emb)
+    if _note_companion_brain(brain_path, cart_name, emb, message_parts):
+        brain_loaded = True
+        engine.training_progress = len(emb)
+        engine.training_total = len(emb)
 
-            if os.path.exists(sig_path):
-                sig_data = load_signatures(sig_path)
-                if sig_data and sig_data['n_patterns'] == len(emb):
-                    engine.signatures = sig_data['signatures']
-                    engine.signatures_loaded = True
-                    sigs_loaded = True
-                    if sig_data.get('compressed_lens') is not None:
-                        engine.compressed_lens = list(sig_data['compressed_lens'])
-                    if sig_data.get('compressed_texts') is not None:
-                        engine.compressed_texts = sig_data['compressed_texts']
+        if os.path.exists(sig_path):
+            # lazy=True -- the small keys below are what the mount needs; the 6 GB array
+            # is deferred to `engine.ensure_signatures_loaded()`.
+            sig_data = load_signatures(sig_path, lazy=True)
+            if sig_data and sig_data['n_patterns'] == len(emb):
+                engine.signatures = sig_data['signatures']     # None under lazy
+                engine.signatures_file = sig_path
+                engine.signatures_loaded = True
+                sigs_loaded = True
+                if sig_data.get('compressed_lens') is not None:
+                    engine.compressed_lens = list(sig_data['compressed_lens'])
+                if sig_data.get('compressed_texts') is not None:
+                    engine.compressed_texts = sig_data['compressed_texts']
 
     return MountResponse(
         success=True,
@@ -2081,14 +2158,13 @@ def _mount_brain_by_path(picked_path: str, cart_name: str) -> MountResponse:
     brain_loaded = False
     message_parts = [f"{n_patterns} patterns", *_mount_origin(cart_dir)]
 
-    if has_brain and engine.gpu_available:
-        with engine.lock:
-            engine.ml.load_brain(brain_path)
-        engine.physics_trained = True
-        brain_loaded = True
-        size_mb = os.path.getsize(brain_path) / (1024 * 1024)
-        message_parts.append(f"Brain: {size_mb:.1f}MB")
-    else:
+    if has_brain:
+        # validate=False: the brain-only path has no embeddings array to check the
+        # manifest against -- its `embeddings` are zeros, allocated for shape alone.
+        brain_loaded = _note_companion_brain(
+            brain_path, cart_name, None, message_parts, validate=False)
+
+    if not brain_loaded:
         engine.physics_trained = False
         message_parts.append("Signatures only (no brain)")
 
@@ -2152,9 +2228,9 @@ def _mount_brain_only(cart_name: str) -> MountResponse:
     engine.brain_only_mode = True
     engine.deleted_ids = set()
 
-    # Load brain weights
-    with engine.lock:
-        engine.ml.load_brain(brain_path)
+    # Load brain weights (no-op when this cart's brain is already resident)
+    _brain_msg: list = []
+    _note_companion_brain(brain_path, cart_name, None, _brain_msg, validate=False)
 
     size_mb = os.path.getsize(brain_path) / (1024 * 1024)
     engine.training_progress = n_patterns
@@ -2201,31 +2277,27 @@ def _mount_pkl(filename: str, cart_name: str) -> MountResponse:
 
     # Try loading brain
     brain_path = find_companion_file(cart_name, "_brain.npy")
-    if brain_path and engine.gpu_available:
-        valid, msg = validate_brain_manifest(brain_path, emb)
-        if valid:
-            with engine.lock:
-                engine.ml.load_brain(brain_path)
-            engine.physics_trained = True
-            brain_loaded = True
-            size_mb = os.path.getsize(brain_path) / (1024 * 1024)
-            message_parts.append(f"Brain: {size_mb:.1f}MB")
-            engine.training_progress = len(emb)
-            engine.training_total = len(emb)
+    if brain_path and _note_companion_brain(brain_path, cart_name, emb, message_parts):
+        brain_loaded = True
+        engine.training_progress = len(emb)
+        engine.training_total = len(emb)
 
-            # Load signatures
-            sig_path = find_companion_file(cart_name, "_signatures.npz")
-            if sig_path:
-                sig_data = load_signatures(sig_path)
-                if sig_data and sig_data['n_patterns'] == len(emb):
-                    engine.signatures = sig_data['signatures']
-                    engine.signatures_loaded = True
-                    sigs_loaded = True
-                    if sig_data.get('compressed_lens') is not None:
-                        engine.compressed_lens = list(sig_data['compressed_lens'])
-                    if sig_data.get('compressed_texts') is not None:
-                        engine.compressed_texts = sig_data['compressed_texts']
-                    message_parts.append("Sigs loaded")
+        # Load signatures
+        sig_path = find_companion_file(cart_name, "_signatures.npz")
+        if sig_path:
+            # lazy=True -- the small keys below are what the mount needs; the 6 GB array
+            # is deferred to `engine.ensure_signatures_loaded()`.
+            sig_data = load_signatures(sig_path, lazy=True)
+            if sig_data and sig_data['n_patterns'] == len(emb):
+                engine.signatures = sig_data['signatures']     # None under lazy
+                engine.signatures_file = sig_path
+                engine.signatures_loaded = True
+                sigs_loaded = True
+                if sig_data.get('compressed_lens') is not None:
+                    engine.compressed_lens = list(sig_data['compressed_lens'])
+                if sig_data.get('compressed_texts') is not None:
+                    engine.compressed_texts = sig_data['compressed_texts']
+                message_parts.append("Sigs loaded")
 
     # If no brain, start background training
     if engine.gpu_available and not brain_loaded:
@@ -2268,6 +2340,10 @@ def _start_background_training(embeddings, passages, cart_name):
             compressed_lens.append(meta['compressed_len'])
 
     engine.physics_trained = True
+    # Training wrote THIS cart's patterns into the shared lattice, so it is now the
+    # resident brain even though no file was loaded. Leaving this None would make
+    # `engine.physics_resident` say no and disable Smart mode for a cart we just trained.
+    engine.brain_loaded_for = cart_name
     engine.compressed_lens = compressed_lens
 
     if len(embeddings) > INITIAL_BATCH:
@@ -2545,7 +2621,11 @@ def _save_cartridge_sync() -> MessageResponse:
                       f"{type(gen_err).__name__}: {gen_err}")
 
         # Save signatures if available
-        if engine.signatures is not None and engine.signatures_loaded:
+        # ⚠ MATERIALISE FIRST. Since 2026-08-27 a mount leaves the signatures array on
+        # disk, so `engine.signatures` is normally None. Saving on that would write a
+        # cart with NO signatures beside it -- silent data loss on a save-as, and the
+        # user's only clue would be Pure Brain quietly going missing later.
+        if engine.ensure_signatures_loaded() and engine.signatures is not None:
             sig_path = _os.path.join(DATA_DIR, f"{cart_name}_signatures.npz")
             titles = [p.splitlines()[0][:50] if p else "" for p in engine.passages]
             save_signatures(
@@ -2555,8 +2635,14 @@ def _save_cartridge_sync() -> MessageResponse:
             )
             saved_parts.append("Signatures saved")
 
-        # Save brain if trained
-        if engine.physics_trained and engine.ml:
+        # Save brain if trained.
+        # ⚠ `physics_resident`, NOT `physics_trained` — and NOT `ensure_brain_resident()`
+        # either. Since 2026-08-27 a mount records the brain without loading it, so the
+        # lattice may hold another cart's weights or none. Saving then would write the WRONG
+        # brain under this cart's name and the manifest would certify it. Loading first
+        # would be worse: it would round-trip the file we are about to overwrite with itself.
+        # If it is not resident, there is nothing this cart has changed to save.
+        if engine.physics_resident:
             brain_path = _os.path.join(DATA_DIR, f"{cart_name}_brain")
             with engine.lock:
                 engine.ml.save_brain(brain_path)
@@ -3135,6 +3221,15 @@ def _add_passage_sync(text: str) -> MessageResponse:
 
     # If GPU + training encoder: imprint, settle+learn, capture signature
     if engine.gpu_available and engine.ml and engine.training_encoder:
+        # ⚠ MUST LOAD FIRST. This LEARNS into the shared lattice, so if another cart's brain
+        # (or none) is resident, the new pattern is imprinted on top of the wrong weights and
+        # then saved as this cart's. Mounting no longer loads, so this is the first thing
+        # that has to. A cart with no brain on disk trains from whatever is there, which is
+        # the pre-existing behaviour for a never-trained cart.
+        engine.ensure_brain_resident()
+        # Whatever was resident no longer matches its file once we learn. Claim it for this
+        # cart -- the new pattern belongs to it.
+        engine.brain_loaded_for = engine.mounted_name
         # Train with TrainingEncoder (region-fill + text + hippocampus)
         with engine.lock:
             engine.ml.reset()
@@ -3156,7 +3251,9 @@ def _add_passage_sync(text: str) -> MessageResponse:
         if isinstance(engine.compressed_texts, list):
             engine.compressed_texts.append(compressed_bytes)
 
-        if engine.signatures is not None:
+        # Same reason as the save path: appending a row to an array we never read would
+        # silently drop every existing signature. Load, then append.
+        if engine.ensure_signatures_loaded() and engine.signatures is not None:
             engine.signatures = np.vstack([engine.signatures, new_sig.reshape(1, -1)])
 
     engine.training_progress = len(engine.passages)

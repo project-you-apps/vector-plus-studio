@@ -281,8 +281,9 @@ def pure_brain_search(q_emb: np.ndarray, top_k: int = 10,
     passages = engine.passages
     text_encoder = TextRegionEncoder()
 
-    if signatures is None or not engine.signatures_loaded:
+    if not engine.ensure_signatures_loaded():
         return []
+    signatures = engine.signatures                 # re-read: the line above may have set it
 
     rf_enc = engine.encoder
     if not rf_enc or not engine.mounted_name:
@@ -795,13 +796,28 @@ def search(query: str, mode: str = "smart", alpha: float = 0.7,
         kw_label = f" +kw" if keywords else ""
         mode_label = f"Cosine+Hamming 70/30{kw_label}"
 
-    elif mode == "pure_brain" and engine.signatures_loaded:
+    # `ensure_signatures_loaded()` because mounting no longer reads the 6 GB array
+    # (2026-08-27). Pure Brain is the only mode that wants it, so Pure Brain pays for it --
+    # once per cart, then it stays in that cart's CartFields.
+    elif mode == "pure_brain" and engine.ensure_signatures_loaded():
         q_emb = engine.embed_query(clean_q)
         results = pure_brain_search(q_emb, top_k, keywords)
         sig_dim = engine.signatures.shape[1] if engine.signatures is not None and len(engine.signatures.shape) > 1 else 4096
         mode_label = f"Pure Brain ({'L3' if sig_dim >= 65536 else 'L2'} signatures)"
 
-    elif mode == "smart" and engine.physics_trained and engine.gpu_available:
+    # ⚠ `ensure_brain_resident()`, NOT `physics_trained`. Smart mode runs `engine.ml` -- ONE
+    # lattice for the whole process -- against THIS cart's embeddings. `physics_trained`
+    # only says the cart has a brain somewhere; it stays True after another cart's mount
+    # overwrites the weights. Scoring against the wrong cart's physics returns plausible
+    # numbers and looks entirely healthy, which is why this asks the machine, not the cart.
+    #
+    # It LOADS rather than merely checking, because mounting no longer does (2026-08-27:
+    # eager loading froze the app for 2.1 minutes). Smart mode is the first caller that
+    # genuinely needs the shared lattice, so it pays for it -- once, then it is resident.
+    # Degrading silently to cosine here instead would repeat the exact failure that hid
+    # Associate for three months: a working-looking fallback nobody could see.
+    # Associate is not affected: it builds its own lattice (see _associate_search_two_sided).
+    elif mode == "smart" and engine.gpu_available and engine.ensure_brain_resident():
         q_emb = engine.embed_query(clean_q)
         if embeddings is not None and len(compressed_lens) > 0:
             results = protected_multimodal_search(

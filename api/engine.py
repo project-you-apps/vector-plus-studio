@@ -220,6 +220,22 @@ class EngineManager:
         self.gpu_available = False
         self.engine_ready = False
 
+        # ⚠ WHOSE WEIGHTS ARE ACTUALLY IN `self.ml` RIGHT NOW.
+        # There is ONE lattice for the whole process, but `physics_trained` is per-cart
+        # (cart_context.CartFields). Before this field nothing reconciled the two: every
+        # load_brain call site overwrote the shared weights unconditionally, so mounting a
+        # second cart replaced the first cart's brain while the first cart went on
+        # reporting physics_trained=True -- scoring its embeddings against another cart's
+        # physics, with nothing visibly wrong. Read it through `physics_resident`.
+        # None means "no brain from any cart", or "trained in place, matches no file".
+        self.brain_loaded_for: str | None = None
+
+        # Guards materialising a cart's signatures array. NOT `self.lock`: that one
+        # serialises GPU work, and a 6 GB host-RAM read has no business blocking a settle.
+        # It exists at all because two requests on one pooled cart could otherwise both
+        # decide the array was missing and load it -- 12 GB transient for a 6 GB result.
+        self.sig_lock = threading.Lock()
+
         # ================= CART STATE =================
         # `mounted_name`, `passages`, `embeddings`, `read_only`, `dirty` and the rest are NOT
         # attributes any more -- they are properties generated at the bottom of this module
@@ -250,6 +266,81 @@ class EngineManager:
             self.combined_encoder = CombinedEncoder()
             self.training_encoder = TrainingEncoder()
             self.engine_ready = True
+
+    @property
+    def physics_resident(self) -> bool:
+        """True when THIS cart's brain is the one actually loaded in the shared lattice.
+
+        `physics_trained` answers "does this cart have physics?" -- a property of the CART.
+        This answers "is that physics in the GPU right now?" -- a property of the MACHINE.
+        They agree in the single-cart case and can disagree the moment two carts with
+        brains are mounted, so any code about to run `engine.ml` against the mounted cart's
+        embeddings wants THIS one. Associate is unaffected either way: it builds its own
+        lattice and loads the brain by name (api/search.py).
+        """
+        return bool(self.physics_trained and self.ml is not None
+                    and self.brain_loaded_for == self.mounted_name)
+
+    def ensure_brain_resident(self) -> bool:
+        """Get THIS cart's brain into the shared lattice, if it is not already. Returns
+        whether the lattice now holds it.
+
+        ⚠ THE CHECK IS INSIDE THE LOCK, AND THAT IS THE WHOLE POINT. The first version of
+        this guard tested `brain_loaded_for` outside `self.lock`, which is check-then-act:
+        every concurrent caller passed the test before any of them finished, so they all
+        loaded. Measured 2026-08-27 -- mounting `wiki_nomic_25k` ran ~25 concurrent loads of
+        a 134 MB brain and took 2.1 minutes with the whole app frozen behind it. A guard
+        against REPEAT loads is not a guard against CONCURRENT ones.
+
+        Call this only when the SHARED lattice is actually needed -- Smart mode, saving a
+        brain, incremental training. **Associate does not need it**: it builds its own
+        lattice and loads the brain by path (api/search.py), which is why mounting can leave
+        this undone and stay fast.
+        """
+        if not self.physics_trained or not self.gpu_available or self.ml is None:
+            return False
+        want = self.mounted_name
+        path = self.brain_file
+        if self.brain_loaded_for == want:
+            return True
+        if not path or not os.path.exists(path):
+            return False
+        with self.lock:
+            if self.brain_loaded_for == want:       # someone loaded it while we waited
+                return True
+            self.ml.load_brain(path)
+            self.brain_loaded_for = want
+        return True
+
+    def ensure_signatures_loaded(self) -> bool:
+        """Materialise THIS cart's signatures array if it is not in RAM. Returns availability.
+
+        Mounting records `signatures_file` and reads only the small keys beside the array
+        (see `cartridge_io.load_signatures(lazy=True)`). This is where the 6.10 GB actually
+        gets read, and only Pure Brain asks for it.
+
+        ⚠ CHECK INSIDE THE LOCK, for the reason `ensure_brain_resident` documents at length:
+        a check outside it is check-then-act, and every concurrent caller passes before any
+        of them finishes. That mistake cost a 2.1-minute mount on 2026-08-27; it would cost
+        twice 6 GB here.
+        """
+        if self.signatures is not None:
+            return True
+        if not self.signatures_loaded or not self.signatures_file:
+            return False
+        with self.sig_lock:
+            if self.signatures is not None:         # loaded while we waited
+                return True
+            from .cartridge_io import load_signatures
+            sig_data = load_signatures(self.signatures_file)
+            if not sig_data or sig_data.get('signatures') is None:
+                # The file went away or is unreadable. Say so rather than leaving Pure Brain
+                # to fail as "no results", which reads as an empty cart.
+                print(f"[Signatures] deferred load FAILED for {self.signatures_file}")
+                self.signatures_loaded = False
+                return False
+            self.signatures = sig_data['signatures']
+        return True
 
     def load_embedder(self):
         """Lazy-load the SentenceTransformer embedder."""
@@ -304,6 +395,7 @@ class EngineManager:
         """Clean shutdown."""
         self.unmount()
         self.ml = None
+        self.brain_loaded_for = None
         self.engine_ready = False
 
     async def broadcast_progress(self, data: dict):

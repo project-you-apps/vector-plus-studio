@@ -440,6 +440,7 @@ def list_cartridges() -> list[dict]:
             sig_path = os.path.join(d, f"{name}.sigs.npz")
             if not os.path.exists(sig_path):
                 sig_path = os.path.join(d, f"{name}_signatures.npz")
+            npz_brain_path = os.path.join(d, f"{name}_brain.npy")
             results.append({
                 "name": name,
                 # ⚠ BASENAME, NOT THE ABSOLUTE PATH. This field is serialised straight out
@@ -459,10 +460,17 @@ def list_cartridges() -> list[dict]:
                 "filename": os.path.basename(path),
                 "path": path,
                 "size_mb": round(size_mb, 1),
-                "has_brain": False,  # .cart.npz is embeddings + passages, no brain
+                # The FORMAT carries no brain; the CART may still have one. A
+                # legacy `<name>_brain.npy` beside the npz is valid and both
+                # `find_companion_file` and `associate_search` resolve it by
+                # name. Hardcoding False here reported "no brain" for carts
+                # whose brain was in the same directory, which disabled
+                # Associate in the UI. Matches the .pkl branch above.
+                # (2026-08-26)
+                "has_brain": os.path.exists(npz_brain_path),
                 "has_signatures": os.path.exists(sig_path),
                 "has_manifest": os.path.exists(cart_manifest),
-                "brain_path": None,
+                "brain_path": npz_brain_path if os.path.exists(npz_brain_path) else None,
                 "sig_path": sig_path if os.path.exists(sig_path) else None,
             })
 
@@ -547,11 +555,41 @@ def save_cartridge_multimodal(path: str, embeddings, passages, compressed_lens):
     return True
 
 
-def load_signatures(sig_path: str) -> dict | None:
+def load_signatures(sig_path: str, *, lazy: bool = False) -> dict | None:
+    """Read a `_signatures.npz`. With `lazy=True`, everything EXCEPT the big array.
+
+    ⚠ THE `signatures` ARRAY IS THE WHOLE FILE, PRACTICALLY SPEAKING. For
+    `wiki_nomic_25k` it is 25000 x 65536 float32 = **6.10 GB in RAM**, and mounting loaded
+    it eagerly -- 8.1 seconds of a 13-second mount, to enable Pure Brain, in every session
+    including the overwhelming majority that never use it. Eight such carts in the pool
+    (max_carts=8) would be 48 GB.
+
+    `np.load` on an npz is lazy per key, so the metadata beside it -- `titles`,
+    `compressed_lens`, `compressed_texts`, `n_patterns` -- costs almost nothing and IS
+    needed at mount (compressed_lens gates Smart mode; compressed_texts recovers passage
+    text). So lazy mode returns those and leaves `signatures` as None for
+    `engine.ensure_signatures_loaded()` to materialise on first real use.
+
+    Lazy needs the `n_patterns` header key, because the eager fallback for a missing one is
+    `len(data['signatures'])` -- which would load the very thing we are avoiding. A file
+    without it falls back to an eager read rather than guessing.
+    """
     if not os.path.exists(sig_path):
         return None
     try:
         data = np.load(sig_path, allow_pickle=True)
+        if lazy and 'n_patterns' in data:
+            result = {
+                'signatures': None,
+                'titles': data['titles'] if 'titles' in data else None,
+                'n_patterns': int(data['n_patterns']),
+                'compressed_lens': data['compressed_lens'] if 'compressed_lens' in data else None,
+                'signature_method': (str(data['signature_method'])
+                                     if 'signature_method' in data else 'legacy'),
+            }
+            if 'compressed_texts' in data:
+                result['compressed_texts'] = list(data['compressed_texts'])
+            return result
         result = {
             'signatures': data['signatures'],
             'titles': data['titles'] if 'titles' in data else None,

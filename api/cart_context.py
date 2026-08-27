@@ -66,6 +66,18 @@ class CartFields:
     multimodal_mode: bool = False
     brain_only_mode: bool = False
     physics_trained: bool = False
+
+    # Path to this cart's `<name>_brain.npy`, recorded at mount WITHOUT loading it.
+    # `physics_trained` says the cart HAS a brain (a 69-byte manifest read); getting the
+    # 134 MB into the GPU is `engine.ensure_brain_resident()`, deferred until something
+    # actually needs the shared lattice. Associate never does -- it builds its own.
+    brain_file: Optional[str] = None
+
+    # Path to `<name>_signatures.npz`, recorded at mount with its BIG array left unread.
+    # `signatures_loaded` means "this cart has signatures available"; `signatures` being
+    # None means they are not in RAM yet. `engine.ensure_signatures_loaded()` closes the
+    # gap -- 6.10 GB for wiki_nomic_25k, so only when something actually reads them.
+    signatures_file: Optional[str] = None
     deleted_ids: set = field(default_factory=set)
     dirty: bool = False
     read_only: bool = True
