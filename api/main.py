@@ -508,6 +508,7 @@ from . import reports_routes
 from . import llm_routes
 from . import agents_routes
 from . import profile_routes
+from . import provenance_routes
 from . import cart_access
 from . import cart_guard
 from .auth import get_current_user
@@ -594,6 +595,21 @@ app.include_router(agents_routes.router)
 # these routes run every query as the CALLING user, so a bug here can only
 # refuse access, never widen it.
 app.include_router(profile_routes.router)
+
+# Provenance (READ ONLY) — where a passage came from and WHY it says what it says.
+# GET /api/provenance/{cart}/status | POST .../for-results | GET .../notes |
+# GET .../what-changed. Backed by membot's note_store / journal / subscriptions through
+# api/provenance_link.py, which imports them rather than copying so `content_key` has one
+# implementation; api/test_provenance_link.py asserts both trees agree, because a key that
+# drifts returns zero rows and raises nothing.
+#
+# Every route is cart-scoped in the PATH so each declares
+# Depends(cart_guard.require_named_cart_read) and needs no test_route_guards exemption —
+# provenance for a cart the caller cannot mount would be a third door past the mount gate.
+#
+# ⛔ No write routes yet, deliberately (Andy, 2026-11-01: "one thing at a time"). The MCP
+# tools in membot write; this reads.
+app.include_router(provenance_routes.router)
 
 
 # ---------------------------------------------------------------------------
