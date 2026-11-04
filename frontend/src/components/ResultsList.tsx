@@ -1,7 +1,9 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useAppStore } from '../store/appStore'
 import ResultCard from './ResultCard'
-import { Clock, Loader2, Search, Zap } from 'lucide-react'
+import { getProvenanceForResults } from '../api/client'
+import type { ForResultsResponse } from '../api/types'
+import { Clock, Loader2, Search, Zap, ShieldAlert } from 'lucide-react'
 
 const STOP_WORDS = new Set([
   'the', 'and', 'but', 'for', 'nor', 'not', 'yet', 'are', 'was', 'were',
@@ -56,6 +58,29 @@ export default function ResultsList() {
   const deletedPatterns = useAppStore((s) => s.deletedPatterns)
 
   const keywords = useMemo(() => extractKeywords(query), [query])
+
+  // ── Provenance for this page of hits ──────────────────────────────────────
+  // ⭐ Fetched HERE, once per result set, rather than per card. `for_results` was built to
+  // answer a batch in one round trip precisely so provenance can ride back WITH the
+  // results instead of needing its own channel — DESIGN-WAL section 8 rejected the
+  // dashboard shape because "a log nobody reads" is what a separate screen becomes.
+  const [prov, setProv] = useState<ForResultsResponse | null>(null)
+  const cartName = status?.mounted_cartridge ?? activeLocalCart ?? null
+
+  useEffect(() => {
+    // ⛔ KEYS, NEVER TEXT. The server computed content_key from the engine's authoritative
+    //    passage; deriving one here from anything we rendered would match nothing and fail
+    //    silently. Results without a key are simply skipped by the client.
+    const keys = results.map((r) => r.content_key).filter(Boolean)
+    if (!cartName || keys.length === 0) { setProv(null); return }
+
+    let cancelled = false
+    getProvenanceForResults(cartName, keys).then((res) => {
+      // Guard against a stale response from a previous query landing after a newer one.
+      if (!cancelled) setProv(res)
+    })
+    return () => { cancelled = true }
+  }, [cartName, results])
   // live tombstone filter: when a user edits a passage in
   // Edit Carts, the old idx gets tombstoned but any results array computed
   // before the edit still carries it. Filter tombstoned idx out at render
@@ -180,10 +205,33 @@ export default function ResultsList() {
         <span className="px-2 py-0.5 rounded bg-slate-800/60 text-xs">{searchModeLabel}</span>
       </div>
 
+      {/* ⛔ Integrity banner. A broken hash chain means the journal may have been edited,
+          so the routes WITHHOLD entries rather than serve them. Saying so loudly is the
+          whole point: rows presented without this warning would be read as a record. */}
+      {prov?.integrity && !prov.integrity.ok && prov.integrity.entries > 0 && (
+        <div className="mb-3 flex items-start gap-2 rounded border border-amber-700/50 bg-amber-950/30 px-3 py-2 text-xs text-amber-200">
+          <ShieldAlert size={14} className="mt-0.5 shrink-0" />
+          <div>
+            <span className="font-semibold">Provenance record failed verification.</span>{' '}
+            History entries are withheld for this cart; the explanations below are still
+            shown, because a note is a person's statement rather than a claim about an
+            unaltered history.
+            <div className="mt-0.5 font-mono text-[10px] text-amber-300/80">
+              {prov.integrity.verdict_line}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Results */}
       <div className="space-y-3">
         {filteredResults.map((r) => (
-          <ResultCard key={`${r.idx}-${r.rank}`} result={r} />
+          <ResultCard
+            key={`${r.idx}-${r.rank}`}
+            result={r}
+            provenance={r.content_key ? prov?.by_key?.[r.content_key] : undefined}
+            entriesWithheld={prov?.entries_withheld ?? false}
+          />
         ))}
       </div>
 

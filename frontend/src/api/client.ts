@@ -3,6 +3,7 @@ import type {
   SearchMode, PatternResponse, Pattern0Response, PerPatternMetaResponse,
   MemboxCartInfo, MemboxStatus, MemboxImprintRequest, MemboxMountRequest,
   CartPermissions,
+  ForResultsResponse,
 } from './types'
 import { useAuthStore } from '../store/authStore'
 import { supabase } from '../lib/supabase'
@@ -732,4 +733,39 @@ export async function forgeCartridge(name: string, files: File[]) {
   })
   if (!res.ok) throw new Error(`Forge failed: ${res.status}`)
   return res.json() as Promise<{ success: boolean; message: string }>
+}
+
+// ── Provenance (read-only) ─────────────────────────────────────────────────
+
+/**
+ * Provenance + "why" notes for a page of search hits, keyed by content.
+ *
+ * ⭐ WHY THIS TAKES KEYS AND NOT TEXT. `SearchResult.content_key` is computed server-side
+ * from the engine's authoritative passage. Handing those straight back means this layer
+ * never derives a key from anything it rendered — and a key over a shortened body matches
+ * nothing, returns zero rows, and RAISES NOTHING. An empty panel is indistinguishable from
+ * "this passage has no notes", which is why the failure has caught people twice.
+ *
+ * ⚠ Results missing `content_key` are skipped rather than sent as text: the server is
+ * telling us the provenance layer could not key that passage, and guessing on its behalf
+ * is how a wrong key gets invented.
+ *
+ * Never throws. Provenance is an enrichment; a search must still render without it.
+ */
+export async function getProvenanceForResults(
+  cartName: string,
+  keys: (string | null | undefined)[],
+): Promise<ForResultsResponse | null> {
+  const clean = keys.filter((k): k is string => typeof k === 'string' && k.length > 0)
+  if (!cartName || clean.length === 0) return null
+  try {
+    return await fetchJSON<ForResultsResponse>(
+      `/provenance/${encodeURIComponent(cartName)}/for-results`,
+      { method: 'POST', body: JSON.stringify({ keys: clean }) },
+    )
+  } catch {
+    // Swallowed deliberately. The caller renders results with no provenance line, which
+    // is the same thing it does for a cart that has no journal at all.
+    return null
+  }
 }

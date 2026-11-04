@@ -98,6 +98,44 @@ def test_for_results_returns_provenance_and_the_why(seeded, client):
     assert body["entries_withheld"] is False
 
 
+def test_keys_path_returns_the_same_rows_as_the_text_path(seeded, client):
+    """⭐ The frontend's path. A search response carries `content_key`; handing it straight
+    back must give exactly what sending the full body gives."""
+    by_text = client.post(f"/api/provenance/{CART_NAME}/for-results",
+                          json={"passages": [PASSAGE]}).json()
+    by_key = client.post(f"/api/provenance/{CART_NAME}/for-results",
+                         json={"keys": [seeded["key"]]}).json()
+
+    assert by_key["keys"] == by_text["keys"] == [seeded["key"]]
+    assert by_key["by_key"][seeded["key"]]["notes"], "keys path returned no notes"
+    assert (len(by_key["by_key"][seeded["key"]]["provenance"])
+            == len(by_text["by_key"][seeded["key"]]["provenance"]))
+
+
+def test_a_preview_derived_key_still_finds_nothing(seeded, client):
+    """⛔⛔ THE CONTROL FOR THE WHOLE DESIGN. The reason the server sends the key is that a
+    key over a SHORTENED body matches nothing and raises nothing. If this ever starts
+    passing, truncation stopped mattering and the design can be revisited -- until then it
+    is the measured justification for SearchResult.content_key."""
+    preview = PASSAGE[:40]
+    assert preview != PASSAGE
+    res = client.post(f"/api/provenance/{CART_NAME}/for-results",
+                      json={"passages": [preview]}).json()
+    k = res["keys"][0]
+    assert k and k != seeded["key"], "a truncated body produced the full body's key"
+    assert res["by_key"][k]["notes"] == [], "a preview-derived key matched notes"
+    assert res["by_key"][k]["provenance"] == []
+
+
+def test_keys_and_passages_together_stay_parallel(seeded, client):
+    """Both may be supplied; `keys` must stay parallel to (keys + passages) in order."""
+    res = client.post(f"/api/provenance/{CART_NAME}/for-results",
+                      json={"keys": [seeded["key"]], "passages": [OTHER]}).json()
+    assert len(res["keys"]) == 2
+    assert res["keys"][0] == seeded["key"]
+    assert res["keys"][1] and res["keys"][1] != seeded["key"]
+
+
 def test_an_unknown_passage_gets_a_key_but_no_rows(seeded, client):
     """The control for for-results. A route that returned the same payload for everything
     would pass the test above."""

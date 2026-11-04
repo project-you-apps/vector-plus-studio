@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react'
-import { ChevronDown, ChevronRight, BookOpen, Pencil, Trash2, X, Zap, Lock, Footprints, Image as ImageIcon } from 'lucide-react'
-import type { SearchResult } from '../api/types'
+import { ChevronDown, ChevronRight, BookOpen, Pencil, Trash2, X, Zap, Lock, Footprints, Image as ImageIcon, StickyNote, History } from 'lucide-react'
+import type { SearchResult, ProvenanceEntry, ProvenanceNote } from '../api/types'
 import { useAppStore } from '../store/appStore'
 
 /**
@@ -186,6 +186,32 @@ export function renderTextWithLinks(text: string, query: string): ReactNode {
 
 interface Props {
   result: SearchResult
+  /** This hit's provenance slice, keyed by content. undefined when the layer is
+   *  unavailable, the cart has no journal, or this passage carries no content_key. */
+  provenance?: { provenance: ProvenanceEntry[]; notes: ProvenanceNote[] }
+  /** True when the chain failed verification and entries were deliberately withheld.
+   *  ⚠ Distinct from "no entries": one means unknown, the other means nothing happened. */
+  entriesWithheld?: boolean
+}
+
+/** How an identity was established, in the few words a reader can act on.
+ *  ⭐ The honest label is the product: "verified" and "claimed" are different facts, and a
+ *  system that renders them identically is asserting something it does not know. */
+function identityLabel(e: ProvenanceEntry): string {
+  const src = String((e.payload as Record<string, unknown>)?.identity_source ?? '')
+  if (src === 'verified') return 'verified'
+  if (src === 'claimed') return 'claimed, not verified'
+  return 'unverified'
+}
+
+const OP_VERB: Record<string, string> = {
+  store: 'stored',
+  note: 'annotated',
+  perm_change: 'visibility changed',
+  supersede: 'superseded',
+  tombstone: 'removed',
+  corroborate: 'corroborated',
+  flag: 'flagged',
 }
 
 /**
@@ -209,7 +235,7 @@ function legacyClipboardCopy(text: string): void {
   }
 }
 
-export default function ResultCard({ result }: Props) {
+export default function ResultCard({ result, provenance, entriesWithheld }: Props) {
   const [expanded, setExpanded] = useState(false)
   // Clipboard copy feedback for the provenance source filename click. True
   // briefly after a successful copy so the inline "copied" pill renders.
@@ -350,6 +376,55 @@ export default function ResultCard({ result }: Props) {
               2026-06-15+). Quiet slate-500 caption above the title so it
               doesn't fight the title for visual attention but is always
               available for traceability. Hover to see the full path. */}
+          {/* ⭐⭐ PROVENANCE, ATTACHED TO THE RESULT ITSELF.
+              DESIGN-WAL section 8 considered a changelog window ("a log nobody reads") and
+              a rolling strip on the Hot Stack ("ambient, trains the reader to skip it") and
+              rejected both for this: the N most recent entries referencing a passage,
+              returned WITH that passage. The reader cannot skip what is attached to the
+              thing they asked for, and it answers the question that matters at that moment
+              — should I trust this passage right now — rather than "what happened lately".
+              Quiet by default; the WHY is the part that earns its space. */}
+          {provenance && (provenance.notes.length > 0 || provenance.provenance.length > 0) && (
+            <div className="mb-1 space-y-0.5">
+              {provenance.provenance.slice(0, 2).map((e) => (
+                <div key={e.hash} className="text-[10px] text-slate-500 flex items-center gap-1.5 flex-wrap">
+                  <History size={10} className="shrink-0" />
+                  <span>{OP_VERB[e.op] ?? e.op}</span>
+                  <span className="text-slate-600">by</span>
+                  <span className="font-mono text-slate-400">{e.writer}</span>
+                  {/* ⚠ The identity label is never omitted. A reader who cannot tell a
+                      verified actor from a claimed one is being told something false by
+                      the absence. */}
+                  <span className={identityLabel(e) === 'verified'
+                    ? 'text-emerald-500/80'
+                    : 'text-amber-500/80'}>
+                    ({identityLabel(e)})
+                  </span>
+                </div>
+              ))}
+              {entriesWithheld && (
+                <div className="text-[10px] text-amber-500/80 flex items-center gap-1.5">
+                  <History size={10} className="shrink-0" />
+                  <span>history withheld — the record failed verification</span>
+                </div>
+              )}
+              {provenance.notes.map((n) => (
+                <div key={n.id} className="text-[11px] text-slate-400 flex items-start gap-1.5">
+                  <StickyNote size={11} className="mt-0.5 shrink-0 text-amber-400/70" />
+                  <span>
+                    <span className="uppercase tracking-wide text-[9px] text-amber-400/70 mr-1">
+                      {n.kind}
+                    </span>
+                    {n.body}
+                    <span className="text-slate-600 ml-1.5 font-mono text-[10px]">
+                      — {n.by}{n.scope === 'private' ? ' (private)' : ''}
+                    </span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
           {(result.source_path || result.ingested_at) && (
             <div className="text-[10px] text-slate-500 font-mono truncate mb-0.5 flex items-center gap-1.5 flex-wrap" title={result.source_path ?? undefined}>
               {result.source_path && <span className="shrink-0">from</span>}

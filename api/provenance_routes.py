@@ -67,12 +67,27 @@ MAX_PASSAGES_PER_CALL = 200
 
 
 class ForResultsRequest(BaseModel):
+    """Identify the hits to look up, EITHER by key or by text.
+
+    ⭐ `keys` is the preferred path and the one the frontend uses: a search response now
+    carries `content_key` on every result (`SearchResult.content_key`, added 2026-11-04),
+    computed server-side from the engine's passage. Handing those straight back means the
+    client never touches passage text for this purpose and cannot get it wrong.
+
+    ⚠ `passages` remains for callers that have text and no key — an agent assembling its own
+    context, a script, a test. It is NOT the fallback the UI should use: the UI has keys.
+    """
+
+    keys: list[str] = Field(
+        default_factory=list,
+        description="Content keys from SearchResult.content_key, passed back verbatim. "
+                    "Preferred: the server computed them from the authoritative passage.",
+    )
     passages: list[str] = Field(
         default_factory=list,
-        description="The passage TEXTS a search returned, in any order. Keys are computed "
-                    "server-side with membot's content_key -- never send a key the client "
-                    "computed, because a client-side key that drifts would silently match "
-                    "nothing.",
+        description="FULL passage texts, for callers that have no key. ⛔ Must be the whole "
+                    "body -- a key over a preview or any shortened text matches nothing, "
+                    "returns zero rows, and raises nothing.",
     )
 
 
@@ -170,18 +185,22 @@ async def provenance_for_results(cart_name: str, payload: ForResultsRequest,
     if not link.availability()["available"]:
         return _unavailable()
 
-    if len(payload.passages) > MAX_PASSAGES_PER_CALL:
+    n_in = len(payload.keys) + len(payload.passages)
+    if n_in > MAX_PASSAGES_PER_CALL:
         raise HTTPException(
             status_code=413,
-            detail=f"{len(payload.passages)} passages; limit is {MAX_PASSAGES_PER_CALL} "
-                   f"per call. A search page is tens of hits, not hundreds.",
+            detail=f"{n_in} items; limit is {MAX_PASSAGES_PER_CALL} per call. "
+                   f"A search page is tens of hits, not hundreds.",
         )
 
     cart_path = _cart_path_or_404(cart_name)
     seat = _seat(user)
     integrity = _integrity(cart_path)
 
-    keys: list[str] = []
+    # ⭐ Keys first and verbatim — the server computed them, so there is nothing to redo.
+    # `keys` and `passages` may both be supplied; the response's `keys` list stays parallel
+    # to (keys + passages) in that order, so a caller can always map a hit to its entry.
+    keys: list[str] = [str(k or "").strip() for k in payload.keys]
     for text in payload.passages:
         try:
             keys.append(link.content_key_for(text))

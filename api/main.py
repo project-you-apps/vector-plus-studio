@@ -508,6 +508,7 @@ from . import reports_routes
 from . import llm_routes
 from . import agents_routes
 from . import profile_routes
+from . import provenance_link
 from . import provenance_routes
 from . import cart_access
 from . import cart_guard
@@ -2837,6 +2838,9 @@ async def search_endpoint(req: SearchRequest, request: Request,
         raise HTTPException(status_code=503, detail=VERIFICATION_UNAVAILABLE)
 
     from datetime import datetime, timezone
+    # Collected so a keying failure is reported once per search rather than per hit,
+    # and reported at all rather than looking like a cart with no provenance.
+    _ckey_failures: list[str] = []
     for rank, r in enumerate(results):
         idx = r['idx']
         perms = None
@@ -2869,9 +2873,28 @@ async def search_endpoint(req: SearchRequest, request: Request,
                     ingested_at = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
                 except Exception:
                     ingested_at = None
+        # ⭐ The provenance key, from the ENGINE's passage rather than anything in the
+        # response. Same authoritative source `_record_seat_attention` uses below, and for
+        # the same reason: a key over a shortened body matches nothing and says nothing.
+        #
+        # Best-effort — a cart the provenance layer cannot key is still perfectly
+        # searchable, so this must never fail a search.
+        # ⚠ BUT NOT SILENT. The first version of this swallowed every exception and set
+        #   None, which is indistinguishable from "this cart has no provenance layer" —
+        #   the exact invisible failure this whole feature exists to prevent, reintroduced
+        #   in the code that implements it. Failures are counted and logged ONCE per
+        #   search (not per hit, which would spam a page of results into the log).
+        ckey = None
+        try:
+            if 0 <= idx < len(engine.passages):
+                ckey = provenance_link.content_key_for(engine.passages[idx])
+        except Exception as e:                           # noqa: BLE001
+            ckey = None
+            _ckey_failures.append(f"idx {idx}: {type(e).__name__}: {e}")
         search_results.append(SearchResult(
             rank=rank + 1,
             idx=idx,
+            content_key=ckey,
             score=r['score'],
             cosine_score=r.get('cosine_score'),
             physics_score=r.get('physics_score'),
@@ -2889,9 +2912,22 @@ async def search_endpoint(req: SearchRequest, request: Request,
             perms=perms,
         ))
 
-    # Credit this seat for what it actually saw. Uses the FULL passage from the engine,
-    # never `preview` or the truncated `full_text` in the response — a content key computed
-    # from truncated text matches nothing in the cart, silently and permanently.
+    if _ckey_failures:
+        log.warning(
+            "content_key failed for %d of %d results; those hits carry no provenance. "
+            "First: %s", len(_ckey_failures), len(results), _ckey_failures[0])
+
+    # Credit this seat for what it actually saw. Uses the FULL passage from the engine.
+    #
+    # ⚠ CORRECTED 2026-11-04 — the rule is right, the old reason was not. This comment used
+    # to say "never the TRUNCATED full_text in the response", but `full_text` is in fact the
+    # untruncated passage (search.py:850 assigns it `passages[idx]` whole; nothing downstream
+    # shortens it). `preview` is the truncated one, capped at 200 chars.
+    # ⇒ Keeping a correct instruction attached to a false justification is worse than either
+    #   alone: the next reader checks the claim, finds it wrong, and "fixes" the rule.
+    # ⇒ The real reason to read the engine: it is the ONE source that cannot drift from what
+    #   was indexed, whatever any response field happens to contain today. Same source feeds
+    #   `content_key` onto each SearchResult above, so the client never hashes anything.
     _record_seat_attention(
         _seat_for(user),
         [engine.passages[r['idx']] for r in results

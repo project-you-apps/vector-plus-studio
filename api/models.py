@@ -91,6 +91,25 @@ class SearchResult(BaseModel):
     # so PassageModal can render "Ingested" consistently whether opened from
     # a fresh search or navigated to via Prev/Next.
     ingested_at: str | None = None
+    # ⭐⭐ THE KEY THE PROVENANCE LAYER ADDRESSES THIS PASSAGE BY, computed SERVER-SIDE
+    # from `engine.passages[idx]` — the authoritative full body.
+    #
+    # ⛔⛔ WHY THE SERVER SENDS THIS INSTEAD OF LETTING THE CLIENT HASH `full_text`.
+    # Notes and journal entries are keyed by `content_key(passage)`. A key computed from
+    # anything shorter than the full body matches nothing, returns zero rows, renders an
+    # empty panel, and RAISES NOTHING — `main.py:_credit_seat` calls it "silently,
+    # forever", and it caught us live on 2026-11-02 with a hand-typed preview fragment.
+    #
+    # ⚠ And the field is genuinely ambiguous to read: `full_text` IS the untruncated
+    # passage (search.py:850), while the comment above `_record_seat_attention` calls it
+    # "the truncated full_text in the response". Two careful readers reached opposite
+    # conclusions about the same field on 2026-11-04. ⇒ When expert readers disagree
+    # about whether a value is safe to hash, REMOVE THE QUESTION rather than document the
+    # answer. The frontend now never touches passage text for this purpose.
+    #
+    # None when the provenance layer is unavailable — which is honest, and distinct from
+    # an empty string, which would look like a key that matched nothing.
+    content_key: str | None = None
 
 class SearchResponse(BaseModel):
     query: str

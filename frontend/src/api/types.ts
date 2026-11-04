@@ -48,6 +48,66 @@ export interface SearchResult {
   // null when the cart has no hippocampus data; otherwise an object with
   // r/w/x bools and the raw byte value.
   perms?: PatternPerms | null
+  // ⭐⭐ The key the provenance layer addresses this passage by, computed SERVER-SIDE.
+  // ⛔ Pass this VERBATIM to /api/provenance/{cart}/for-results. Never derive a key from
+  //    `preview` or `full_text` on this side: a key over anything but the exact indexed
+  //    body matches nothing, returns zero rows, and raises nothing. That failure is
+  //    invisible — an empty panel looks identical to "this passage has no notes".
+  // null when the provenance layer is unavailable, which is honest and distinct from "".
+  content_key?: string | null
+}
+
+// ── Provenance (read-only) ─────────────────────────────────────────────────
+// Served by /api/provenance/*. See api/provenance_routes.py — the design rule is that
+// provenance travels WITH the result rather than living on a screen of its own, because
+// a log on a dashboard is a log nobody reads.
+
+export interface ProvenanceNote {
+  id: string
+  target_key: string
+  kind: 'why' | 'context' | 'caution' | 'decision' | 'prediction' | string
+  body: string
+  scope: 'private' | 'shared' | string
+  by: string
+  surface: string
+  at: number
+  supersedes?: string
+  superseded?: boolean
+}
+
+export interface ProvenanceEntry {
+  seq: number
+  op: string
+  writer: string
+  surface: string
+  event_ts: number
+  ingest_ts: number
+  target: Record<string, unknown>
+  payload: Record<string, unknown>
+  hash: string
+}
+
+export interface ProvenanceIntegrity {
+  ok: boolean
+  verdict_line: string | null
+  entries: number
+  first_break: Record<string, unknown> | null
+  hwm_present: boolean | null
+}
+
+export interface ForResultsResponse {
+  provenance_available: boolean
+  // Present only when provenance_available is false. ⚠ Render this rather than an empty
+  // state: "we cannot read the record" and "there is no record" are different facts.
+  reason?: string | null
+  cart?: string
+  integrity?: ProvenanceIntegrity
+  // true when the hash chain is broken and journal entries were deliberately withheld.
+  // Notes are still returned — a note is a human statement, not a claim about an
+  // unaltered history.
+  entries_withheld?: boolean
+  keys?: string[]
+  by_key?: Record<string, { provenance: ProvenanceEntry[]; notes: ProvenanceNote[] }>
 }
 
 export interface PatternResponse {
