@@ -65,6 +65,11 @@ export default function ResultsList() {
   // results instead of needing its own channel — DESIGN-WAL section 8 rejected the
   // dashboard shape because "a log nobody reads" is what a separate screen becomes.
   const [prov, setProv] = useState<ForResultsResponse | null>(null)
+  // Bumped after a note is written, to re-read provenance for the same results.
+  // ⛔ A re-read rather than patching the local copy: `superseded` is DERIVED by the
+  // server on read, so a client that spliced in its own note would render a stale view of
+  // what supersedes what — and would do it confidently.
+  const [provNonce, setProvNonce] = useState(0)
   const cartName = status?.mounted_cartridge ?? activeLocalCart ?? null
 
   useEffect(() => {
@@ -80,7 +85,7 @@ export default function ResultsList() {
       if (!cancelled) setProv(res)
     })
     return () => { cancelled = true }
-  }, [cartName, results])
+  }, [cartName, results, provNonce])
   // live tombstone filter: when a user edits a passage in
   // Edit Carts, the old idx gets tombstoned but any results array computed
   // before the edit still carries it. Filter tombstoned idx out at render
@@ -231,6 +236,8 @@ export default function ResultsList() {
             result={r}
             provenance={r.content_key ? prov?.by_key?.[r.content_key] : undefined}
             entriesWithheld={prov?.entries_withheld ?? false}
+            cartName={cartName}
+            onNoteAdded={() => setProvNonce((n) => n + 1)}
           />
         ))}
       </div>

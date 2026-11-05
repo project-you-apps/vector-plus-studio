@@ -114,10 +114,14 @@ def modules() -> tuple | None:
     try:
         import journal as _journal                     # noqa: E402
         import note_store as _note_store               # noqa: E402
+        import redact as _redact                       # noqa: E402
         import seat_identity as _seat_identity         # noqa: E402
         import subcart as _subcart                     # noqa: E402
         import subscriptions as _subscriptions         # noqa: E402
-        _LOADED = (_journal, _note_store, _subscriptions, _seat_identity, _subcart)
+        # ⚠ APPEND ONLY. Indices are positional and `content_key_for` reads mods[4]; a
+        # reorder here silently repoints that at a different module.
+        _LOADED = (_journal, _note_store, _subscriptions, _seat_identity, _subcart,
+                   _redact)
     except Exception as e:                             # noqa: BLE001
         _IMPORT_ERROR = f"{type(e).__name__}: {e}"
         _LOADED = None
@@ -156,6 +160,10 @@ journal = _Lazy(0, "journal")
 note_store = _Lazy(1, "note_store")
 subscriptions = _Lazy(2, "subscriptions")
 seat_identity = _Lazy(3, "seat_identity")
+# ⭐ A typed note is a NEW TEXT INGRESS into the cart's sidecars, so it gets the same
+# treatment as an ingested passage. Our own corpus is the proven case: it already holds
+# an API key and OAuth tokens because nothing stood between paste and store.
+redact = _Lazy(5, "redact")
 
 
 def availability() -> dict:
@@ -171,7 +179,7 @@ def availability() -> dict:
         "error": None if ok else (_IMPORT_ERROR or "provenance modules not loaded"),
         "modules": {
             name: ok for name in
-            ("journal", "note_store", "subscriptions", "seat_identity", "subcart")
+            ("journal", "note_store", "subscriptions", "seat_identity", "subcart", "redact")
         },
     }
 

@@ -1,10 +1,11 @@
-"""Read-only provenance routes: where a passage came from, and WHY it says what it says.
+"""Provenance routes: where a passage came from, and WHY it says what it says.
 
 Route mapping
 -------------
 - ``GET  /api/provenance/{cart_name}/status``       -> chain verdict, counts, availability
 - ``POST /api/provenance/{cart_name}/for-results``  -> provenance + notes for a set of hits
 - ``GET  /api/provenance/{cart_name}/notes``        -> notes this seat may see
+- ``POST /api/provenance/{cart_name}/notes``        -> ADD a note (append-only; no delete)
 - ``GET  /api/provenance/{cart_name}/what-changed`` -> what changed on what this seat watches
 
 ⭐⭐ WHY THERE IS NO "PROVENANCE" SCREEN, AND WHY `for-results` IS THE IMPORTANT ROUTE
@@ -21,17 +22,25 @@ hands back provenance keyed by content so the UI can render it inline. The modul
 built with `for_results()` helpers for exactly this shape, so nothing here reformats or
 re-queries per hit.
 
-⛔ WRITES ARE NOT HERE, DELIBERATELY (Andy, 2026-11-01: "one thing at a time")
-No note creation, no sharing, no acknowledging. Those need the write-path decisions --
-which identity may annotate which cart, and what a revoked grant does to an existing note
--- and a read layer can ship and be useful without settling them. The MCP tools in membot
-already write; this reads what they wrote.
+ⓘ WRITES ARRIVED 2026-11-04, AND ONLY ONE OF THEM
+This module shipped read-only on 11-01 ("one thing at a time") because note creation
+needed a decision this file could not make: WHICH IDENTITY MAY ANNOTATE WHICH CART. That
+is now settled -- `annotate` is a real capability that `commenter` has and `viewer` does
+not, so `cart_guard.require_named_cart_annotate` is the gate and the read guard is not.
+
+⛔ STILL NOT HERE, AND NOT AN OVERSIGHT: there is **no delete and no edit**, by ruling
+(Andy, 2026-11-04). Notes are permanent and appendable; a correction is a new note with
+`supersedes`. Also absent: note SHARING (scope change after the fact) and what a REVOKED
+grant does to an existing note -- the second is a real open question, because a note
+written legitimately by a seat whose access was later removed is evidence, not a leak, and
+deleting it to tidy up access control would destroy the record on purpose.
 
 ⛔ EVERY ROUTE IS CART-SCOPED IN THE PATH, ON PURPOSE
 `tests/test_route_guards.py` requires each route to declare a guard or carry a written
-exemption. Putting the cart name in the path means every route here takes
-`Depends(cart_guard.require_named_cart_read)` and needs no exemption -- including the POST,
-whose payload is only the passage list. A provenance route that answered for a cart the
+exemption. Putting the cart name in the path means every route here can `Depends(...)` its
+guard and needs no exemption -- including both POSTs, since neither names its cart in the
+body. (The read routes take `require_named_cart_read`; the note POST takes
+`require_named_cart_annotate`, which is strictly stronger.) A provenance route that answered for a cart the
 caller cannot mount would be a THIRD DOOR into content the mount gate refuses, and the
 listing route learned that lesson the hard way on 2026-08-15: it enumerated every cart on
 the box to everybody, and "luckily they can't be mounted" was the only thing saving it.
@@ -50,6 +59,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from . import cart_access
 from . import cart_guard
 from . import provenance_link as link
 from .auth import get_current_user
@@ -64,6 +74,30 @@ router = APIRouter(prefix="/api/provenance", tags=["provenance"])
 # history of this document".
 ENTRIES_PER_PASSAGE = 3
 MAX_PASSAGES_PER_CALL = 200
+
+# The author recorded for a note written on a studio with no auth configured at all.
+#
+# ⭐ A NAME, NOT AN EMPTY STRING, and the difference is load-bearing in two directions.
+# `note_store` reads '' as "unidentified caller" and answers with SHARED notes only, so
+# storing '' as the author would create a note whose own writer could not then see it if
+# it were private. And on the reading side a named author makes the record legible: "this
+# was written on a single-user install" is a fact worth keeping, where a blank author
+# merely looks like data loss.
+#
+# ⛔ It is deliberately NOT a seat-shaped UUID, so it can never be mistaken for a verified
+# identity, and it is paired with identity_source='claimed' everywhere it appears.
+LOCAL_SEAT = "local-studio"
+
+
+def cart_access_enforced() -> bool:
+    """Does this deployment have an identity system whose answers could bind?
+
+    Wrapped rather than called inline so the note route reads as a policy question, and
+    so a test can monkeypatch one name. Thin on purpose: `enforcement_available` reads the
+    environment at call time, and caching the answer here would freeze whichever state
+    happened to exist at import.
+    """
+    return cart_access.enforcement_available()
 
 
 class ForResultsRequest(BaseModel):
@@ -278,6 +312,128 @@ async def provenance_notes(cart_name: str, request: Request,
         "cart": cart_name,
         "notes_readable": True,
         "notes": [dict(n, superseded=(n.get("id") in superseded)) for n in notes],
+    }
+
+
+class AddNoteRequest(BaseModel):
+    """Attach a note to one passage, identified by key or by full text."""
+
+    target_key: str = Field("", description="content_key of the passage. Preferred.")
+    passage: str = Field("", description="FULL passage text, when the caller has no key. "
+                                         "⛔ A key over a preview matches nothing.")
+    kind: str = Field("why", description="why | context | caution | decision | prediction")
+    body: str = Field(..., min_length=1, description="The note itself.")
+    scope: str = Field("private", description="private (default) | shared")
+    supersedes: str = Field("", description="id of a note this one replaces. The prior note "
+                                            "is NEVER deleted; this records a link.")
+
+
+@router.post("/{cart_name}/notes", status_code=201)
+async def provenance_add_note(cart_name: str, payload: AddNoteRequest, request: Request,
+                              user: dict | None = Depends(get_current_user),
+                              guard=Depends(cart_guard.require_named_cart_annotate)):
+    """Write a note. ⭐ THE FIRST WRITE ROUTE IN THIS MODULE (2026-11-04).
+
+    ⭐⭐ GUARDED ON `annotate`, NOT `write`. `commenter` is exactly the level that may
+    annotate and may not write, so the write guard would refuse the one role this route
+    exists for. See cart_access.MountDecision.may_annotate for the capability table.
+
+    ⛔ NOTES ARE APPEND-ONLY AND THERE IS NO DELETE ROUTE, BY RULING (Andy, 2026-11-04):
+    "They shouldn't be deletable... the notes should be visible and appendable... so all
+    the notes are permanent, just they can be added to." A correction is a NEW note
+    carrying `supersedes`, which records an attributed link rather than mutating or
+    removing anything. `superseded` is then DERIVED on read, never stored -- so the
+    history of a disagreement survives the disagreement being settled.
+
+    ⚠ THE BODY IS REDACTED ON THE WAY IN. A typed note is a new text ingress into the
+    cart's sidecars, and the proven case is our own corpus, which already contains an API
+    key and OAuth tokens because nothing stood between paste and store. Redaction belongs
+    at the door and nowhere else (redact.redact_text's own warning), and this is a door.
+    """
+    if not link.availability()["available"]:
+        raise HTTPException(status_code=503, detail=link.availability()["error"])
+
+    cart_path = _cart_path_or_404(cart_name)
+
+    # ── WHO is writing ──────────────────────────────────────────────────────────────
+    # ⛔ An unattributed note is worse than no note: the whole value of the record is that
+    # a statement has an author. But "anonymous" means two different things and they get
+    # opposite answers, the same split cart_access draws between a denial and UNENFORCED:
+    #
+    #   enforcement available + no token -> there IS an identity system and this caller
+    #                                       declined to use it. Refuse.
+    #   no enforcement at all            -> local single-user studio. Allow, and let the
+    #                                       RECORD carry the weakness as identity_source
+    #                                       'claimed' rather than refusing a product that
+    #                                       has nobody to restrict.
+    seat = _seat(user)
+    enforced = bool(getattr(guard, "enforced", False)) and getattr(guard, "level", None)
+    if not seat:
+        if cart_access_enforced():
+            raise HTTPException(
+                status_code=401,
+                detail="Sign in to add a note. A provenance note records WHO said it, so "
+                       "it cannot be written anonymously on a server that has sign-in.")
+        seat = LOCAL_SEAT
+    identity_source = "verified" if (seat and seat != LOCAL_SEAT) else "claimed"
+
+    # ── WHICH passage ───────────────────────────────────────────────────────────────
+    target_key = (payload.target_key or "").strip()
+    if not target_key:
+        if not payload.passage.strip():
+            raise HTTPException(status_code=422,
+                                detail="give either target_key or the full passage text")
+        target_key = link.content_key_for(payload.passage)
+
+    # ── Redact, then store ──────────────────────────────────────────────────────────
+    clean, findings = link.redact.redact_text(payload.body, origin="")
+    try:
+        note = link.note_store.add_note(
+            cart_path, target_key, payload.kind, clean,
+            by=seat, surface="WEB", scope=payload.scope,
+            supersedes=payload.supersedes,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except PermissionError as e:
+        # Superseding a note this seat cannot see is a write into someone else's private
+        # reasoning, which note_store refuses. 403, not 404: saying "no such note" would
+        # leak whether it exists.
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+    # ── Journal it ──────────────────────────────────────────────────────────────────
+    # ⛔ AFTER the store, never before: a journal entry for a note that failed to save
+    # would make the chain assert something that did not happen. `op="note"` is a
+    # deliberate member of journal.VALID_OPS -- it was silently rejected until a test
+    # caught it, because _journal_event swallows its own failures by design.
+    try:
+        link.journal.append_to_cart(
+            cart_path, writer=seat, surface="WEB", op="note",
+            target={"cart": cart_name, "target_key": target_key},
+            payload={"note_id": note.get("id"), "kind": payload.kind,
+                     "scope": payload.scope, "chars": len(clean),
+                     "identity_source": identity_source,
+                     "redactions": len(findings),
+                     "supersedes": payload.supersedes or None},
+        )
+    except Exception as e:                                          # noqa: BLE001
+        # The note is saved. Say so loudly rather than failing the request: losing the
+        # note because its audit line failed would be the worse of the two outcomes, and
+        # a silent miss is the one thing this feature must not do.
+        log.error("note %s stored but NOT journalled: %s: %s",
+                  note.get("id"), type(e).__name__, e)
+
+    return {
+        "provenance_available": True,
+        "cart": cart_name,
+        "note": note,
+        "target_key": target_key,
+        "identity_source": identity_source,
+        # ⚠ Surfaced so the author SEES that their text was altered. A redaction the
+        # writer never learns about is content silently eaten.
+        "redactions": [{"kind": f.get("kind"), "verdict": f.get("verdict")}
+                       for f in findings],
+        "enforced": bool(enforced),
     }
 
 

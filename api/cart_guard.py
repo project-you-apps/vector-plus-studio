@@ -300,6 +300,48 @@ def require_named_cart_read(request: Request, cart_name: str,
     return enforce_named_read(request, user, cart_name)
 
 
+def enforce_named_annotate(request: Request, user: object, cart_name: str):
+    """Refuse unless this caller may ANNOTATE `cart_name`. Notes, not cart content.
+
+    ⛔ READ IS NECESSARY AND NOT SUFFICIENT, and this is the reason the function exists
+    rather than reusing the read guard: a `viewer` passes `enforce_named_read` and must be
+    refused here. Guarding a note route with read alone would let anyone who can see a
+    passage attach an attributed statement to it -- and an attributed statement is exactly
+    what the provenance record is for, so a forged one is worse than a leaked read.
+
+    ⛔ AND IT IS NOT `require_cart_write`. `commenter` is precisely the level that may
+    annotate and may not write; guarding notes with the write check would refuse the one
+    role whose purpose is to annotate. See cart_access.MountDecision.may_annotate.
+
+    UNREGISTERED / UNENFORCED -> ALLOW, same deferral as the write path (Andy, 2026-08-03).
+    A local single-user studio has nobody to restrict, and refusing would break both the
+    product and the demo. ⚠ What keeps that honest is not this gate but the RECORD: the
+    note is stored with the seat the caller claimed and the journal entry carries
+    `identity_source`, so an unverified author reads as 'claimed' rather than silently
+    passing for 'verified'. Scope without secrecy is the documented local posture
+    (cart_access module docstring); a note written on an unenforced box says so.
+    """
+    decision = resolve_named(request, user, cart_name)
+    if not decision.allowed:
+        raise _refuse(decision)
+
+    if decision.level is None:
+        return decision                 # legacy/unenforced -- the record carries the caveat
+
+    if not decision.may_annotate:
+        raise HTTPException(
+            status_code=403,
+            detail=(f"Your access to this cart is '{decision.level}', which cannot annotate "
+                    f"it. Ask its owner for commenter access."))
+    return decision
+
+
+def require_named_cart_annotate(request: Request, cart_name: str,
+                                user: dict | None = Depends(get_current_user)):
+    """Caller may annotate the cart named in the path. For the provenance note routes."""
+    return enforce_named_annotate(request, user, cart_name)
+
+
 def require_cart_read(request: Request,
                       user: dict | None = Depends(get_current_user)):
     """Caller may read the mounted cart. Declare on every route that returns its content."""

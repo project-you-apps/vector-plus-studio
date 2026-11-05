@@ -40,6 +40,7 @@ from api.main import app
 from api.cart_guard import (
     require_cart_read,
     require_cart_write,
+    require_named_cart_annotate,
     require_named_cart_read,
 )
 
@@ -47,7 +48,15 @@ from api.cart_guard import (
 # routes that read a cart WITHOUT mounting it -- checking the mounted cart there would guard
 # the wrong object entirely, and would pass whenever the caller happened to have access to
 # whatever else was open.
-GUARDS = {require_cart_read, require_cart_write, require_named_cart_read}
+#
+# `require_named_cart_annotate` (2026-11-04) guards the provenance NOTE write. It is listed
+# here rather than the note route being EXEMPT, because it is a real check and an exemption
+# would be a hole with a comment on it. ⚠ It is NOT interchangeable with the others: it
+# demands the `annotate` capability, which `viewer` lacks and `commenter` has -- so it is
+# strictly stronger than read and deliberately weaker than write. A route that needs to
+# modify CART CONTENT must still take require_cart_write; annotate only authorises notes.
+GUARDS = {require_cart_read, require_cart_write, require_named_cart_read,
+          require_named_cart_annotate}
 
 # Cart Builder is a DESKTOP surface: it browses and writes the operator's own filesystem and
 # never reads cart passages through the access layer. On a public host every write path is

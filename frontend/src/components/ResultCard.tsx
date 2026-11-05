@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, BookOpen, Pencil, Trash2, X, Zap, Lock, Footprints, Image as ImageIcon, StickyNote, History } from 'lucide-react'
 import type { SearchResult, ProvenanceEntry, ProvenanceNote } from '../api/types'
+import { addProvenanceNote } from '../api/client'
 import { useAppStore } from '../store/appStore'
 
 /**
@@ -192,7 +193,16 @@ interface Props {
   /** True when the chain failed verification and entries were deliberately withheld.
    *  ⚠ Distinct from "no entries": one means unknown, the other means nothing happened. */
   entriesWithheld?: boolean
+  /** The cart these results came from. Needed to WRITE a note; the card cannot derive it,
+   *  because the mounted cart and a browser-mounted one are different store fields. */
+  cartName?: string | null
+  /** Called after a note saves, so the owner of the provenance fetch can re-read it.
+   *  ⛔ A re-fetch rather than a local splice: the server derives `superseded` on read, so
+   *  a client that patched its own copy would show a stale view of what supersedes what. */
+  onNoteAdded?: () => void
 }
+
+type NoteKind = 'why' | 'decision' | 'caution' | 'context' | 'prediction'
 
 /** How an identity was established, in the few words a reader can act on.
  *  ⭐ The honest label is the product: "verified" and "claimed" are different facts, and a
@@ -235,8 +245,47 @@ function legacyClipboardCopy(text: string): void {
   }
 }
 
-export default function ResultCard({ result, provenance, entriesWithheld }: Props) {
+export default function ResultCard({
+  result, provenance, entriesWithheld, cartName, onNoteAdded,
+}: Props) {
   const [expanded, setExpanded] = useState(false)
+  // ── "add why" composer state ──────────────────────────────────────────────
+  const [noteOpen, setNoteOpen] = useState(false)
+  const [noteBody, setNoteBody] = useState('')
+  const [noteKind, setNoteKind] = useState<NoteKind>('why')
+  const [noteShared, setNoteShared] = useState(false)
+  const [noteSaving, setNoteSaving] = useState(false)
+  const [noteError, setNoteError] = useState<string | null>(null)
+  const [noteRedacted, setNoteRedacted] = useState(false)
+
+  const saveNote = async () => {
+    if (!cartName || !result.content_key) return
+    setNoteSaving(true)
+    setNoteError(null)
+    setNoteRedacted(false)
+    try {
+      const res = await addProvenanceNote(cartName, {
+        target_key: result.content_key,
+        body: noteBody.trim(),
+        kind: noteKind,
+        scope: noteShared ? 'shared' : 'private',
+      })
+      setNoteRedacted((res.redactions?.length ?? 0) > 0)
+      setNoteBody('')
+      // ⚠ Stay OPEN when text was redacted, so the warning is read rather than dismissed
+      // by the panel closing underneath it.
+      if ((res.redactions?.length ?? 0) === 0) setNoteOpen(false)
+      onNoteAdded?.()
+    } catch (e) {
+      // The server's own message is the useful one here: it distinguishes "sign in",
+      // "your access is viewer", and "this cart has no provenance layer" — three very
+      // different problems that a generic failure string would flatten into one.
+      setNoteError(e instanceof Error ? e.message : 'could not save that note')
+    } finally {
+      setNoteSaving(false)
+    }
+  }
+
   // Clipboard copy feedback for the provenance source filename click. True
   // briefly after a successful copy so the inline "copied" pill renders.
   const [copiedSource, setCopiedSource] = useState(false)
@@ -415,13 +464,101 @@ export default function ResultCard({ result, provenance, entriesWithheld }: Prop
                     <span className="uppercase tracking-wide text-[9px] text-amber-400/70 mr-1">
                       {n.kind}
                     </span>
-                    {n.body}
+                    {/* ⭐ A superseded note is struck through and KEPT, never hidden. By
+                        ruling (2026-11-04) notes are permanent and appendable; the history
+                        of a disagreement has to survive the disagreement being settled. */}
+                    <span className={n.superseded ? 'line-through opacity-60' : undefined}>
+                      {n.body}
+                    </span>
                     <span className="text-slate-600 ml-1.5 font-mono text-[10px]">
                       — {n.by}{n.scope === 'private' ? ' (private)' : ''}
+                      {n.superseded ? ' · superseded' : ''}
                     </span>
                   </span>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* ── Add a why ──────────────────────────────────────────────────────────
+              ⭐ Composed HERE, on the result, for the same reason provenance is READ
+              here: the moment a person knows why a passage says what it says is the
+              moment they are looking at it. A notes screen elsewhere would be a form
+              nobody fills in.
+              ⛔ Hidden entirely when the passage has no content_key — there is nothing
+              to attach a note TO, and an input that silently discarded what was typed
+              is worse than no input. */}
+          {result.content_key && cartName && (
+            <div className="mb-1">
+              {!noteOpen ? (
+                <button
+                  type="button"
+                  onClick={() => setNoteOpen(true)}
+                  className="text-[10px] text-slate-500 hover:text-amber-400/80 flex items-center gap-1"
+                >
+                  <StickyNote size={10} className="shrink-0" />
+                  <span>add why</span>
+                </button>
+              ) : (
+                <div className="space-y-1 rounded border border-slate-700/70 bg-slate-900/60 p-2">
+                  <textarea
+                    value={noteBody}
+                    onChange={(e) => setNoteBody(e.target.value)}
+                    rows={2}
+                    autoFocus
+                    placeholder="Why does this say what it says?"
+                    className="w-full resize-y rounded bg-slate-950/60 px-2 py-1 text-[11px] text-slate-200 outline-none focus:ring-1 focus:ring-amber-500/40"
+                  />
+                  <div className="flex items-center gap-2 text-[10px]">
+                    <select
+                      value={noteKind}
+                      onChange={(e) => setNoteKind(e.target.value as NoteKind)}
+                      className="rounded bg-slate-950/60 px-1 py-0.5 text-slate-300"
+                    >
+                      {(['why', 'decision', 'caution', 'context', 'prediction'] as NoteKind[])
+                        .map((k) => <option key={k} value={k}>{k}</option>)}
+                    </select>
+                    {/* ⚠ Default PRIVATE, matching note_store: a note is born private and
+                        becomes shared only when its author says so. The control is here
+                        rather than buried so that sharing is always a deliberate act. */}
+                    <label className="flex items-center gap-1 text-slate-400">
+                      <input
+                        type="checkbox"
+                        checked={noteShared}
+                        onChange={(e) => setNoteShared(e.target.checked)}
+                      />
+                      <span>share with the team</span>
+                    </label>
+                    <button
+                      type="button"
+                      disabled={noteSaving || noteBody.trim().length === 0}
+                      onClick={saveNote}
+                      className="ml-auto rounded bg-amber-600/80 px-2 py-0.5 font-medium text-white disabled:opacity-40"
+                    >
+                      {noteSaving ? 'saving…' : 'save'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setNoteOpen(false); setNoteError(null) }}
+                      className="text-slate-500 hover:text-slate-300"
+                    >
+                      cancel
+                    </button>
+                  </div>
+                  {/* ⛔ Errors are SHOWN. A write that failed quietly means the author's
+                      reasoning was never recorded while they believe it was — the exact
+                      invisible loss this feature exists to prevent. */}
+                  {noteError && (
+                    <div className="text-[10px] text-rose-400">{noteError}</div>
+                  )}
+                  {noteRedacted && (
+                    <div className="text-[10px] text-amber-300">
+                      ⚠ Saved, but something in that note looked like a secret and was
+                      replaced with a marker. Check the stored text above.
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

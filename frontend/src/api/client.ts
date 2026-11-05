@@ -3,7 +3,9 @@ import type {
   SearchMode, PatternResponse, Pattern0Response, PerPatternMetaResponse,
   MemboxCartInfo, MemboxStatus, MemboxImprintRequest, MemboxMountRequest,
   CartPermissions,
+  AddNoteResponse,
   ForResultsResponse,
+  ProvenanceNote,
 } from './types'
 import { useAuthStore } from '../store/authStore'
 import { supabase } from '../lib/supabase'
@@ -768,4 +770,49 @@ export async function getProvenanceForResults(
     // is the same thing it does for a cart that has no journal at all.
     return null
   }
+}
+
+/**
+ * Add a "why" note to one passage. ⭐ The first provenance WRITE from the UI (2026-11-04).
+ *
+ * ⛔ THIS ONE THROWS, unlike `getProvenanceForResults`, and the asymmetry is deliberate.
+ * Reading provenance is an enrichment: if it fails the search still answers, so swallowing
+ * is right. WRITING is the user's intent — they typed a sentence and pressed a button. A
+ * swallowed failure there means their reasoning silently did not get recorded, which is
+ * precisely the invisible loss this whole feature exists to prevent. The caller must show
+ * the error.
+ *
+ * ⚠ The response carries `redactions`. Render them: the body stored may differ from the
+ * body typed, and a redaction the author never learns about is content quietly eaten.
+ */
+export async function addProvenanceNote(
+  cartName: string,
+  note: {
+    target_key: string
+    body: string
+    kind?: ProvenanceNote['kind']
+    scope?: 'private' | 'shared'
+    supersedes?: string
+  },
+): Promise<AddNoteResponse> {
+  if (!cartName) throw new Error('no cart')
+  if (!note.target_key) {
+    // ⛔ Refuse rather than falling back to sending passage text. The server supports a
+    // text path for scripts, but a UI that used it would be hashing something it rendered
+    // — and a key over a preview matches nothing while raising nothing.
+    throw new Error('This passage has no provenance key, so a note cannot be attached to it.')
+  }
+  return fetchJSON<AddNoteResponse>(
+    `/provenance/${encodeURIComponent(cartName)}/notes`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        target_key: note.target_key,
+        body: note.body,
+        kind: note.kind ?? 'why',
+        scope: note.scope ?? 'private',
+        ...(note.supersedes ? { supersedes: note.supersedes } : {}),
+      }),
+    },
+  )
 }

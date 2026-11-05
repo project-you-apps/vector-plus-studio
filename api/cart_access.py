@@ -92,6 +92,29 @@ class MountDecision:
         """
         return bool(self.level) and can_here(self.level, "write")
 
+    @property
+    def may_annotate(self) -> bool:
+        """Whether the resolved level permits ANNOTATION -- notes, not cart content.
+
+        ⭐⭐ THE DISTINCTION THE ACCESS LADDER EXISTS FOR, and the one a compliance buyer
+        asks about first. The real capability sets are:
+
+            viewer     ['read']
+            commenter  ['annotate', 'read']        <- may record WHY, may not change WHAT
+            editor     ['annotate', 'read', 'write']
+
+        So a commenter can attach a reason to a passage and cannot alter the passage. That
+        is segregation of duties expressed as a capability, and it is why a note route must
+        NOT be guarded by `may_write`: doing so would refuse exactly the role whose whole
+        purpose is to annotate, and the feature would look built while being unusable by
+        the people it was built for.
+
+        ⛔ Same contract as `may_write`: this answers "did a grant authorise annotation",
+        never "may this cart be annotated". Unregistered and unenforced carts return False
+        here and are decided by the caller.
+        """
+        return bool(self.level) and can_here(self.level, "annotate")
+
     def audit(self, cart: str, seat: str | None) -> str:
         verb = "allowed" if self.allowed else "REFUSED"
         who = seat or "anonymous"

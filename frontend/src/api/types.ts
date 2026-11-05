@@ -75,6 +75,22 @@ export interface ProvenanceNote {
   superseded?: boolean
 }
 
+export interface AddNoteResponse {
+  provenance_available: boolean
+  cart: string
+  note: ProvenanceNote
+  target_key: string
+  // ⭐ 'verified' when a real signed-in seat authored it; 'claimed' on a studio with no
+  // auth configured. Rendered as-is — a system that shows these identically is asserting
+  // something it does not know.
+  identity_source: 'verified' | 'claimed' | string
+  // ⚠ Non-empty when the body STORED differs from the body TYPED. Must be surfaced: a
+  // redaction the author never learns about is content silently eaten.
+  redactions: { kind?: string; verdict?: string }[]
+  // Whether an identity system was actually governing this write.
+  enforced: boolean
+}
+
 export interface ProvenanceEntry {
   seq: number
   op: string
