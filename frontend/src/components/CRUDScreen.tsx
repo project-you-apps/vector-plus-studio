@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import {
   Pencil, Plus, Save, Trash2, RotateCcw, Lock, Unlock, FilePlus2,
   FolderOpen, Folder, Database, AlertCircle, CheckCircle2, Loader2,
-  Hammer, ChevronRight, X, List, ChevronLeft, Search, ShieldAlert,
+  Hammer, ChevronRight, X, List, ChevronLeft, Search, ShieldAlert, StickyNote,
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import CartBrowser from './CartBrowser'
 import ConfirmDialog, { type ConfirmState } from './ConfirmDialog'
+import PassageNotesPanel from './PassageNotesPanel'
 import * as api from '../api/client'
 import type { PatternListItem } from '../api/client'
 import {
@@ -2135,6 +2136,10 @@ function PassageBrowser({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pageJump, setPageJump] = useState('')
+  // Which row has its notes open. ⭐ ONE at a time, not a Set: the list viewport is
+  // ~260px, and several expanded panels would push the row you were reading off screen
+  // while you typed into another one.
+  const [openNotesIdx, setOpenNotesIdx] = useState<number | null>(null)
 
   const totalPages = Math.max(1, Math.ceil(total / PASSAGE_PAGE_SIZE))
   const currentPage = Math.floor(offset / PASSAGE_PAGE_SIZE) + 1
@@ -2153,7 +2158,16 @@ function PassageBrowser({
     setOffset(0)
     setFilterDraft('')
     setFilter('')
+    setOpenNotesIdx(null)
   }, [mountedKey])
+
+  // ⛔ Close the open notes panel on page turn or filter change. Row positions are reused
+  // across pages, so an idx left open would re-render under a DIFFERENT passage's row —
+  // notes rendered beside text they do not belong to, which is the one mistake a
+  // provenance feature cannot make.
+  useEffect(() => {
+    setOpenNotesIdx(null)
+  }, [offset, filter])
 
   // Fetch when offset / filter / mount / patternCount changes.
   useEffect(() => {
@@ -2251,29 +2265,54 @@ function PassageBrowser({
           </div>
         ) : (
           items.map((p) => (
-            <button
-              key={p.idx}
-              onClick={() => onPickIdx(p.idx)}
-              className="w-full px-4 py-2 flex items-start gap-3 hover:bg-slate-700/30 text-left transition-colors group"
-              title={`Click to load #${p.idx} into Update + Delete IDX fields above`}
-            >
-              <span className="font-mono text-[11px] text-slate-500 w-12 shrink-0 mt-0.5">
-                #{p.idx}
-              </span>
-              <div className="flex-1 min-w-0">
-                <div className="text-xs text-slate-200 truncate">
-                  {p.title || '[empty]'}
-                </div>
-                {p.preview && (
-                  <div className="text-[10px] text-slate-500 truncate mt-0.5">
-                    {p.preview}
+            // ⛔ A DIV, NOT A BUTTON. The row used to BE the button; the notes toggle has
+            // to sit beside it, and a <button> inside a <button> is invalid HTML that
+            // browsers resolve by dropping one of them — silently, and differently per
+            // browser. The row's click target is now its own button alongside the toggle.
+            <div key={p.idx} className="group">
+              <div className="w-full px-4 py-2 flex items-start gap-3 hover:bg-slate-700/30 transition-colors">
+                <button
+                  onClick={() => onPickIdx(p.idx)}
+                  className="flex flex-1 min-w-0 items-start gap-3 text-left"
+                  title={`Click to load #${p.idx} into Update + Delete IDX fields above`}
+                >
+                  <span className="font-mono text-[11px] text-slate-500 w-12 shrink-0 mt-0.5">
+                    #{p.idx}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs text-slate-200 truncate">
+                      {p.title || '[empty]'}
+                    </div>
+                    {p.preview && (
+                      <div className="text-[10px] text-slate-500 truncate mt-0.5">
+                        {p.preview}
+                      </div>
+                    )}
                   </div>
-                )}
+                  <span className="text-[10px] text-slate-600 font-mono shrink-0 mt-0.5">
+                    {p.word_count}w
+                  </span>
+                </button>
+                {/* ⭐ ON DEMAND, per Andy's ruling: nothing about notes is fetched for a
+                    row until someone asks for that row. */}
+                <button
+                  onClick={() => setOpenNotesIdx(openNotesIdx === p.idx ? null : p.idx)}
+                  aria-expanded={openNotesIdx === p.idx}
+                  title={openNotesIdx === p.idx ? 'Hide notes' : 'Show notes for this passage'}
+                  className={`shrink-0 mt-0.5 flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] transition-colors ${
+                    openNotesIdx === p.idx
+                      ? 'bg-amber-500/20 text-amber-300'
+                      : 'text-slate-500 hover:bg-slate-700/40 hover:text-amber-400'
+                  }`}
+                >
+                  <StickyNote size={11} className="shrink-0" />
+                  <span>notes</span>
+                </button>
               </div>
-              <span className="text-[10px] text-slate-600 font-mono shrink-0 mt-0.5">
-                {p.word_count}w
-              </span>
-            </button>
+              {openNotesIdx === p.idx && (
+                <PassageNotesPanel cartName={mountedKey} idx={p.idx} />
+              )}
+            </div>
           ))
         )}
       </div>
