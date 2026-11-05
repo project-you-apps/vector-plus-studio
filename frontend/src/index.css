@@ -96,6 +96,32 @@ html.light select:focus {
 html.light body { background-color: rgb(248 250 252); color: rgb(15 23 42); }
 html.light { --chrome-bg: #f1f5f9; }
 
+/* ── Deployment-posture chip (NavRail, under Settings) ──────────────────────────────
+ * Styled HERE rather than with Tailwind utilities in the component, because this app has
+ * no `dark:` variants: light mode is the `html.light` class plus overrides in this file.
+ * A chip written only in dark-mode utilities is exactly what put pale green text on a
+ * muted green background the first time Andy switched to light mode (2026-11-04).
+ *
+ * ⭐ The chip is a PSYCHOLOGICAL reassurance as much as a diagnostic (Andy's words), so
+ * each state is solid and legible rather than a translucent tint — and only `local` gets
+ * a reassuring color. `mixed` is red on purpose: a local-looking address bar with a
+ * public backend is the case a user acting on "local means private" would get wrong.
+ * Light-mode pairs are white on 700/800-weight fills, which clears 4.5:1 comfortably. */
+.posture-chip            { background: rgb(2 44 34 / 0.70); color: rgb(167 243 208); border-color: rgb(4 120 87 / 0.60); }
+.posture-chip-sub        { opacity: 0.75; }
+.posture-chip-local      { background: rgb(6 78 59 / 0.70);  color: rgb(167 243 208); border-color: rgb(4 120 87 / 0.60); }
+.posture-chip-hosted     { background: rgb(12 74 110 / 0.70); color: rgb(186 230 253); border-color: rgb(3 105 161 / 0.60); }
+.posture-chip-mixed      { background: rgb(136 19 55 / 0.80); color: rgb(255 228 230); border-color: rgb(225 29 72 / 0.70); }
+.posture-chip-unknown    { background: rgb(30 41 59 / 0.80);  color: rgb(203 213 225); border-color: rgb(71 85 105 / 0.60); }
+
+html.light .posture-chip-local   { background: #065f46; color: #ffffff; border-color: #064e3b; }
+html.light .posture-chip-hosted  { background: #075985; color: #ffffff; border-color: #0c4a6e; }
+html.light .posture-chip-mixed   { background: #9f1239; color: #ffffff; border-color: #881337; }
+html.light .posture-chip-unknown { background: #475569; color: #ffffff; border-color: #334155; }
+/* The build sha under the label: dimming white by opacity keeps it subordinate without
+   dropping it to a gray that fails contrast against the saturated fill. */
+html.light .posture-chip-sub     { opacity: 0.85; }
+
 /* Light-mode bumps for translucent purple/cyan/etc. accent backgrounds.
    Default opacities (e.g. bg-purple-500/5, border-purple-500/30) are tuned
    for slate-900 backdrops — they vanish on slate-50. The fix is element-

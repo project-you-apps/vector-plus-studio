@@ -4,6 +4,7 @@ import { useAppStore } from '../store/appStore'
 import type { ActiveScreen } from '../store/appStore'
 import AboutModal from './AboutModal'
 import HelpModal from './HelpModal'
+import PostureBadge from './PostureBadge'
 
 interface NavItem {
   key: ActiveScreen
@@ -64,6 +65,13 @@ export default function NavRail() {
           </button>
         )
       })}
+
+      {/* Deployment posture, directly under Settings (Andy, 2026-11-04): "I want it
+          visible on the sidebar in an obvious spot because of how reassuring it will be
+          psychologically." Deliberately ABOVE the mt-auto block so it stays adjacent to
+          Settings rather than drifting to the bottom next to Help/About — it is a status
+          readout about this install, not another thing to click. */}
+      <PostureBadge />
 
       <div className="mt-auto pt-2 border-t border-slate-800/60 flex flex-col gap-1">
         <button
