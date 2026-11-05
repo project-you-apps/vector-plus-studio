@@ -96,6 +96,40 @@ html.light select:focus {
 html.light body { background-color: rgb(248 250 252); color: rgb(15 23 42); }
 html.light { --chrome-bg: #f1f5f9; }
 
+/* ── Provenance notes — the sticky-note treatment ───────────────────────────────────
+ * Andy, 2026-11-04: "Would it be too ugly to have the entire note highlighted in yellow
+ * like a sticky note? Or maybe just bordered in a yellow rectangular outline?"
+ *
+ * ⭐ Neither extreme, and the reason is COUNT. A passage can carry several notes, and a
+ * full yellow fill per note stacks into a wall of highlighter by the third one — on a
+ * compliance cart, three notes on one control is the normal case, not the edge case. A
+ * bare outline has the opposite problem: it reads as an input field, which invites a
+ * click that does nothing.
+ *
+ * So: a soft fill PLUS a heavy left edge. That is the margin-annotation idiom, which is
+ * what a note literally is, and it survives N notes because the left edges line up into
+ * one visual column instead of competing blocks. In light mode the fill lands on real
+ * pale yellow with dark text, so it does read as a sticky note — the metaphor we actually
+ * sell, not decoration.
+ *
+ * ⚠ Defined here rather than as dark-only Tailwind utilities, which is the mistake that
+ * made the posture chip illegible in light mode earlier today. */
+.provenance-note {
+  background: rgb(120 53 15 / 0.22);
+  border-left: 3px solid rgb(251 191 36 / 0.75);
+  color: rgb(226 232 240);
+}
+.provenance-note-kind { color: rgb(252 211 77); }
+.provenance-note-by   { color: rgb(148 163 184); }
+
+html.light .provenance-note {
+  background: #fef9c3;                      /* yellow-100 — an actual sticky note */
+  border-left-color: #d97706;               /* amber-600, strong enough to anchor it */
+  color: #1f2937;
+}
+html.light .provenance-note-kind { color: #92400e; }
+html.light .provenance-note-by   { color: #57534e; }
+
 /* ── Deployment-posture chip (NavRail, under Settings) ──────────────────────────────
  * Styled HERE rather than with Tailwind utilities in the component, because this app has
  * no `dark:` variants: light mode is the `html.light` class plus overrides in this file.

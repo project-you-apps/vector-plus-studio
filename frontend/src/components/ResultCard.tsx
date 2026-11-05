@@ -434,7 +434,7 @@ export default function ResultCard({
               — should I trust this passage right now — rather than "what happened lately".
               Quiet by default; the WHY is the part that earns its space. */}
           {provenance && (provenance.notes.length > 0 || provenance.provenance.length > 0) && (
-            <div className="mb-1 space-y-0.5">
+            <div className="mb-1 space-y-1">
               {provenance.provenance.slice(0, 2).map((e) => (
                 <div key={e.hash} className="text-[10px] text-slate-500 flex items-center gap-1.5 flex-wrap">
                   <History size={10} className="shrink-0" />
@@ -458,10 +458,13 @@ export default function ResultCard({
                 </div>
               )}
               {provenance.notes.map((n) => (
-                <div key={n.id} className="text-[11px] text-slate-400 flex items-start gap-1.5">
-                  <StickyNote size={11} className="mt-0.5 shrink-0 text-amber-400/70" />
+                <div
+                  key={n.id}
+                  className="provenance-note flex items-start gap-1.5 rounded-r px-2 py-1 text-[11px]"
+                >
+                  <StickyNote size={11} className="provenance-note-kind mt-0.5 shrink-0" />
                   <span>
-                    <span className="uppercase tracking-wide text-[9px] text-amber-400/70 mr-1">
+                    <span className="provenance-note-kind mr-1 text-[9px] uppercase tracking-wide">
                       {n.kind}
                     </span>
                     {/* ⭐ A superseded note is struck through and KEPT, never hidden. By
@@ -470,7 +473,7 @@ export default function ResultCard({
                     <span className={n.superseded ? 'line-through opacity-60' : undefined}>
                       {n.body}
                     </span>
-                    <span className="text-slate-600 ml-1.5 font-mono text-[10px]">
+                    <span className="provenance-note-by ml-1.5 font-mono text-[10px]">
                       — {n.by}{n.scope === 'private' ? ' (private)' : ''}
                       {n.superseded ? ' · superseded' : ''}
                     </span>
