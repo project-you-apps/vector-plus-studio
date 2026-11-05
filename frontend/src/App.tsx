@@ -22,6 +22,7 @@ import FolderPickerModal from './components/FolderPickerModal'
 import SignInModal from './components/SignInModal'
 import DesktopHelperPairModal from './components/DesktopHelperPairModal'
 import CookieBanner from './components/CookieBanner'
+import PostureFooter from './components/PostureFooter'
 import Toaster from './components/Toaster'
 
 // Search screen layout —, revised 2026-07-02.
@@ -167,6 +168,10 @@ export default function App() {
       <SignInModal />
       <DesktopHelperPairModal />
       <CookieBanner />
+      {/* Build + deployment posture. App-level and always mounted on purpose: its job is
+          to make every screenshot say which build produced it and where it was served
+          from. See lib/posture.ts. */}
+      <PostureFooter />
       <Toaster />
     </div>
   )

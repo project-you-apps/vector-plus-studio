@@ -158,6 +158,16 @@ export interface StatusResponse {
   // True when the server is in global read-only mode (VPS_READ_ONLY env var).
   // Frontend uses this to hide the unlock button — attempting to unlock returns 403.
   read_only_mode?: boolean
+  // ⭐⭐ "This backend is reachable by people who do not own the machine."
+  // Sent by the server since 2026-08-06 (models.py / main.PUBLIC_HOST) and read by
+  // NOTHING on this side until 2026-11-04 — the attestation existed, unsurfaced.
+  // ⛔ THE ONLY TRUSTWORTHY SOURCE FOR THIS FACT. The browser sees a relative `/api`
+  //    and cannot see through the Vite dev proxy, so it cannot tell a page on
+  //    localhost driving a local backend from one driving a public one. Distinct from
+  //    read_only_mode: that governs WRITES, this governs whether the host is public.
+  // undefined/null means "not answered yet" — see lib/posture.ts, which treats that as
+  // UNKNOWN rather than defaulting to the reassuring answer.
+  public_host?: boolean | null
   // Cart-format permissions sidecar (Step 2a). Present when the cart has a
   // .permissions.json next to it. default: "r" | "rw" | "rwx".
   cart_permissions?: CartPermissions | null

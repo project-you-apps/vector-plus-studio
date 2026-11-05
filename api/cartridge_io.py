@@ -353,12 +353,63 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 SAMPLE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sample_data")
 
 
+# VPS_EXTRA_CARTRIDGE_DIRS -- additional read directories, os.pathsep-separated
+# (';' on Windows, ':' on POSIX).
+#
+# WHY (2026-11-04). Membot and the Studio are separate trees with separate cart folders,
+# so a cart the Studio can mount from the dropdown and a cart membot wrote its journal and
+# notes sidecars beside were two COPIES of the same file. Provenance is addressed by
+# content key and the sidecars live beside the cart, so the copy the Studio mounted had no
+# sidecars and showed no provenance -- the feature looked broken because the data was in
+# the other copy. One file on disk, visible to both surfaces, is the fix.
+#
+#   VPS_EXTRA_CARTRIDGE_DIRS=D:\...\project-you\membot\cartridges
+_EXTRA_DIRS_ENV = "VPS_EXTRA_CARTRIDGE_DIRS"
+
+
 def get_cartridge_dirs() -> list[str]:
-    """Return list of directories to scan for cartridges."""
+    """Return list of directories to scan for cartridges.
+
+    Read from the environment on EVERY CALL rather than cached at import. The server is a
+    long-running process started by startup.bat; a value frozen at import would mean
+    changing the variable requires finding and restarting that process, which is the same
+    "the running thing is older than the config" trap that has already cost us twice.
+
+    ⛔ A directory that does not exist is SKIPPED, not created. `list_cartridges()` calls
+    os.makedirs(exist_ok=True) on every directory it scans, so returning an unchecked path
+    from here would turn a typo in an env var into a new empty folder on disk -- and then
+    report zero carts from it as though that were an answer about the real one.
+
+    ⚠ This widens what the cart dropdown lists. On a public host that is the operator's
+    decision to make deliberately: the variable is set by whoever starts the process, not
+    by a request, so it is not reachable from the network. Path-shaped mount targets are
+    refused separately by main._refuse_path_shaped_filename when PUBLIC_HOST is set.
+    """
     dirs = [DATA_DIR]
     if os.path.isdir(SAMPLE_DIR):
         dirs.append(SAMPLE_DIR)
-    return dirs
+
+    raw = os.environ.get(_EXTRA_DIRS_ENV, "")
+    for entry in raw.split(os.pathsep):
+        entry = entry.strip().strip('"').strip("'")
+        if entry and os.path.isdir(entry):
+            dirs.append(entry)
+
+    # Dedupe on the normalized real path, keeping first-seen order, so DATA_DIR stays
+    # authoritative when an extra dir names the same place by a different spelling
+    # (trailing slash, different case on Windows, a junction, a relative path).
+    seen: set[str] = set()
+    unique: list[str] = []
+    for d in dirs:
+        try:
+            canonical = os.path.normcase(os.path.realpath(d))
+        except OSError:
+            canonical = os.path.normcase(os.path.abspath(d))
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        unique.append(d)
+    return unique
 
 
 def list_cartridges() -> list[dict]:
