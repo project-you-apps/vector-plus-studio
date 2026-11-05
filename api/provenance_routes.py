@@ -154,6 +154,20 @@ def _seat(user) -> str:
     return seat_id(user) or ""
 
 
+def _note_integrity(cart_path: str) -> dict:
+    """Reconcile notes.json against the journal. Never raises: an integrity REPORT that
+    takes the whole response down with it is the failure mode of a safety feature."""
+    try:
+        return link.note_integrity.reconcile(cart_path)
+    except Exception as e:                                          # noqa: BLE001
+        log.warning("note reconciliation failed for %s: %s: %s",
+                    cart_path, type(e).__name__, e)
+        return {"ok": False, "attested": False, "checked": 0,
+                "journal_readable": None, "notes_readable": None,
+                "orphaned_in_journal": [], "unwitnessed_in_notes": [],
+                "verdict_line": f"Could not reconcile notes against the journal: {e}"}
+
+
 def _integrity(cart_path: str) -> dict:
     """The chain verdict for this cart's journal, in a shape a UI can render."""
     v = link.journal.verify(link.journal.journal_path_for(cart_path))
@@ -195,6 +209,12 @@ async def provenance_status(cart_name: str, request: Request,
             "visible_to_you": len(link.note_store.list_notes(cart_path, seat=_seat(user))),
             "by_kind": notes.get("by_kind", {}),
         },
+        # ⭐⭐ "Did anyone remove a note from this discussion?" -- a question `integrity`
+        # above CANNOT answer, because splicing an object out of notes.json leaves the
+        # hash chain perfectly valid. Reconciling the two files is what detects it.
+        # ⚠ Note the two booleans: `ok` means nothing is known missing, `attested` is the
+        # stronger claim and the only one a UI may render as verified.
+        "notes_integrity": _note_integrity(cart_path),
     }
 
 

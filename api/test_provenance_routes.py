@@ -187,6 +187,49 @@ def test_a_broken_chain_withholds_entries_and_says_so(seeded, client):
     assert body["by_key"][key]["notes"], "the notes were suppressed along with the entries"
 
 
+def test_status_reconciles_notes_against_the_journal(seeded, client):
+    """⭐ The seeded cart has two notes written by note_store DIRECTLY, with no matching
+    journal entries, so they are unwitnessed: `ok` (nothing removed) but NOT `attested`."""
+    body = client.get(f"/api/provenance/{CART_NAME}/status").json()
+    ni = body["notes_integrity"]
+    assert ni["ok"] is True, ni
+    assert ni["attested"] is False, "unwitnessed notes must not read as verified"
+    assert ni["checked"] == 2
+
+
+def test_status_DETECTS_a_note_spliced_out_of_the_sidecar(seeded, client):
+    """⛔⛔ THE ATTACK THE HASH CHAIN ALONE CANNOT SEE. Removing an object from notes.json
+    leaves the journal verifying perfectly -- only the reconciliation notices."""
+    import json as _json
+    mods = link.modules()
+    journal, note_store = mods[0], mods[1]
+    cart = str(seeded["cart"])
+
+    n = note_store.add_note(cart, seeded["key"], "why", "the inconvenient one",
+                            by=SEAT_A, surface="WEB", scope="shared")
+    journal.append_to_cart(cart, writer=SEAT_A, surface="WEB", op="note",
+                           target={"target_key": seeded["key"]},
+                           payload={"note_id": n["id"]})
+
+    p = Path(note_store.sidecar_path(cart))
+    data = _json.loads(p.read_text(encoding="utf-8"))
+    notes = data["notes"] if isinstance(data, dict) else data
+    kept = [x for x in notes if x.get("id") != n["id"]]
+    if isinstance(data, dict):
+        data["notes"] = kept
+    else:
+        data = kept
+    p.write_text(_json.dumps(data), encoding="utf-8")
+
+    body = client.get(f"/api/provenance/{CART_NAME}/status").json()
+    # The chain is still fine -- that is the whole point.
+    assert body["integrity"]["ok"] is True, "the splice broke the chain; wrong test"
+    ni = body["notes_integrity"]
+    assert ni["ok"] is False, ni
+    assert n["id"] in ni["orphaned_in_journal"], ni
+    assert "MISSING" in ni["verdict_line"]
+
+
 def test_an_unknown_cart_is_404_not_an_empty_answer(seeded, client):
     r = client.get("/api/provenance/no-such-cart-anywhere/status")
     assert r.status_code == 404, r.text

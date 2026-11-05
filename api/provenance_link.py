@@ -113,6 +113,7 @@ def modules() -> tuple | None:
         sys.path.insert(0, d)
     try:
         import journal as _journal                     # noqa: E402
+        import note_integrity as _note_integrity       # noqa: E402
         import note_store as _note_store               # noqa: E402
         import redact as _redact                       # noqa: E402
         import seat_identity as _seat_identity         # noqa: E402
@@ -121,7 +122,7 @@ def modules() -> tuple | None:
         # ⚠ APPEND ONLY. Indices are positional and `content_key_for` reads mods[4]; a
         # reorder here silently repoints that at a different module.
         _LOADED = (_journal, _note_store, _subscriptions, _seat_identity, _subcart,
-                   _redact)
+                   _redact, _note_integrity)
     except Exception as e:                             # noqa: BLE001
         _IMPORT_ERROR = f"{type(e).__name__}: {e}"
         _LOADED = None
@@ -164,6 +165,10 @@ seat_identity = _Lazy(3, "seat_identity")
 # treatment as an ingested passage. Our own corpus is the proven case: it already holds
 # an API key and OAuth tokens because nothing stood between paste and store.
 redact = _Lazy(5, "redact")
+# ⭐ Answers "did anyone remove a note from this discussion?" by reconciling notes.json
+# against the hash-chained journal, which already witnesses every note creation. No second
+# chain: the witness existed, nobody was asking it.
+note_integrity = _Lazy(6, "note_integrity")
 
 
 def availability() -> dict:
@@ -179,7 +184,8 @@ def availability() -> dict:
         "error": None if ok else (_IMPORT_ERROR or "provenance modules not loaded"),
         "modules": {
             name: ok for name in
-            ("journal", "note_store", "subscriptions", "seat_identity", "subcart", "redact")
+            ("journal", "note_store", "subscriptions", "seat_identity", "subcart",
+             "redact", "note_integrity")
         },
     }
 
