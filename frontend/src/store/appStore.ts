@@ -457,6 +457,13 @@ interface AppState {
     // header alongside source_path. Null when h-row timestamp is zero or
     // no hippocampus is present.
     ingested_at?: string | null
+    // ⭐ Server-computed provenance key for the passage ON SCREEN. Set from the search
+    // result when the modal opens, and REPLACED by /api/patterns/{idx} on every
+    // prev/next step.
+    // ⛔ It must be refreshed on navigation: keeping the opening hit's key would attach
+    // the first passage's notes to every passage walked to afterwards — a provenance
+    // feature confidently displaying the wrong provenance, which is worse than none.
+    content_key?: string | null
   } | null
   modalLoading: boolean
   openModal: (result: SearchResult) => void
@@ -1420,6 +1427,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         paper_id: result.paper_id ?? null,
         source_path: currentSource,
         ingested_at: ingestedAt,
+        // From the hit that opened the modal, so notes render immediately rather than
+        // after a round trip. navigateModal replaces it from /api/patterns/{idx}.
+        content_key: result.content_key ?? null,
       },
     })
   },
@@ -1475,6 +1485,12 @@ export const useAppStore = create<AppState>((set, get) => ({
               paper_id: null,
               source_path: currentSource,
               ingested_at: navIngestedAt,
+              // ⛔ null, not carried over. This is the BROWSER-mounted branch: the cart
+              // was never sent to a server, so nothing ever computed a key for this
+              // passage. Keeping the previous passage's key here would attach its notes
+              // to different text. Null correctly hides the Why section — see the
+              // browser-mount limitation in the posture spec.
+              content_key: null,
             },
           })
           return
@@ -1498,6 +1514,12 @@ export const useAppStore = create<AppState>((set, get) => ({
           paper_id: pattern.paper_id ?? null,
           source_path: pattern.source_path ?? prevSource,
           ingested_at: pattern.ingested_at ?? null,
+          // ⛔ NO `?? prevKey` FALLBACK, unlike source_path above. source_path falls back
+          // because a legacy cart genuinely has none and the previous value is still the
+          // right FILE. A content key is about THIS passage: falling back would silently
+          // show the previous passage's notes under different text. Absent must stay
+          // absent — the Why section hides, which is the honest outcome.
+          content_key: pattern.content_key ?? null,
         },
       })
     } catch (e) {
@@ -1528,6 +1550,12 @@ export const useAppStore = create<AppState>((set, get) => ({
           paper_id: pattern.paper_id ?? null,
           source_path: pattern.source_path ?? current.source_path ?? null,
           ingested_at: pattern.ingested_at ?? current.ingested_at ?? null,
+          // ⚠ Must be carried, and it was dropped on the first pass — which would have
+          // made the Why section VANISH the moment someone clicked "Load full passage".
+          // ⭐ The server's key is correct here even though full_text just became the
+          // long SQLite version: it is computed from the INDEXED passage, which is what
+          // the notes were written against.
+          content_key: pattern.content_key ?? current.content_key ?? null,
         },
       })
     } catch (e) {

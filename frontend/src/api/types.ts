@@ -147,6 +147,11 @@ export interface PatternResponse {
   // as ISO 8601 UTC. PassageModal renders as "ingested <date>" alongside
   // source_path. undefined/null for legacy carts.
   ingested_at?: string | null
+  // ⭐ Server-computed provenance key for THIS passage.
+  // ⛔ The modal cannot reuse the search result's key: prev/next refetches by idx, so
+  // after one click the hit it was opened from no longer describes what is on screen.
+  // The key has to arrive with the text it belongs to.
+  content_key?: string | null
 }
 
 export interface SearchResponse {
@@ -184,6 +189,13 @@ export interface StatusResponse {
   // undefined/null means "not answered yet" — see lib/posture.ts, which treats that as
   // UNKNOWN rather than defaulting to the reassuring answer.
   public_host?: boolean | null
+  // ⚠ Advisory, NOT a permission — the server decides on every write. False only when
+  // the server-wide VPS_READ_ONLY is set, which means this process does not write to disk
+  // at all. ⭐ Deliberately NOT tied to `read_only`: the mount lock guards cart CONTENT,
+  // and a note is stored beside the cart rather than in it. Requiring an unlock to
+  // comment would force the user into a more dangerous state (every passage editable) to
+  // do a safer thing.
+  notes_writable?: boolean
   // Cart-format permissions sidecar (Step 2a). Present when the cart has a
   // .permissions.json next to it. default: "r" | "rw" | "rwx".
   cart_permissions?: CartPermissions | null

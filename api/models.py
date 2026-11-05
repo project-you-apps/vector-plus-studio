@@ -137,6 +137,12 @@ class StatusResponse(BaseModel):
     # Distinct from read_only_mode: one governs WRITES, this governs whether a
     # stranger can walk the disk. Split 2026-08-06 -- see main.PUBLIC_HOST.
     public_host: bool = False
+    # ⚠ Advisory only, and NOT a permission. The mount lock is a click-to-unlock safety
+    # catch on cart CONTENT; notes are sidecars and stay writable under it (see
+    # provenance_routes.provenance_add_note for the three-way split). The UI uses this to
+    # SAY so, because a user looking at a "Read-only" badge next to a working note box is
+    # owed an explanation rather than left to guess which one is lying.
+    notes_writable: bool = True
     cart_permissions: dict | None = None  # cart-format RWX sidecar (Step 2a)
     # True when the currently-mounted cart's file lives inside the upload
     # sandbox (cartridges/_session_uploads/). UI uses this to surface an
@@ -265,6 +271,14 @@ class PatternResponse(BaseModel):
     # timestamp) and per-exchange for session-cart auto-append. None when
     # no hippocampus present or timestamp is zero.
     ingested_at: str | None = None
+    # ⭐⭐ The key the provenance layer addresses this passage by, computed SERVER-SIDE
+    # from the engine's authoritative passage — same field and same contract as
+    # SearchResult.content_key.
+    # ⛔ THE MODAL CANNOT BORROW THE SEARCH RESULT'S KEY. PassageModal's prev/next
+    # navigation refetches by idx, so after one click the hit it opened from no longer
+    # describes what is on screen. The key has to come from the same response as the text.
+    # None when the provenance layer is unavailable — honest, and distinct from "".
+    content_key: str | None = None
 
 class MessageResponse(BaseModel):
     success: bool

@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronLeft, ChevronRight, X, Loader2, FolderOpen } from 'lucide-react'
+import { ChevronLeft, ChevronRight, X, Loader2, FolderOpen, StickyNote } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import { useAppStore } from '../store/appStore'
+import { getProvenanceForResults } from '../api/client'
+import type { ProvenanceNote } from '../api/types'
+import NoteComposer from './NoteComposer'
+import NoteList from './NoteList'
 
 // Chunker overlap detection. The browser-side
 // chunker produces 300-word chunks with 50-word overlap — consecutive chunks
@@ -95,6 +99,26 @@ export default function PassageModal() {
   const currentQuery = useAppStore((s) => s.query)
   const activeLocalCart = useAppStore((s) => s.activeLocalCart)
   const localCarts = useAppStore((s) => s.localCarts)
+
+  // ── Notes for the passage currently on screen ─────────────────────────────
+  const [modalNotes, setModalNotes] = useState<ProvenanceNote[]>([])
+  const [notesNonce, setNotesNonce] = useState(0)
+  const noteCart = mountedCart ?? activeLocalCart ?? null
+  const modalKey = passage?.content_key ?? null
+
+  // ⛔ KEYED ON content_key, NOT idx. Prev/next refetches a different passage, and a
+  // notes list that lagged one passage behind would attach the previous passage's
+  // reasoning to this one's text — a provenance feature displaying the wrong provenance,
+  // which is worse than showing none.
+  useEffect(() => {
+    if (!modalKey || !noteCart) { setModalNotes([]); return }
+    let cancelled = false
+    getProvenanceForResults(noteCart, [modalKey]).then((res) => {
+      if (cancelled) return
+      setModalNotes(res?.by_key?.[modalKey]?.notes ?? [])
+    })
+    return () => { cancelled = true }
+  }, [modalKey, noteCart, notesNonce])
   const sandboxPerPatternMeta = useAppStore((s) => s.sandboxPerPatternMeta)
 
   // Resolve the per-pattern-meta array to use: prefer the active LocalCart's
@@ -514,6 +538,44 @@ export default function PassageModal() {
             </div>
           ) : (
             <div className="text-sm text-slate-500 italic">[No text available]</div>
+          )}
+
+          {/* ── Why does this say what it says? ──────────────────────────────────
+              ⭐ IN THE SAME SCROLL AS THE PASSAGE, not a sub-modal (Andy wondered about
+              a sub-modal, 2026-11-04). A modal on a modal is two Escape keys and two
+              scroll contexts, and it hides the very text you opened it to read. Reading
+              a passage and reading its reasoning should be one continuous act — which is
+              also why the composer sits here: this is where someone has actually read
+              enough to know why. */}
+          {!loading && passage.content_key && noteCart && (
+            <div className="mt-6 border-t border-slate-700/40 pt-4">
+              <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-wide text-slate-500">
+                <StickyNote size={12} className="shrink-0" />
+                <span>Why</span>
+                {modalNotes.length > 0 && (
+                  <span className="font-mono normal-case text-slate-600">
+                    {modalNotes.length}
+                  </span>
+                )}
+              </div>
+              {modalNotes.length === 0 && (
+                // ⚠ "No notes yet" rather than rendering nothing. An empty region is
+                // indistinguishable from a feature that failed to load, and this feature
+                // exists precisely to stop absence reading as fact.
+                <p className="mb-2 text-[11px] italic text-slate-600">
+                  No one has recorded why this passage says what it says.
+                </p>
+              )}
+              <NoteList notes={modalNotes} />
+              <div className="mt-2">
+                <NoteComposer
+                  cartName={noteCart}
+                  targetKey={passage.content_key}
+                  variant="panel"
+                  onSaved={() => setNotesNonce((n) => n + 1)}
+                />
+              </div>
+            </div>
           )}
         </div>
 

@@ -353,6 +353,35 @@ async def provenance_add_note(cart_name: str, payload: AddNoteRequest, request: 
     if not link.availability()["available"]:
         raise HTTPException(status_code=503, detail=link.availability()["error"])
 
+    # ── MAY THIS SERVER WRITE TO DISK AT ALL? ───────────────────────────────────────
+    # ⭐⭐ THREE DIFFERENT THINGS SAY "READ-ONLY" IN THIS APP AND THEY GET DIFFERENT
+    # ANSWERS HERE (Andy asked on 2026-11-04, looking at the header badge):
+    #
+    #   engine.read_only          the MOUNT LOCK -- a click-to-unlock safety catch on
+    #                             cart CONTENT. ⇒ NOTES ALLOWED. A note is a sidecar, not
+    #                             a passage. Blocking it would mean you must UNLOCK the
+    #                             cart -- making every passage editable -- just to write a
+    #                             comment. That forces a MORE dangerous state to do a
+    #                             SAFER thing, which inverts the control.
+    #   cart .permissions.json    per-cart "r". Also about cart content. ⇒ ALLOWED, same
+    #                             reasoning; it collapses into the mount lock anyway.
+    #   READ_ONLY_MODE            VPS_READ_ONLY, server-wide. ⇒ REFUSED, below. This one
+    #                             is not about carts at all: the operator declared that
+    #                             this process does not write to disk, and notes.json is
+    #                             disk. An operator who set it did not consent to a
+    #                             growing sidecar.
+    #
+    # ⇒ And an immutable record you may still annotate is the COMPLIANCE case, not a
+    # compromise: audit workpapers are exactly "the record is sealed, your commentary is
+    # appended alongside it". Read-only carts are where notes matter MOST.
+    from .main import READ_ONLY_MODE                  # late: avoids a circular import
+    if READ_ONLY_MODE:
+        raise HTTPException(
+            status_code=403,
+            detail="This server runs read-only (VPS_READ_ONLY), so it does not write to "
+                   "disk at all -- including note sidecars. Notes can be added on a "
+                   "writable deployment of this cart.")
+
     cart_path = _cart_path_or_404(cart_name)
 
     # ── WHO is writing ──────────────────────────────────────────────────────────────

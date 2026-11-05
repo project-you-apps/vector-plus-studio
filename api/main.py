@@ -514,6 +514,16 @@ from . import cart_access
 from . import cart_guard
 from .auth import get_current_user
 
+# ⛔ ADDED 2026-11-04 TO FIX A LATENT NameError. Two `log.warning(...)` calls were written
+# into this module on 11-04 (the content_key failure reports) against a `log` that does not
+# exist here -- this file logs with bare `print`. Both sit on EXCEPTION paths, so the
+# handler whose whole job is to report a failure would itself have raised, inside a search
+# request, in the one state it exists for. 584 tests missed it because nothing made
+# `content_key_for` raise; `test_content_key_failure_is_reported_not_raised` now does.
+import logging
+
+log = logging.getLogger("vps.api")
+
 # What a refused mount tells the caller. Wording matters more than usual here: it is read
 # by someone who believes they should have access, so each one names the fix rather than
 # just the refusal. None of them reveal whether the cart EXISTS beyond what the caller
@@ -781,6 +791,13 @@ async def get_status(request: Request,
         # Computer" off read_only_mode is what would silently restore it the day per-cart
         # write governance lets us turn VPS_READ_ONLY off.
         public_host=PUBLIC_HOST,
+        # ⭐ Deliberately NOT `not effective_read_only`. The mount lock and a per-cart "r"
+        # govern cart CONTENT; a note is a sidecar beside the cart and stays writable under
+        # both, because requiring an unlock to comment would force the user into a more
+        # dangerous state (every passage editable) to do a safer thing. Only the
+        # server-wide VPS_READ_ONLY stops notes, since that one says this process does not
+        # write to disk at all. Mirrors provenance_routes.provenance_add_note.
+        notes_writable=not READ_ONLY_MODE,
         cart_permissions=engine.cart_permissions,
         seat_attention=_seat_attention_status(),
     )
@@ -3253,6 +3270,20 @@ async def get_pattern(idx: int, _bind=Depends(bind_caller_cart), _guard=Depends(
             except Exception:
                 ingested_at = None
 
+    # ⭐ The provenance key, from the ENGINE's passage rather than `text`.
+    # ⛔ `text` may have been fetched from a SQLite sidecar on a split cart, and a key over
+    # a differently-assembled body matches nothing while raising nothing. The notes were
+    # written against the indexed passage, so the indexed passage is what gets hashed.
+    ckey = None
+    try:
+        if 0 <= idx < len(engine.passages):
+            ckey = provenance_link.content_key_for(engine.passages[idx])
+    except Exception as e:                                          # noqa: BLE001
+        # Logged, never swallowed to a bare None: "no provenance layer" and "keying blew
+        # up on this passage" look identical from the client and need different fixes.
+        ckey = None
+        log.warning("content_key failed for pattern %d: %s: %s", idx, type(e).__name__, e)
+
     return PatternResponse(
         idx=idx, title=title, preview=preview, full_text=text,
         prev_idx=prev_idx, next_idx=next_idx,
@@ -3260,6 +3291,7 @@ async def get_pattern(idx: int, _bind=Depends(bind_caller_cart), _guard=Depends(
         perms=perms,
         source_path=source_path,
         ingested_at=ingested_at,
+        content_key=ckey,
     )
 
 

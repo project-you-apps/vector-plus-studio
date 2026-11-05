@@ -218,3 +218,42 @@ def test_the_key_written_matches_the_key_read_back(cart, client, monkeypatch):
 def test_an_unknown_kind_is_422_not_a_stored_junk_note(cart, client, monkeypatch):
     _as(monkeypatch, "commenter")
     assert _post(client, kind="whatever").status_code == 422
+
+
+# ── read-only: three different things say it, and they get different answers ─────────
+
+def test_a_LOCKED_cart_can_still_be_annotated(cart, client, monkeypatch):
+    """⭐⭐ ANDY'S QUESTION, 2026-11-04: should a read-only document accept a WHY?
+
+    YES for the MOUNT LOCK. It is a click-to-unlock safety catch on cart CONTENT, and a
+    note is a sidecar beside the cart. ⛔ Refusing here would mean you must UNLOCK the
+    cart -- making every passage editable -- just to write a comment: a more dangerous
+    state required to do a safer thing, which inverts the control. An immutable record you
+    may still annotate is the audit-workpaper shape, not a compromise.
+    """
+    from api import main as main_mod
+    monkeypatch.setattr(main_mod.engine, "read_only", True, raising=False)
+    _as(monkeypatch, "commenter")
+    r = _post(client)
+    assert r.status_code == 201, f"a locked cart refused a note: {r.text}"
+
+
+def test_a_SERVER_WIDE_read_only_refuses_notes(cart, client, monkeypatch):
+    """⛔ The other answer. VPS_READ_ONLY is not about carts: the operator declared that
+    this process does not write to disk, and notes.json is disk. An operator who set it
+    did not consent to a growing sidecar."""
+    from api import main as main_mod
+    monkeypatch.setattr(main_mod, "READ_ONLY_MODE", True)
+    _as(monkeypatch, "commenter")
+    r = _post(client)
+    assert r.status_code == 403, r.text
+    assert "read-only" in r.text.lower()
+
+
+def test_the_server_wide_refusal_wrote_NOTHING(cart, client, monkeypatch):
+    """Existence is not operation: a 403 proves the response, not the file."""
+    from api import main as main_mod
+    monkeypatch.setattr(main_mod, "READ_ONLY_MODE", True)
+    _as(monkeypatch, "commenter")
+    _post(client)
+    assert link.modules()[1].load(str(cart)).get("notes", []) == []
