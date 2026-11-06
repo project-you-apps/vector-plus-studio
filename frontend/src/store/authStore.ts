@@ -181,6 +181,36 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   signOut: async () => {
+    // ⭐⭐ DROP THE BROWSER-MOUNTED CART **BEFORE** THE SESSION GOES (Andy, 2026-11-05:
+    // "VPS is still not dismounting a mounted cart on logout").
+    //
+    // ⚠ ONLY THE BROWSER-MOUNTED ONE, AND THE DISTINCTION IS THE WHOLE DESIGN:
+    //
+    //   activeLocalCart  lives in THIS browser tab. Nobody else can see it, so dropping
+    //                    it on sign-out costs no one anything. It is also the one that
+    //                    visibly survived a sign-out, because it was never the server's
+    //                    to unmount.
+    //   engine (server)  is a PROCESS-LEVEL SINGLETON with exactly one mounted cart,
+    //                    shared by every caller. ⛔ Unmounting that on sign-out would let
+    //                    any user yank the cart out from under everyone else by logging
+    //                    out — a one-click denial of service wearing a courtesy's
+    //                    clothes. That case needs the occupancy design (Andy, 2026-08-06:
+    //                    differential idle TTL + Page-Visibility heartbeat + absolute
+    //                    cap), which unmounts when NOBODY is there rather than when ONE
+    //                    person leaves.
+    //
+    // ⚠ Awaited BEFORE signOut so the cart is gone even if the network call hangs or
+    // throws: a sign-out that half-completed must not leave someone else's corpus open
+    // on screen. Lazy import for the same cycle reason as refetchCartsForNewIdentity.
+    try {
+      const m = await import('./appStore')
+      if (m.useAppStore.getState().activeLocalCart) {
+        m.useAppStore.getState().unmountLocalCart()
+      }
+    } catch {
+      /* Never block sign-out on this. Failing to clear a local cart is bad; failing to
+         sign out because clearing it threw is worse. */
+    }
     await supabase.auth.signOut()
     set({ user: null, session: null })
   },
