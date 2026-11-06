@@ -36,6 +36,38 @@ interface AuthState {
   signInWithMagicLink: (email: string) => Promise<{ error: string | null }>
 
   signOut: () => Promise<void>
+
+  /**
+   * Progress of a sign-out in flight, for SignOutModal. null when idle.
+   *
+   * ⭐ REPORTS REAL STATE, NEVER A FAKE WAIT. Andy asked for a modal saying "do not close
+   * until the cartridge is dismounted" to mask the delay — but the unmount is a
+   * SYNCHRONOUS store update with no delay to mask. A modal waiting on something already
+   * finished is theater, and the user who notices stops trusting every other progress
+   * indicator we show them.
+   *
+   * ⇒ The real delay is `supabase.auth.signOut()`, a network round trip, and that is
+   * what this covers. Each step flips when that step actually completes.
+   *
+   * ⚠ The shape anticipates the server-side unmount (Andy's 2026-08-06 occupancy design),
+   * which WILL be slow because it drops a multi-GB mount. When that lands it becomes a
+   * third step here and the modal earns its original wording honestly.
+   */
+  signOutState: SignOutState | null
+  /** Dismiss the modal. ⛔ X only — Andy's 2026-02-26 ruling: modals close on an explicit
+   *  X or CLOSE, never on a timer. */
+  dismissSignOut: () => void
+}
+
+export interface SignOutState {
+  /** Was a browser-mounted cart cleared? false when none was open. */
+  hadCart: boolean
+  cartCleared: boolean
+  /** The network call to Supabase — the step with the actual latency. */
+  sessionEnded: boolean
+  /** Non-null when sign-out failed. ⚠ Shown, never swallowed: a user who believes they
+   *  signed out and did not is in a worse position than one who sees an error. */
+  error: string | null
 }
 
 // Post-auth landing URL.
@@ -202,16 +234,41 @@ export const useAuthStore = create<AuthState>((set) => ({
     // ⚠ Awaited BEFORE signOut so the cart is gone even if the network call hangs or
     // throws: a sign-out that half-completed must not leave someone else's corpus open
     // on screen. Lazy import for the same cycle reason as refetchCartsForNewIdentity.
+    set({ signOutState: { hadCart: false, cartCleared: false, sessionEnded: false, error: null } })
     try {
       const m = await import('./appStore')
-      if (m.useAppStore.getState().activeLocalCart) {
-        m.useAppStore.getState().unmountLocalCart()
-      }
+      const hadCart = !!m.useAppStore.getState().activeLocalCart
+      if (hadCart) m.useAppStore.getState().unmountLocalCart()
+      set({ signOutState: { hadCart, cartCleared: true, sessionEnded: false, error: null } })
     } catch {
       /* Never block sign-out on this. Failing to clear a local cart is bad; failing to
-         sign out because clearing it threw is worse. */
+         sign out because clearing it threw is worse. The step still reports done: the
+         cart is either gone or was never there, and neither is worth stalling on. */
+      set({ signOutState: { hadCart: false, cartCleared: true, sessionEnded: false, error: null } })
     }
-    await supabase.auth.signOut()
-    set({ user: null, session: null })
+
+    try {
+      await supabase.auth.signOut()
+    } catch (e) {
+      // ⛔ SURFACED, NOT SWALLOWED. A failed sign-out that looks successful leaves someone
+      // walking away from a machine they believe is signed out. The modal stays open on
+      // the error for exactly that reason.
+      const msg = e instanceof Error ? e.message : 'sign-out failed'
+      set((s) => ({
+        user: null, session: null,
+        signOutState: { ...(s.signOutState ?? { hadCart: false, cartCleared: true }),
+                        sessionEnded: false, error: msg } as SignOutState,
+      }))
+      return
+    }
+
+    set((s) => ({
+      user: null, session: null,
+      signOutState: { ...(s.signOutState ?? { hadCart: false, cartCleared: true }),
+                      sessionEnded: true, error: null } as SignOutState,
+    }))
   },
+
+  signOutState: null,
+  dismissSignOut: () => set({ signOutState: null }),
 }))

@@ -20,6 +20,7 @@ import SQLEditorScreen from './components/SQLEditorScreen'
 import ProfileScreen from './components/ProfileScreen'
 import FolderPickerModal from './components/FolderPickerModal'
 import SignInModal from './components/SignInModal'
+import SignOutModal from './components/SignOutModal'
 import DesktopHelperPairModal from './components/DesktopHelperPairModal'
 import CookieBanner from './components/CookieBanner'
 import Toaster from './components/Toaster'
@@ -165,6 +166,9 @@ export default function App() {
           from both Search + Edit Carts. Self-guards on editorOpen. */}
       <PassageEditor />
       <SignInModal />
+      {/* Sign-out progress. App-level so it survives whatever screen the user was on when
+          they signed out — the nav rail and screens can re-render underneath it. */}
+      <SignOutModal />
       <DesktopHelperPairModal />
       <CookieBanner />
       {/* Build + deployment posture moved into NavRail 2026-11-04, under Settings —
