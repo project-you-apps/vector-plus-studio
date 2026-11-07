@@ -11,6 +11,7 @@ import { _registerReportBuilderStateReader } from '../api/client'
 import { detectWebGPU, runWebGpuAssociate, loadBrainForCart, isBrainLoadedFor } from '../lib/webgpuAssociate'
 import { parseCartFile, cosineSearchLocal } from '../lib/localCart'
 import { apiHeaders } from '../api/client'
+import { setViewingCart } from '../lib/tabSession'
 
 // Pattern-0 metadata baked into a browser-built cart. Mirrors the shape of
 // api.getCartPattern0's Pattern0Response so Pattern0TocPanel can consume it
@@ -885,6 +886,24 @@ export const useAppStore = create<AppState>((set, get) => ({
           return trimmed || `passage_${i}`
         })
       }
+      // ⛔⛔ STOP CLAIMING PRESENCE ON A SERVER CART WE ARE NO LONGER LOOKING AT.
+      //
+      // `X-VPS-Cart` comes from tabSession.viewingCart(), which is set ONLY by the
+      // server-mount path. Opening a cart from disk left the old value in place, so the
+      // tab went on telling the server it was viewing the last SERVER cart -- and two
+      // such tabs showed each other an "Also here" pill for a cart neither was in.
+      // Found 2026-11-07 when Andy saw the pill in a local-local pairing, which should be
+      // impossible: a browser-mounted cart has no server presence at all.
+      //
+      // ⚠ NULL, NOT THE LOCAL CART'S NAME. Presence is a server-side notion, and this
+      // cart never reached the server. Sending its filename would also leak the name of a
+      // file we promise never leaves the browser -- a small disclosure, and precisely the
+      // kind this path exists to avoid.
+      //
+      // ⓘ Same phantom as 2026-08-13 (see api/client.ts cartHeaders): fixed then on the
+      // mount path, never wired into mountLocalCart.
+      setViewingCart(null)
+
       const next = new Map(get().localCarts)
       next.set(cart.name, cart)
       set({
@@ -907,6 +926,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   unmountLocalCart: () => {
+    // Belt and braces: mountLocalCart already nulls this, but an unmount must never leave
+    // a presence claim standing for a cart this tab is demonstrably not in.
+    setViewingCart(null)
     set({
       activeLocalCart: null,
       results: [],
@@ -931,6 +953,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   purgeLocalCarts: () => {
+    // ⛔ On sign-out especially: a stale X-VPS-Cart would have the NEXT person's tab
+    // announcing presence on the PREVIOUS person's cart.
+    setViewingCart(null)
     // ⛔⛔ EVERYTHING THE PREVIOUS PERSON OPENED, GONE. Called on sign-out.
     //
     // WHY (Andy, 2026-11-06): he signed out as Susie and signed in as Betty, and Susie's
