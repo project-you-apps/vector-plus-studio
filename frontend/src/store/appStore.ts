@@ -353,6 +353,10 @@ interface AppState {
   localCartLoading: boolean
   mountLocalCart: (file: File) => Promise<{ success: boolean; message: string }>
   unmountLocalCart: () => void
+  /** Drop EVERY browser-opened cart and all derived view state. For sign-out.
+   *  ⛔ Not the same as unmountLocalCart, which deliberately keeps parsed carts so
+   *  re-selecting one is instant. Across an identity change that retention is a leak. */
+  purgeLocalCarts: () => void
   selectLocalCart: (name: string) => void
   // LocalCart edit operations (Edit Carts must work on
   // browser-mounted carts on the public droplet). Each operation mutates the
@@ -912,10 +916,50 @@ export const useAppStore = create<AppState>((set, get) => ({
       walkTrail: [],
       showTocPanel: true,
     })
+    // ⛔ DELIBERATELY DOES NOT DROP `localCarts`. Unmounting is "stop looking at this",
+    // not "forget you opened it" -- the parsed cart stays so re-selecting it from the
+    // dropdown is instant instead of a multi-second re-parse of a 6 MB file.
+    //
+    // ⚠ THAT IS WRONG ON SIGN-OUT, and `purgeLocalCarts()` below exists for that case.
+    // See its comment: the next person at this browser must not find the previous
+    // person's cart sitting in a list, parsed and one click from being searched.
     // Signal every subscribed tab that the mounted-cart identity changed,
     // matching the backend unmount path. Ensures Search's Pattern-0 TOC
     // + results refresh on the next tab visit even when the user unmounts
     // via the Header pill or the Search dropdown while sitting elsewhere.
+    get().bumpCartVersion()
+  },
+
+  purgeLocalCarts: () => {
+    // ⛔⛔ EVERYTHING THE PREVIOUS PERSON OPENED, GONE. Called on sign-out.
+    //
+    // WHY (Andy, 2026-11-06): he signed out as Susie and signed in as Betty, and Susie's
+    // search results came back on screen. `unmountLocalCart` cleared the ACTIVE cart and
+    // the results, but left the fully-parsed cart -- embeddings and all passages -- in
+    // `localCarts`, where it stayed listed under "On Your Computer". Betty arrived at a
+    // browser offering her a cart she never opened, one click from searching it.
+    //
+    // ⚠ The retention was deliberate and right for its original purpose (re-selecting a
+    // cart should not re-parse 6 MB). It is simply wrong across an identity change, which
+    // is a case the original rule never considered.
+    //
+    // ⭐ A NEW Map rather than .clear(): the existing one may be referenced by a render in
+    // flight, and mutating it in place would leave React comparing a Map to itself and
+    // skipping the update -- the list would stay on screen while the data was gone.
+    set({
+      localCarts: new Map(),
+      activeLocalCart: null,
+      results: [],
+      query: '',
+      searchModeLabel: '',
+      searchElapsed: 0,
+      walkTrail: [],
+      showTocPanel: true,
+      // Modal and editor hold a passage from the cart that just disappeared.
+      modalOpen: false,
+      modalPassage: null,
+      editorOpen: false,
+    })
     get().bumpCartVersion()
   },
 

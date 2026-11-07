@@ -237,8 +237,14 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ signOutState: { hadCart: false, cartCleared: false, sessionEnded: false, error: null } })
     try {
       const m = await import('./appStore')
-      const hadCart = !!m.useAppStore.getState().activeLocalCart
-      if (hadCart) m.useAppStore.getState().unmountLocalCart()
+      const st = m.useAppStore.getState()
+      // ⛔ PURGE, not unmount. `unmountLocalCart` leaves every parsed cart in `localCarts`
+      // on purpose, so re-selecting one is instant rather than a multi-second re-parse.
+      // Across a SIGN-OUT that is a leak: Andy signed out as Susie, signed in as Betty,
+      // and Susie's cart was still sitting in the dropdown under "On Your Computer" --
+      // parsed, and one click from being searched by someone who never opened it.
+      const hadCart = !!st.activeLocalCart || st.localCarts.size > 0
+      st.purgeLocalCarts()
       set({ signOutState: { hadCart, cartCleared: true, sessionEnded: false, error: null } })
     } catch {
       /* Never block sign-out on this. Failing to clear a local cart is bad; failing to
