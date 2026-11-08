@@ -15,6 +15,28 @@ import type { ProvenanceNote } from '../api/types'
  * dark-only Tailwind utilities: this app has no `dark:` variants, and that is what made
  * the posture chip illegible in light mode earlier the same day.
  */
+/**
+ * Who to show as the author. ⛔ NEVER the raw seat UUID.
+ *
+ * A note read "— 2301149e-e6a4-43b4-b9ef-f41c8462c1c0" on 2026-11-07, which is worse than
+ * ugly on a provenance record: the entire value of a note is WHO said it, and a UUID
+ * answers that with noise. It also breaks the NAMES ONLY, NEVER KEYS rule the occupancy
+ * pill already follows — a seat id on screen is a disclosure to everyone who reads it.
+ *
+ * `by_name` is resolved server-side from a cache of seats seen since boot, so it can be
+ * absent for a legitimately old note. ⚠ The fallback is a SHORT prefix, not the whole
+ * UUID: enough to tell two unknown authors apart, not enough to be a usable seat id, and
+ * visibly not a person's name so nobody mistakes it for one.
+ */
+function authorLabel(n: ProvenanceNote): string {
+  const name = (n.by_name ?? '').trim()
+  if (name) return name
+  const seat = (n.by ?? '').trim()
+  if (!seat) return 'unknown'
+  if (seat === 'local-studio') return 'this install'
+  return `seat ${seat.slice(0, 6)}…`
+}
+
 export default function NoteList({ notes }: { notes: ProvenanceNote[] }) {
   if (!notes || notes.length === 0) return null
   return (
@@ -33,7 +55,7 @@ export default function NoteList({ notes }: { notes: ProvenanceNote[] }) {
               {n.body}
             </span>
             <span className="provenance-note-by ml-1.5 font-mono text-[10px]">
-              — {n.by}{n.scope === 'private' ? ' (private)' : ''}
+              — {authorLabel(n)}{n.scope === 'private' ? ' (private)' : ''}
               {n.superseded ? ' · superseded' : ''}
             </span>
           </span>

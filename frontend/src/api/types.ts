@@ -68,7 +68,11 @@ export interface ProvenanceNote {
   kind: 'why' | 'context' | 'caution' | 'decision' | 'prediction' | string
   body: string
   scope: 'private' | 'shared' | string
+  /** ⛔ The seat UUID. This is IDENTITY — render `by_name` instead. */
   by: string
+  /** Human label resolved server-side at presentation time. Absent when that seat has not
+   *  been seen since the backend booted (the resolver is a cache, not a record). */
+  by_name?: string | null
   surface: string
   at: number
   supersedes?: string

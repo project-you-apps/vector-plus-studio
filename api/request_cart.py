@@ -269,6 +269,32 @@ def remember_display_name(view: str, name: Optional[str]) -> None:
     _display_names[view] = name
 
 
+def name_for_seat(seat: Optional[str]) -> Optional[str]:
+    """What to call this seat on screen, or None if this process has not seen them.
+
+    ⭐ WHY THIS EXISTS (2026-11-07): a provenance note stores `by` as the seat UUID,
+    correctly — identity is the UUID precisely so a rename cannot re-point someone's
+    history. But the UI was RENDERING that UUID, so a note read
+    "— 2301149e-e6a4-43b4-b9ef-f41c8462c1c0" instead of "— Betty Alvarez".
+
+    ⛔ That breaks the rule `occupants_of` already states for the pill: NAMES ONLY, NEVER
+    KEYS. A seat UUID on screen is noise to a person and a seat disclosure to everyone
+    else — and on a provenance record it defeats the point, since the whole value of the
+    note is WHO said it.
+
+    ⚠ CACHE, NOT A RECORD, and the caller must treat None as normal. This only knows seats
+    that have made a request since the process booted, so a note written by someone who
+    has not been active today will not resolve. ⇒ Callers fall back to something honest,
+    never to the raw UUID.
+
+    ⬜ The profiles table holds the real names (see the TODO on display_name_for). Reading
+    it here would make this complete rather than opportunistic, at the cost of a lookup.
+    """
+    if not seat:
+        return None
+    return _display_names.get(f"seat:{seat}")
+
+
 def presence_key(request: Request) -> str:
     """Identifies a TAB, not an identity.
 

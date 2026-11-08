@@ -61,6 +61,7 @@ from pydantic import BaseModel, Field
 
 from . import cart_access
 from . import cart_guard
+from . import request_cart
 from . import provenance_link as link
 from .auth import get_current_user
 from .cartridge_io import find_cartridge_path, name_candidates
@@ -152,6 +153,28 @@ def _seat(user) -> str:
     are" must never widen to "here is everyone's private reasoning".
     """
     return seat_id(user) or ""
+
+
+def _named(note: dict) -> dict:
+    """Add `by_name` beside `by`. ⭐ ADDS, never replaces.
+
+    `by` stays the seat UUID because that IS the identity — `register_office.sql` puts it
+    plainly: a name is "resolved at PRESENTATION time and is never identity, precisely so
+    a rename cannot re-point someone's history." So the label travels as a separate field
+    and the stored record is untouched.
+
+    ⛔ WHY (2026-11-07): the UI was rendering `by` directly, so a note read
+    "— 2301149e-e6a4-43b4-b9ef-f41c8462c1c0". On a provenance record that is worse than
+    ugly — the entire value of the note is WHO said it — and it breaks the NAMES ONLY,
+    NEVER KEYS rule `occupants_of` already states for the occupancy pill.
+
+    ⚠ None when this process has not seen that seat since boot (the resolver is a cache).
+    The client falls back to something honest rather than to the UUID.
+    """
+    if not isinstance(note, dict):
+        return note
+    name = request_cart.name_for_seat(note.get("by"))
+    return dict(note, by_name=name) if name else note
 
 
 def _note_integrity(cart_path: str) -> dict:
@@ -292,7 +315,7 @@ async def provenance_for_results(cart_name: str, payload: ForResultsRequest,
     for k in wanted:
         by_key[k] = {
             "provenance": prov_by_key.get(k, []),
-            "notes": notes_by_key.get(k, []),
+            "notes": [_named(n) for n in notes_by_key.get(k, [])],
         }
 
     return {
@@ -331,7 +354,7 @@ async def provenance_notes(cart_name: str, request: Request,
         "provenance_available": True,
         "cart": cart_name,
         "notes_readable": True,
-        "notes": [dict(n, superseded=(n.get("id") in superseded)) for n in notes],
+        "notes": [_named(dict(n, superseded=(n.get("id") in superseded))) for n in notes],
     }
 
 
