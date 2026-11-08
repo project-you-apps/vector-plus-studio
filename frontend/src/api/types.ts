@@ -100,7 +100,11 @@ export interface AddNoteResponse {
 export interface ProvenanceEntry {
   seq: number
   op: string
+  /** ⛔ The seat UUID. This is IDENTITY — render `writer_name` instead. */
   writer: string
+  /** Human label resolved server-side. Absent when that seat has not been seen since the
+   *  backend booted. */
+  writer_name?: string | null
   surface: string
   event_ts: number
   ingest_ts: number

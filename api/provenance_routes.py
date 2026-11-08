@@ -155,6 +155,21 @@ def _seat(user) -> str:
     return seat_id(user) or ""
 
 
+def _named_entry(entry: dict) -> dict:
+    """Add `writer_name` beside `writer` on a journal entry. Same contract as `_named`.
+
+    ⛔ MISSED ON THE FIRST PASS (2026-11-07). The note's author was resolved and the
+    journal entry's writer, which renders ONE LINE ABOVE IT on the same card, was not —
+    so a result read "annotated by 2301149e-e6a4-43b4-b9ef-f41c8462c1c0 (verified)" with
+    a named author directly underneath. Two components, one screen, one fix applied to
+    half of it.
+    """
+    if not isinstance(entry, dict):
+        return entry
+    name = request_cart.name_for_seat(entry.get("writer"))
+    return dict(entry, writer_name=name) if name else entry
+
+
 def _named(note: dict) -> dict:
     """Add `by_name` beside `by`. ⭐ ADDS, never replaces.
 
@@ -314,7 +329,7 @@ async def provenance_for_results(cart_name: str, payload: ForResultsRequest,
     by_key = {}
     for k in wanted:
         by_key[k] = {
-            "provenance": prov_by_key.get(k, []),
+            "provenance": [_named_entry(e) for e in prov_by_key.get(k, [])],
             "notes": [_named(n) for n in notes_by_key.get(k, [])],
         }
 

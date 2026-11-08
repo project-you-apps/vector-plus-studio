@@ -213,6 +213,18 @@ function identityLabel(e: ProvenanceEntry): string {
   return 'unverified'
 }
 
+/** Who to show as the writer of a journal entry. ⛔ Never the raw seat UUID.
+ *  Mirrors `authorLabel` in NoteList — the two render one line apart on the same card and
+ *  must agree, which is exactly what went wrong when only one of them was fixed. */
+function writerLabel(e: ProvenanceEntry): string {
+  const name = (e.writer_name ?? '').trim()
+  if (name) return name
+  const seat = (e.writer ?? '').trim()
+  if (!seat) return 'unknown'
+  if (seat === 'local-studio') return 'this install'
+  return `seat ${seat.slice(0, 6)}…`
+}
+
 const OP_VERB: Record<string, string> = {
   store: 'stored',
   note: 'annotated',
@@ -403,7 +415,11 @@ export default function ResultCard({
                   <History size={10} className="shrink-0" />
                   <span>{OP_VERB[e.op] ?? e.op}</span>
                   <span className="text-slate-600">by</span>
-                  <span className="font-mono text-slate-400">{e.writer}</span>
+                  {/* ⛔ writer_name, never `writer`. The raw seat UUID is noise to a
+                      reader and a seat disclosure to everyone else — the same NAMES ONLY,
+                      NEVER KEYS rule the occupancy pill follows. Falls back to a short
+                      prefix so two unknown writers stay distinguishable. */}
+                  <span className="font-mono text-slate-400">{writerLabel(e)}</span>
                   {/* ⚠ The identity label is never omitted. A reader who cannot tell a
                       verified actor from a claimed one is being told something false by
                       the absence. */}
