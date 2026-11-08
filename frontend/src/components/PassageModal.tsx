@@ -279,6 +279,24 @@ export default function PassageModal() {
   useEffect(() => {
     if (!modalOpen) return
     const handler = (e: KeyboardEvent) => {
+      // ⛔ ARROWS NAVIGATE THE MODAL, SO THEY MUST NOT WHILE SOMEONE IS TYPING.
+      //
+      // Found 2026-11-08: moving the cursor inside the "add why" textarea jumped to the
+      // PREVIOUS or NEXT passage instead — losing the half-written note and landing the
+      // reader somewhere else entirely. This listener is on `window`, so it fires however
+      // deep the focused field is.
+      //
+      // ⚠ Escape is handled differently ON PURPOSE. In a field it should dismiss what you
+      // are doing, not the whole modal, so it is left to the composer's own cancel and we
+      // simply do not close here. Closing the modal out from under a half-typed note is
+      // the same data loss by a different key.
+      const el = document.activeElement as HTMLElement | null
+      const typing = !!el && (
+        el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' ||
+        el.tagName === 'SELECT' || el.isContentEditable
+      )
+      if (typing) return
+
       if (e.key === 'Escape') closeModal()
       if (e.key === 'ArrowLeft') handleNavPrev()
       if (e.key === 'ArrowRight') handleNavNext()
