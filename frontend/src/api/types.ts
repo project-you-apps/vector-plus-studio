@@ -65,7 +65,9 @@ export interface SearchResult {
 export interface ProvenanceNote {
   id: string
   target_key: string
-  kind: 'why' | 'context' | 'caution' | 'decision' | 'prediction' | string
+  // ⚠ `| string` is deliberate: a cart written by a newer membot can carry a kind this
+  // build has never heard of, and refusing to render it would hide a real note.
+  kind: 'why' | 'context' | 'caution' | 'decision' | 'prediction' | 'recommendation' | string
   body: string
   scope: 'private' | 'shared' | string
   /** ⛔ The seat UUID. This is IDENTITY — render `by_name` instead. */

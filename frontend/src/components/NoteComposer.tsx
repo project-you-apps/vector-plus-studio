@@ -17,7 +17,12 @@ import type { ProvenanceNote } from '../api/types'
 
 export type NoteKind = ProvenanceNote['kind']
 
-const KINDS: NoteKind[] = ['why', 'decision', 'caution', 'context', 'prediction']
+// ⚠ Must stay in step with note_store.VALID_KINDS — the server rejects an unknown kind
+// with a 422, so a mismatch here is a save that fails only when someone picks the new one.
+// ⭐ Ordered by how often they are reached for, not alphabetically.
+const KINDS: NoteKind[] = [
+  'why', 'decision', 'recommendation', 'caution', 'context', 'prediction',
+]
 
 interface Props {
   cartName: string | null | undefined
