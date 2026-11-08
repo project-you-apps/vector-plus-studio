@@ -187,6 +187,32 @@ def test_a_broken_chain_withholds_entries_and_says_so(seeded, client):
     assert body["by_key"][key]["notes"], "the notes were suppressed along with the entries"
 
 
+def test_for_results_marks_a_superseded_note(seeded, client):
+    """⛔⛔ THE REGRESSION. `superseded` was computed only in GET /notes, a route the UI
+    never calls — so every surface a person uses got notes with no flag and the
+    strikethrough could never fire. A correction recorded perfectly and displayed as a
+    second opinion with nothing saying which was current.
+
+    ⭐ for-results is THE route the cards and the modal use, so this is the one that
+    matters."""
+    mods = link.modules()
+    note_store = mods[1]
+    cart, key = str(seeded["cart"]), seeded["key"]
+
+    first = note_store.add_note(cart, key, "decision", "Retention is 5 years.",
+                                by=SEAT_A, surface="WEB", scope="shared")
+    second = note_store.supersede(cart, first["id"], "Retention is 7 years — FDICIA.",
+                                  by=SEAT_A, surface="WEB")
+
+    body = client.post(f"/api/provenance/{CART_NAME}/for-results",
+                       json={"passages": [PASSAGE]}).json()
+    notes = {n["id"]: n for n in body["by_key"][key]["notes"]}
+
+    assert first["id"] in notes, "the superseded note was dropped rather than marked"
+    assert notes[first["id"]]["superseded"] is True, "no strikethrough would render"
+    assert notes[second["id"]]["superseded"] is False, "the correction marked itself"
+
+
 def test_status_reconciles_notes_against_the_journal(seeded, client):
     """⭐ The seeded cart has two notes written by note_store DIRECTLY, with no matching
     journal entries, so they are unwitnessed: `ok` (nothing removed) but NOT `attested`."""

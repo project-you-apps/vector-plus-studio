@@ -308,7 +308,21 @@ async def provenance_for_results(cart_name: str, payload: ForResultsRequest,
     notes_by_key: dict = {}
     if wanted:
         try:
-            notes_by_key = link.note_store.for_results(cart_path, wanted, seat=seat) or {}
+            # ⭐⭐ include_superseded=True — DEFAULT IS SHOW (Andy, 2026-11-07).
+            #
+            # ⛔ `for_results` omits corrected notes by default, reasoning that "on
+            # delivery the reader wants the current why". That contradicted the 11-04
+            # ruling that notes are permanent and a superseded one renders STRUCK THROUGH
+            # AND KEPT — and NoteList implements the strikethrough, which could therefore
+            # never fire. Two halves of one feature, written days apart, each confidently
+            # commented, disagreeing about whether a corrected note exists.
+            #
+            # ⭐ Andy settled it: show by default, and the USER toggles them off. Same rule
+            # as the display toggle generally — a default that hides corrections makes the
+            # record look clean, and "looks clean" is what an audit trail must never
+            # manufacture.
+            notes_by_key = link.note_store.for_results(
+                cart_path, wanted, seat=seat, include_superseded=True) or {}
         except Exception as e:                         # noqa: BLE001
             log.error("note_store.for_results failed: %s", e)
             notes_by_key = {}
@@ -326,11 +340,35 @@ async def provenance_for_results(cart_name: str, payload: ForResultsRequest,
             log.error("journal.for_results failed: %s", e)
             prov_by_key = {}
 
+    # ⛔⛔ `superseded` MUST BE DERIVED HERE TOO (fixed 2026-11-07).
+    #
+    # It was computed only in GET /{cart}/notes — a route NOTHING in the UI calls. So every
+    # surface a person actually uses received notes with no `superseded` flag, and the
+    # strikethrough could never fire. A correction recorded perfectly and displayed as a
+    # second opinion sitting beside the first, with nothing saying which was current.
+    #
+    # ⚠ Derived across ALL of this seat's visible notes, not per key: `supersedes` points
+    # at a note id, and nothing guarantees the superseding note targets the same passage.
+    # Deriving per-key would miss a correction written against a neighbouring chunk.
+    #
+    # ⭐ Still DERIVED, never stored — `superseded_ids` reads the links. A stored flag
+    # would mean editing the old note, which is the thing the whole design refuses.
+    try:
+        all_visible = link.note_store.list_notes(cart_path, seat=seat)
+        superseded = link.note_store.superseded_ids(all_visible)
+    except Exception as e:                             # noqa: BLE001
+        # ⚠ Loud. Silently empty here means "nothing was ever corrected", which is a
+        # claim about the record rather than a missing nicety.
+        log.warning("superseded_ids failed for %s: %s: %s",
+                    cart_name, type(e).__name__, e)
+        superseded = set()
+
     by_key = {}
     for k in wanted:
         by_key[k] = {
             "provenance": [_named_entry(e) for e in prov_by_key.get(k, [])],
-            "notes": [_named(n) for n in notes_by_key.get(k, [])],
+            "notes": [_named(dict(n, superseded=(n.get("id") in superseded)))
+                      for n in notes_by_key.get(k, [])],
         }
 
     return {
