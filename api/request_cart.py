@@ -332,6 +332,10 @@ def upgrade_display_name(seat: Optional[str], token: str) -> None:
         rows = (client.table("profiles").select("*").eq("id", seat).limit(1)
                 .execute().data) or []
         if not rows:
+            # ⚠ Also loud. "No profile row readable for this seat" is a DIFFERENT fact from
+            # "the query blew up", and both arrive here as an unchanged email on screen.
+            log.warning("no readable profiles row for seat %s — label stays the JWT email",
+                        seat)
             return
         name = profile_display_name(rows[0])
         # ⚠ "Unknown" is display_name_for's own fallback, not a name. Storing it would
@@ -340,7 +344,12 @@ def upgrade_display_name(seat: Optional[str], token: str) -> None:
             _profile_tried[seat] = name
             remember_display_name(f"seat:{seat}", name)
     except Exception as e:                                      # noqa: BLE001
-        log.debug("profile name lookup failed for %s: %s: %s", seat, type(e).__name__, e)
+        # ⚠ WARNING, not debug. It was debug, which is invisible by default -- so when the
+        # lookup silently failed on 2026-11-07 there was nothing to read, and the symptom
+        # (an email where a name should be) is indistinguishable from "no profile row".
+        # Once per seat per process, so this cannot spam.
+        log.warning("profile name lookup failed for seat %s: %s: %s",
+                    seat, type(e).__name__, e)
 
 
 def name_for_seat(seat: Optional[str]) -> Optional[str]:

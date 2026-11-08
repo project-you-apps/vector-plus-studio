@@ -452,6 +452,7 @@ export default function ResultCard({
             <NoteComposer
               cartName={cartName}
               targetKey={result.content_key}
+              existingNotes={provenance?.notes}
               onSaved={() => onNoteAdded?.()}
             />
           </div>

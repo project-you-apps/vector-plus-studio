@@ -571,6 +571,7 @@ export default function PassageModal() {
                 <NoteComposer
                   cartName={noteCart}
                   targetKey={passage.content_key}
+                  existingNotes={modalNotes}
                   variant="panel"
                   onSaved={() => setNotesNonce((n) => n + 1)}
                 />

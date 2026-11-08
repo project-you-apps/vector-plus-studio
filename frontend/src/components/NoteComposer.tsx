@@ -32,13 +32,25 @@ interface Props {
   onSaved?: () => void
   /** 'inline' for the result card, 'panel' for the roomier modal. */
   variant?: 'inline' | 'panel'
+  /**
+   * Notes already on this passage, offered as supersede targets.
+   *
+   * ⛔ WITHOUT THIS THERE IS NO WAY TO CORRECT A NOTE AT ALL (found 2026-11-07). The
+   * route, the client and the renderer all supported `supersedes`; only the composer
+   * had no control, so every correction became a second unlinked note and the original
+   * never struck through. The append-only design was complete and unreachable.
+   */
+  existingNotes?: ProvenanceNote[]
 }
 
-export default function NoteComposer({ cartName, targetKey, onSaved, variant = 'inline' }: Props) {
+export default function NoteComposer({
+  cartName, targetKey, onSaved, variant = 'inline', existingNotes,
+}: Props) {
   const [open, setOpen] = useState(false)
   const [body, setBody] = useState('')
   const [kind, setKind] = useState<NoteKind>('why')
   const [shared, setShared] = useState(false)
+  const [supersedes, setSupersedes] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [redacted, setRedacted] = useState(false)
@@ -62,10 +74,12 @@ export default function NoteComposer({ cartName, targetKey, onSaved, variant = '
         body: body.trim(),
         kind,
         scope: shared ? 'shared' : 'private',
+        ...(supersedes ? { supersedes } : {}),
       })
       const hadRedactions = (res.redactions?.length ?? 0) > 0
       setRedacted(hadRedactions)
       setBody('')
+      setSupersedes('')
       // Stay OPEN when text was altered, so the warning is read rather than dismissed by
       // the panel closing underneath it.
       if (!hadRedactions) setOpen(false)
@@ -123,6 +137,27 @@ export default function NoteComposer({ cartName, targetKey, onSaved, variant = '
           <input type="checkbox" checked={shared} onChange={(e) => setShared(e.target.checked)} />
           <span>share with the team</span>
         </label>
+        {/* ⭐⭐ CORRECT AN EARLIER NOTE. The whole append-only design turns on this: a
+            correction must LINK to what it corrects, or it is just a second opinion
+            sitting next to the first with nothing saying which is current.
+            ⛔ Only offered when there is something to correct, and superseded notes are
+            excluded — superseding an already-superseded note makes a chain nobody can
+            read, and the current note is the one a corrector means. */}
+        {(existingNotes ?? []).some((n) => !n.superseded) && (
+          <select
+            value={supersedes}
+            onChange={(e) => setSupersedes(e.target.value)}
+            title="Mark an earlier note as corrected by this one. Nothing is deleted."
+            className="max-w-[12rem] truncate rounded bg-slate-950/60 px-1 py-0.5 text-slate-300"
+          >
+            <option value="">corrects nothing</option>
+            {(existingNotes ?? []).filter((n) => !n.superseded).map((n) => (
+              <option key={n.id} value={n.id}>
+                corrects: {(n.body || '').slice(0, 40)}…
+              </option>
+            ))}
+          </select>
+        )}
         <button
           type="button"
           disabled={saving || body.trim().length === 0}

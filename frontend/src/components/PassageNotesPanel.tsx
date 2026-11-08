@@ -90,6 +90,7 @@ export default function PassageNotesPanel({
             <NoteComposer
               cartName={cartName}
               targetKey={key}
+              existingNotes={notes}
               variant="panel"
               onSaved={() => setNonce((n) => n + 1)}
             />
