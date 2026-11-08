@@ -29,6 +29,7 @@ Design: docs/DESIGN-multi-mount-and-write-path.md §1b, §3
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from contextlib import contextmanager
@@ -38,6 +39,8 @@ from fastapi import Depends, HTTPException, Request
 
 from . import cart_context
 from . import cart_lock
+
+log = logging.getLogger("vps.request_cart")
 from .auth import get_current_user
 from .cart_pool import CartState, pool
 
@@ -84,6 +87,12 @@ async def bind_caller_cart(request: Request,
     cart_id = requested_cart(request)
     viewer = view_key(request, user)
     remember_display_name(viewer, display_name_for(user))
+    # ⭐ Then UPGRADE it from `profiles`, once per seat per process. The JWT carries no
+    # name for these accounts, so the line above resolves to an email; the real one
+    # ("Betty Alvarez") is in the profiles row this caller can read about themselves.
+    # Cached after one attempt either way, so every request but a person's first is a
+    # dict probe — which is what keeps the bind path lookup-free in practice.
+    upgrade_display_name(access_seat(user), _bearer(request))
     touch_presence(cart_id, presence_key(request), display_name_for(user))
     try:
         with bound_cart(cart_id, viewer, _loader) as state:
@@ -121,6 +130,12 @@ async def bind_caller_cart_if_pooled(request: Request,
     cart_id = requested_cart(request)
     viewer = view_key(request, user)
     remember_display_name(viewer, display_name_for(user))
+    # ⭐ Then UPGRADE it from `profiles`, once per seat per process. The JWT carries no
+    # name for these accounts, so the line above resolves to an email; the real one
+    # ("Betty Alvarez") is in the profiles row this caller can read about themselves.
+    # Cached after one attempt either way, so every request but a person's first is a
+    # dict probe — which is what keeps the bind path lookup-free in practice.
+    upgrade_display_name(access_seat(user), _bearer(request))
     touch_presence(cart_id, presence_key(request), display_name_for(user))
 
     if not cart_id:
@@ -267,6 +282,65 @@ def remember_display_name(view: str, name: Optional[str]) -> None:
     if len(_display_names) >= _MAX_NAMES and view not in _display_names:
         _display_names.clear()          # crude, and fine: it is a cache
     _display_names[view] = name
+
+
+# Seats whose `profiles` row we have already tried. ⭐ Holds FAILURES too (as None), which
+# is the point: without that, a seat with no readable profile is looked up again on every
+# single request forever. One attempt per seat per process, success or not.
+_profile_tried: dict[str, Optional[str]] = {}
+
+
+def _bearer(request: Request) -> str:
+    """The caller's own access token, for a self-read of their profile.
+    Same extraction as profile_routes._token; duplicated rather than imported to keep this
+    module free of an import cycle on a path that runs for every request."""
+    auth = request.headers.get("authorization") or ""
+    return auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+
+
+def upgrade_display_name(seat: Optional[str], token: str) -> None:
+    """Replace a seat's JWT-derived label with its real `profiles.display_name`, once.
+
+    ⭐ WHY (2026-11-07): `display_name_for` reads the TOKEN, and a Supabase JWT for these
+    accounts carries no name — so every label fell through to the email, and a provenance
+    note read "annotated by andy.grossberg+betty@gmail.com". The real name is in
+    `profiles` (Betty Alvarez, set by register_office.sql) and the Profile page renders it
+    client-side, so the data was there and only this path could not see it.
+
+    ⛔ ONCE PER SEAT PER PROCESS, NOT PER REQUEST, and that is the whole design. This runs
+    on the bind path, where `request_cart.display_name_for`'s own TODO says we deliberately
+    do not do lookups. A cached single attempt honours that: the first request by a person
+    pays one query, every later one pays a dict probe.
+
+    ⚠ SELF-READ ONLY. The caller looks up their OWN profile with their OWN token, which is
+    exactly what ProfileScreen already does client-side — so it needs no new RLS posture
+    and cannot read anyone else's row. Other seats get named because the cache is
+    process-wide: Betty's own visit is what teaches us to label Betty's notes for Susie.
+
+    ⛔ Never raises and never blocks a request. A name is a nicety; the cart is the job.
+    """
+    if not seat or seat in _profile_tried:
+        return
+    _profile_tried[seat] = None                 # claim it first, so a failure cannot loop
+    if not token:
+        return
+    try:
+        from . import profile_routes            # late: avoids an import cycle
+        from .profiles import display_name_for as profile_display_name
+
+        client = profile_routes._supabase(token)
+        rows = (client.table("profiles").select("*").eq("id", seat).limit(1)
+                .execute().data) or []
+        if not rows:
+            return
+        name = profile_display_name(rows[0])
+        # ⚠ "Unknown" is display_name_for's own fallback, not a name. Storing it would
+        # overwrite a perfectly good email with a worse label.
+        if name and name != "Unknown":
+            _profile_tried[seat] = name
+            remember_display_name(f"seat:{seat}", name)
+    except Exception as e:                                      # noqa: BLE001
+        log.debug("profile name lookup failed for %s: %s: %s", seat, type(e).__name__, e)
 
 
 def name_for_seat(seat: Optional[str]) -> Optional[str]:
