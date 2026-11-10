@@ -71,3 +71,6 @@ venv/
 # Node
 node_modules/
 frontend/dist/
+
+# Investor and fundraising material is never public. Preserved privately 2026-11-10.
+investors/
